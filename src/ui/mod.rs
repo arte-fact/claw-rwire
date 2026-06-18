@@ -133,11 +133,6 @@ fn status(app: &App) -> ElementBuilder {
 // ── Main area ─────────────────────────────────────────────────────────────────
 
 fn main_area() -> ElementBuilder {
-    // The chat surface lives at the top level (its `transcript` renderer is nested
-    // only in plain containers). A renderer nested inside another renderer can't
-    // remove children on its own update — rwire's synced-region morph only appends
-    // — so wrapping the chat in a `content()` renderer left stale messages on a
-    // chat switch. The other tabs (no removal-sensitive content) ride as an overlay.
     el(El::Div)
         .style(
             Style::new()
@@ -147,31 +142,43 @@ fn main_area() -> ElementBuilder {
                 .set("bottom", "0")
                 .set("left", DRAWER_W),
         )
-        .st([St::OverflowHidden, St::DisplayFlex, St::FlexCol])
-        .append([chat::surface(), tab_overlay()])
+        .st([St::OverflowHidden])
+        .append([content()])
 }
 
 #[renderer]
-fn tab_overlay(app: &App) -> ElementBuilder {
-    match app.tab {
-        Tab::Chat => el(El::Div).style(Style::new().display("none")),
-        Tab::System => overlay(pages::admin()),
-        Tab::Activity => overlay(pages::placeholder(
-            "Activity",
-            "Live run activity lands in Phase 4.",
-        )),
-        Tab::Logs => overlay(pages::placeholder(
-            "Logs",
-            "Structured logs land in Phase 4.",
-        )),
-    }
+fn content(app: &App) -> ElementBuilder {
+    // All panels stay mounted (a renderer introduced after first paint renders
+    // empty); the inactive ones are display:none. Each fills the positioned main.
+    // The chat panel nests the `transcript` renderer inside this one — safe since
+    // rwire's nested synced-region updates reconcile children correctly.
+    el(El::Div).style(fill()).append([
+        panel(app.tab == Tab::Chat, chat::surface()),
+        panel(app.tab == Tab::System, pages::admin()),
+        panel(
+            app.tab == Tab::Activity,
+            pages::placeholder("Activity", "Live run activity lands in Phase 4."),
+        ),
+        panel(
+            app.tab == Tab::Logs,
+            pages::placeholder("Logs", "Structured logs land in Phase 4."),
+        ),
+    ])
 }
 
-fn overlay(body: ElementBuilder) -> ElementBuilder {
-    el(El::Div)
-        .style(fill())
-        .st([St::BgApp, St::DisplayFlex, St::FlexCol, St::OverflowHidden])
-        .append([body])
+fn panel(active: bool, body: ElementBuilder) -> ElementBuilder {
+    if active {
+        el(El::Div)
+            .style(fill())
+            .st([St::DisplayFlex, St::FlexCol, St::OverflowHidden])
+            .append([body])
+    } else {
+        // Only display:none — no competing display utility (else flex would win by
+        // source order and every panel would show at once).
+        el(El::Div)
+            .style(Style::new().display("none"))
+            .append([body])
+    }
 }
 
 /// `position:absolute; inset:0` — fills the nearest positioned ancestor regardless
