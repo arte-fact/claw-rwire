@@ -4,6 +4,7 @@
 //! exactly one state type, each surface is its own renderer and they compose as
 //! children (nested-renderer support) or side by side under plain functions.
 
+mod chat;
 mod login;
 mod tabs;
 
@@ -125,15 +126,35 @@ fn status(app: &App) -> ElementBuilder {
 
 #[renderer]
 fn content(ui: &Ui) -> ElementBuilder {
-    let panel = match ui.tab {
-        Tab::Chat => tabs::chat(),
-        Tab::System => tabs::placeholder("System Map", "The layered admin lands in Phase 3."),
-        Tab::Activity => tabs::placeholder("Activity", "Live run activity lands in Phase 4."),
-        Tab::Logs => tabs::placeholder("Logs", "Structured logs land in Phase 4."),
-    };
+    // Every panel stays mounted; switching tabs only toggles visibility. rwire
+    // won't populate a synced renderer that appears after first paint, so removing
+    // and re-adding a panel (the chat surface in particular) would render it empty.
     el(El::Main)
-        .st([St::Flex1, St::PLg, St::DisplayFlex, St::FlexCol])
-        .append([panel])
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::OverflowHidden])
+        .append([
+            panel(ui.tab == Tab::Chat, chat::surface()),
+            panel(
+                ui.tab == Tab::System,
+                tabs::placeholder("System Map", "The layered admin lands in Phase 3."),
+            ),
+            panel(
+                ui.tab == Tab::Activity,
+                tabs::placeholder("Activity", "Live run activity lands in Phase 4."),
+            ),
+            panel(
+                ui.tab == Tab::Logs,
+                tabs::placeholder("Logs", "Structured logs land in Phase 4."),
+            ),
+        ])
+}
+
+fn panel(active: bool, content: ElementBuilder) -> ElementBuilder {
+    let wrap = el(El::Div).st([St::Flex1, St::DisplayFlex, St::FlexCol, St::OverflowHidden]);
+    if active {
+        wrap.append([content])
+    } else {
+        wrap.st([St::DisplayNone]).append([content])
+    }
 }
 
 #[handler]

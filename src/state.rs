@@ -53,8 +53,25 @@ pub struct ChatSummary {
     pub busy: bool,
 }
 
-/// Process-global projection. Grows phase by phase; Phase 1 carries only what the
-/// shell shows plus a liveness flag the bridge flips to prove the projector path.
+/// Who authored a transcript turn. `in` rows are the operator; `out` rows are the
+/// agent (the web channel's two `web_messages` directions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageRole {
+    User,
+    Agent,
+}
+
+/// One rendered turn in the open thread.
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    pub role: MessageRole,
+    pub text: String,
+}
+
+/// Process-global projection. Selection (`open_chat`) lives here rather than in
+/// per-connection `Ui` so a single `App`-typed renderer can draw the thread; for a
+/// single-operator assistant, tabs sharing the open chat is acceptable (and matches
+/// the reference app's shared-selection model).
 #[derive(Debug, Default, State)]
 #[storage(shared)]
 pub struct App {
@@ -62,6 +79,12 @@ pub struct App {
     pub pipeline_ready: bool,
     /// Chat threads for the sidebar.
     pub chats: Vec<ChatSummary>,
+    /// The currently open thread id (shared across this operator's tabs).
+    pub open_chat: Option<String>,
+    /// Transcript of the open thread.
+    pub messages: Vec<ChatMessage>,
+    /// The agent is producing a reply on the open thread.
+    pub sending: bool,
 }
 
 /// Per-connection view state.

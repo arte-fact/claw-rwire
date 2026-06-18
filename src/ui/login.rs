@@ -52,7 +52,8 @@ fn token_form() -> ElementBuilder {
             Button::primary("Sign in")
                 .full_width(true)
                 .build()
-                .attr("type", "submit"),
+                .attr("type", "submit")
+                .data("act", "login"),
         ])
 }
 

@@ -6,8 +6,9 @@
 //! cookie — so a successful login survives reloads and extra tabs, resetting only
 //! on server restart or session-idle eviction.
 
-use std::io::Read;
 use std::sync::OnceLock;
+
+use crate::id::random_hex;
 
 static TOKEN: OnceLock<String> = OnceLock::new();
 
@@ -48,18 +49,6 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-fn random_hex(bytes: usize) -> std::io::Result<String> {
-    let mut urandom = std::fs::File::open("/dev/urandom")?;
-    let mut buf = vec![0u8; bytes];
-    urandom.read_exact(&mut buf)?;
-    let mut hex = String::with_capacity(bytes * 2);
-    for byte in buf {
-        use std::fmt::Write;
-        let _ = write!(hex, "{byte:02x}");
-    }
-    Ok(hex)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,12 +59,5 @@ mod tests {
         assert!(!constant_time_eq(b"hunter2", b"hunter3"));
         assert!(!constant_time_eq(b"short", b"longer"));
         assert!(constant_time_eq(b"", b""));
-    }
-
-    #[test]
-    fn random_hex_has_expected_length_and_alphabet() {
-        let token = random_hex(16).expect("urandom");
-        assert_eq!(token.len(), 32);
-        assert!(token.bytes().all(|b| b.is_ascii_hexdigit()));
     }
 }

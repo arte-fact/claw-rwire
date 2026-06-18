@@ -5,6 +5,7 @@
 mod auth;
 mod bridge;
 mod db;
+mod id;
 mod state;
 mod ui;
 
@@ -39,7 +40,8 @@ fn bind_addr() -> String {
 async fn main() -> Result<(), Box<dyn Error>> {
     let dir = data_dir();
     std::fs::create_dir_all(&dir)?;
-    db::open(&dir.join("central.db"))?;
+    let central_db = dir.join("central.db");
+    db::open(&central_db)?;
 
     match auth::init()? {
         auth::TokenSource::Configured => println!("Auth: using CLAW_AUTH_TOKEN"),
@@ -53,7 +55,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .capsule_config(CapsuleConfig::new())
         .theme(app_theme());
 
-    bridge::spawn(server.shared_state());
+    bridge::spawn(server.shared_state(), central_db);
 
     server.run().await
 }
