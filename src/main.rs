@@ -2,6 +2,7 @@
 //! rwire framework. The existing `rust-claw` daemon stays the system of record and
 //! behavioural reference; this project is written from scratch alongside it.
 
+mod auth;
 mod bridge;
 mod db;
 mod state;
@@ -39,6 +40,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let dir = data_dir();
     std::fs::create_dir_all(&dir)?;
     db::open(&dir.join("central.db"))?;
+
+    match auth::init()? {
+        auth::TokenSource::Configured => println!("Auth: using CLAW_AUTH_TOKEN"),
+        auth::TokenSource::Generated(token) => {
+            println!("Auth: no CLAW_AUTH_TOKEN set — generated one for this run: {token}");
+        }
+    }
 
     let mut server = Server::bind(&bind_addr())?
         .root(ui::app)

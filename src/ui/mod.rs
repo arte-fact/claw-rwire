@@ -1,16 +1,37 @@
-//! The app shell: a top nav bar over a swappable content area. The nav is driven
-//! by per-connection `Ui::tab`; a liveness dot reads process-global `App`. Because
-//! an rwire renderer takes exactly one state type, the bar is assembled by a plain
-//! function that composes the `Ui`-synced nav and the `App`-synced status side by
-//! side.
+//! The app shell: a login gate over a top nav bar and a swappable content area. The
+//! nav is driven by per-connection `Ui::tab`; a liveness dot reads process-global
+//! `App`; the gate reads per-connection `Auth`. Because an rwire renderer takes
+//! exactly one state type, each surface is its own renderer and they compose as
+//! children (nested-renderer support) or side by side under plain functions.
 
+mod login;
 mod tabs;
 
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire_components::{Button, ButtonSize};
 
-use crate::state::{App, Tab, Ui};
+use crate::state::{App, Auth, Tab, Ui};
 
 pub fn app() -> ElementBuilder {
+    // The shell is always rendered so its nested renderers subscribe at initial
+    // paint; the login is a full-screen overlay above it until authenticated.
+    // (rwire only renders synced elements that exist at first paint, so swapping
+    // the whole tree on login would leave the shell's renderers empty.)
+    el(El::Div)
+        .st([St::PositionRelative, St::MinHScreen])
+        .append([shell(), login_overlay()])
+}
+
+#[renderer]
+fn login_overlay(auth: &Auth) -> ElementBuilder {
+    if auth.authenticated {
+        el(El::Div).st([St::DisplayNone])
+    } else {
+        login::login_form(auth.failed)
+    }
+}
+
+fn shell() -> ElementBuilder {
     el(El::Div)
         .st([St::BgApp, St::MinHScreen, St::DisplayFlex, St::FlexCol])
         .append([header_bar(), content()])
@@ -26,7 +47,26 @@ fn header_bar() -> ElementBuilder {
             St::BgSurface,
             St::BorderBDefault,
         ])
-        .append([brand_and_nav(), status()])
+        .append([brand_and_nav(), right_cluster()])
+}
+
+fn right_cluster() -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapLg])
+        .append([status(), logout_button()])
+}
+
+fn logout_button() -> ElementBuilder {
+    Button::ghost("sign out")
+        .size(ButtonSize::Sm)
+        .build()
+        .on(Ev::Click, logout())
+}
+
+#[handler]
+fn logout(auth: &mut Auth) {
+    auth.authenticated = false;
+    auth.failed = false;
 }
 
 fn brand_and_nav() -> ElementBuilder {

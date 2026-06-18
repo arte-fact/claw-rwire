@@ -70,3 +70,13 @@ pub struct App {
 pub struct Ui {
     pub tab: Tab,
 }
+
+/// Per-connection gate state. rwire caches memory state by session cookie, so a
+/// successful login persists across reloads and tabs until the server restarts.
+#[derive(Debug, Default, State)]
+#[storage(memory)]
+pub struct Auth {
+    pub authenticated: bool,
+    /// The last login attempt failed — drives the inline error on the form.
+    pub failed: bool,
+}
