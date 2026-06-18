@@ -15,7 +15,7 @@ use rwire::theme::Theme;
 use rwire::{Server, theme};
 use rwire_themes::palettes;
 
-const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8080";
+const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8080";
 const BIND_ADDR_ENV: &str = "CLAW_BIND";
 const DATA_DIR_ENV: &str = "CLAW_DATA_DIR";
 
