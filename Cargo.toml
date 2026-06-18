@@ -1,0 +1,18 @@
+[package]
+name = "claw-rwire"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rwire = { path = "../rwire/libs/rwire" }
+rwire-components = { path = "../rwire/libs/rwire-components" }
+rwire-markdown = { path = "../rwire/libs/rwire-markdown" }
+rwire-themes = { path = "../rwire/libs/rwire-themes" }
+async-std = { version = "1.12", features = ["attributes"] }
+rusqlite = { version = "0.34", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
