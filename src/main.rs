@@ -13,7 +13,7 @@ use std::error::Error;
 
 use async_std::main;
 use rwire::capsule_gen::CapsuleConfig;
-use rwire::theme::Theme;
+use rwire::theme::{RadiusScale, Theme};
 use rwire::{Server, theme};
 use rwire_themes::palettes;
 
@@ -23,7 +23,10 @@ const DATA_DIR_ENV: &str = "CLAW_DATA_DIR";
 
 #[theme]
 fn app_theme() -> Theme {
-    Theme::dark().palette(palettes::nord())
+    // rust-claw look: Nord, flat, small radius (3px-ish hairline feel).
+    Theme::dark()
+        .palette(palettes::nord())
+        .radius(RadiusScale::Small)
 }
 
 fn data_dir() -> std::path::PathBuf {

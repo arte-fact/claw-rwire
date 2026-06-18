@@ -6,13 +6,11 @@
 
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
-use rwire_components::{Button, Spinner, SpinnerSize, Text};
+use rwire_components::{Spinner, SpinnerSize, Text};
 use rwire_markdown::Markdown;
 
 use crate::bridge::{self, Command};
 use crate::state::{App, ChatMessage, MessageRole};
-
-const COLUMN: &str = "48rem";
 
 // ── Main area ───────────────────────────────────────────────────────────────
 
@@ -62,12 +60,22 @@ fn transcript(app: &App) -> ElementBuilder {
     // morph replaces the whole subtree (old id becomes a removed leftover) instead
     // of positionally reusing the previous thread's nodes.
     let key = format!("thread-{}", app.open_chat.as_deref().unwrap_or("none"));
-    column(
-        el(El::Div)
-            .id(&key)
-            .st([St::DisplayFlex, St::FlexCol, St::GapXl, St::PXl])
-            .append(items),
-    )
+    el(El::Div)
+        .id(&key)
+        .st([St::DisplayFlex, St::FlexCol, St::GapLg, St::PLg])
+        .append(items)
+}
+
+/// A 2px accent strip — rust-claw's left-bar marker for agent turns / active rows.
+fn accent_bar(active: bool) -> ElementBuilder {
+    el(El::Span)
+        .style(
+            Style::new()
+                .width("2px")
+                .set("flex", "0 0 2px")
+                .set("align-self", "stretch"),
+        )
+        .st([if active { St::BgAccent } else { St::BgApp }])
 }
 
 fn hint(text: &str) -> ElementBuilder {
@@ -77,46 +85,44 @@ fn hint(text: &str) -> ElementBuilder {
         .append([Text::body(text.to_owned()).muted().build()])
 }
 
-/// User turns are a right-aligned accent bubble; agent turns render as plain
-/// left-aligned markdown across the column (Claude-style), so lists, code, and
-/// headings read naturally without a box around them.
+/// Flat terminal style (rust-claw): a bold sender label over the body, no bubbles.
+/// Agent turns get a left accent bar; user text is plain, agent renders markdown.
 fn message_row(message: &ChatMessage) -> ElementBuilder {
-    match message.role {
+    let (sender, sender_color) = match message.role {
+        MessageRole::User => ("you", St::TextHigh),
+        MessageRole::Agent => ("claw", St::TextAccent),
+    };
+    let body = match message.role {
         MessageRole::User => el(El::Div)
-            .st([St::DisplayFlex, St::JustifyEnd])
-            .append([el(El::Div)
-                .style(Style::new().max_width("75%"))
-                .st([
-                    St::BgAccent,
-                    St::TextOnAccent,
-                    St::PxLg,
-                    St::PyMd,
-                    St::RoundedXl,
-                ])
-                .append([el(El::Span).text(&message.text)])]),
+            .st([St::TextDefault])
+            .style(Style::new().set("white-space", "pre-wrap"))
+            .append([el(El::Span).text(&message.text)]),
+        MessageRole::Agent => el(El::Div).append([Markdown::new(message.text.clone()).build()]),
+    };
+    let block = el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::Flex1])
+        .append([
+            el(El::Span).st([St::FontBold, sender_color]).text(sender),
+            body,
+        ]);
+    match message.role {
+        MessageRole::User => block,
         MessageRole::Agent => el(El::Div)
-            .st([St::WFull])
-            .append([Markdown::new(message.text.clone()).build()]),
+            .st([St::DisplayFlex, St::GapMd])
+            .append([accent_bar(true), block]),
     }
 }
 
 fn sending_row() -> ElementBuilder {
-    el(El::Div)
-        .st([St::DisplayFlex, St::JustifyStart])
-        .append([el(El::Div)
-            .st([
-                St::DisplayFlex,
-                St::ItemsCenter,
-                St::GapSm,
-                St::BgSurface,
-                St::PxMd,
-                St::PyMd,
-                St::RoundedLg,
-            ])
+    el(El::Div).st([St::DisplayFlex, St::GapMd]).append([
+        accent_bar(true),
+        el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
             .append([
                 Spinner::new().size(SpinnerSize::Sm).build(),
                 Text::body("thinking…").muted().build(),
-            ])])
+            ]),
+    ])
 }
 
 /// Keyed by transcript length so the textarea is a fresh (empty) element after each
@@ -124,57 +130,47 @@ fn sending_row() -> ElementBuilder {
 #[renderer]
 fn composer(app: &App) -> ElementBuilder {
     let field_id = format!("composer-{}", app.messages.len());
-    let pill = el(El::Div)
+    el(El::Form)
         .st([
-            St::Flex1,
             St::DisplayFlex,
             St::ItemsEnd,
             St::GapSm,
-            St::BgSurface,
-            St::RoundedXl,
-            St::BorderSubtle,
-            St::ShadowSm,
-            St::PxMd,
-            St::PySm,
+            St::PMd,
+            St::BorderTSubtle,
         ])
+        .on(Ev::Submit, send_message())
         .append([
             el(El::Textarea)
                 .id(&field_id)
                 .attr("name", "message")
                 .attr("rows", "1")
-                .at_str(rwire::At::Placeholder, "Message claw…")
-                .st([St::Flex1, St::TextDefault])
-                .style(
-                    Style::new()
-                        .background("transparent")
-                        .border("none")
-                        .set("outline", "none")
-                        .set("resize", "none")
-                        .padding("0.25rem 0"),
-                ),
-            Button::primary("Send")
-                .build()
+                .at_str(rwire::At::Placeholder, "write a message…")
+                .st([
+                    St::Flex1,
+                    St::BgSurface,
+                    St::BorderDefault,
+                    St::RoundedSm,
+                    St::PxMd,
+                    St::PySm,
+                    St::TextDefault,
+                ])
+                .style(Style::new().set("outline", "none").set("resize", "none"))
+                .focus([St::BorderAccent]),
+            el(El::Button)
                 .attr("type", "submit")
-                .data("act", "send"),
-        ]);
-    column(
-        el(El::Form)
-            .st([St::DisplayFlex, St::ItemsEnd, St::GapSm, St::PMd])
-            .on(Ev::Submit, send_message())
-            .append([pill]),
-    )
-}
-
-/// A readable centered column (matches the transcript width).
-fn column(inner: ElementBuilder) -> ElementBuilder {
-    el(El::Div)
-        .style(
-            Style::new()
-                .width("100%")
-                .max_width(COLUMN)
-                .margin("0 auto"),
-        )
-        .append([inner])
+                .data("act", "send")
+                .st([
+                    St::PxMd,
+                    St::PySm,
+                    St::BorderDefault,
+                    St::RoundedSm,
+                    St::BgSurface,
+                    St::TextDefault,
+                    St::CursorPointer,
+                ])
+                .hover([St::BorderAccent, St::TextHigh])
+                .append([el(El::Span).text("send")]),
+        ])
 }
 
 // ── Drawer ───────────────────────────────────────────────────────────────────
@@ -239,16 +235,15 @@ fn chat_row(id: &str, title: &str, active: bool, busy: bool) -> ElementBuilder {
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
-            St::PxMd,
             St::PySm,
-            St::RoundedMd,
+            St::PrMd,
             St::CursorPointer,
             St::TextSm,
         ])
-        .hover([St::BgHover])
-        .append([dot, label]);
+        .hover([St::TextHigh])
+        .append([accent_bar(active), dot, label]);
     if active {
-        row.st([St::BgActive, St::TextHigh])
+        row.st([St::TextHigh])
     } else {
         row.st([St::TextMuted])
     }

@@ -19,7 +19,11 @@ use crate::state::{App, Tab};
 const DRAWER_W: &str = "16rem";
 
 pub fn app() -> ElementBuilder {
-    el(El::Div).st([St::BgApp]).append([drawer(), main_area()])
+    // Mono everywhere, small text — the terminal feel of rust-claw. font-family and
+    // font-size inherit through the fixed drawer/main, so set them once at the root.
+    el(El::Div)
+        .st([St::BgApp, St::FontMono, St::TextSm])
+        .append([drawer(), main_area()])
 }
 
 // ── Drawer ───────────────────────────────────────────────────────────────────
@@ -93,24 +97,38 @@ fn nav(app: &App) -> ElementBuilder {
 }
 
 fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
-    let row = el(El::Div)
+    // Flat: a left accent bar + accent text marks the active item (no filled pill).
+    let bar = el(El::Span)
+        .style(
+            Style::new()
+                .width("2px")
+                .set("flex", "0 0 2px")
+                .set("align-self", "stretch"),
+        )
+        .st([if active { St::BgAccent } else { St::BgApp }]);
+    let label = if active {
+        Text::body(tab.label().to_owned())
+            .build()
+            .st([St::TextAccent])
+    } else {
+        Text::body(tab.label().to_owned())
+            .build()
+            .st([St::TextMuted])
+    };
+    el(El::Div)
         .data("tab", tab.slug())
         .on(Ev::Click, select_tab())
         .st([
-            St::PxMd,
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::PxSm,
             St::PySm,
-            St::RoundedMd,
             St::CursorPointer,
-            St::FontMono,
             St::TextSm,
         ])
-        .hover([St::BgHover])
-        .append([Text::body(tab.label().to_owned()).build()]);
-    if active {
-        row.st([St::BgActive, St::TextHigh])
-    } else {
-        row.st([St::TextMuted])
-    }
+        .hover([St::TextHigh])
+        .append([bar, label])
 }
 
 #[renderer]
