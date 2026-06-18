@@ -40,7 +40,18 @@ fn drawer() -> ElementBuilder {
             St::DisplayFlex,
             St::FlexCol,
         ])
-        .append([drawer_head(), drawer_threads()])
+        .append([drawer_head(), conversations_label(), drawer_threads()])
+}
+
+fn conversations_label() -> ElementBuilder {
+    el(El::Div)
+        .style(
+            Style::new()
+                .text_transform("uppercase")
+                .set("letter-spacing", "0.06em"),
+        )
+        .st([St::PxMd, St::PyXs, St::TextXs, St::TextMuted, St::FontMono])
+        .append([el(El::Span).text("Conversations")])
 }
 
 fn drawer_head() -> ElementBuilder {
@@ -93,6 +104,7 @@ fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
             St::FontMono,
             St::TextSm,
         ])
+        .hover([St::BgHover])
         .append([Text::body(tab.label().to_owned()).build()]);
     if active {
         row.st([St::BgActive, St::TextHigh])
