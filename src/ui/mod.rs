@@ -108,11 +108,15 @@ fn content(ui: &Ui) -> ElementBuilder {
 }
 
 fn panel(active: bool, content: ElementBuilder) -> ElementBuilder {
-    let wrap = el(El::Div).st([St::Flex1, St::DisplayFlex, St::FlexCol, St::OverflowHidden]);
+    // Inactive panels must carry ONLY `display:none` — adding the flex display
+    // utility too lets `display:flex` win by stylesheet source order, leaving every
+    // panel visible (all four tabs stacked).
     if active {
-        wrap.append([content])
+        el(El::Div)
+            .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::OverflowHidden])
+            .append([content])
     } else {
-        wrap.st([St::DisplayNone]).append([content])
+        el(El::Div).st([St::DisplayNone]).append([content])
     }
 }
 
