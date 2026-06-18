@@ -1,68 +1,103 @@
-//! The app shell: a top nav bar over a swappable content area. The nav is driven
-//! by per-connection `Ui::tab`; a liveness dot reads process-global `App`. Access
-//! is gated by rwire's HTTP Basic auth (`Server::basic_auth`), so an unauthenticated
-//! client never reaches this tree — no in-app gate needed.
+//! The app shell: a fixed left drawer (brand, nav, conversations) beside a fixed
+//! main area that fills the viewport. Access is gated by rwire's form-login
+//! (`Server::auth`), so an unauthenticated client never reaches this tree.
+//!
+//! Layout note: every `#[renderer]` is wrapped by rwire in an inline `__synced_`
+//! span, which can't act as a flex/positioning container. So the structural
+//! containers here are plain elements (drawer, main, panels), and renderer outputs
+//! only ever sit *inside* them.
 
 mod chat;
-mod tabs;
+mod pages;
 
+use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire_components::Text;
 
-use crate::state::{App, Tab, Ui};
+use crate::state::{App, Tab};
+
+const DRAWER_W: &str = "16rem";
 
 pub fn app() -> ElementBuilder {
-    el(El::Div)
-        .st([St::BgApp, St::MinHScreen, St::DisplayFlex, St::FlexCol])
-        .append([header_bar(), content()])
+    el(El::Div).st([St::BgApp]).append([drawer(), main_area()])
 }
 
-fn header_bar() -> ElementBuilder {
-    el(El::Header)
+// ── Drawer ───────────────────────────────────────────────────────────────────
+
+fn drawer() -> ElementBuilder {
+    el(El::Aside)
+        .style(
+            Style::new()
+                .position("fixed")
+                .set("top", "0")
+                .set("left", "0")
+                .set("bottom", "0")
+                .width(DRAWER_W),
+        )
+        .st([
+            St::BgSidebar,
+            St::BorderRDefault,
+            St::DisplayFlex,
+            St::FlexCol,
+        ])
+        .append([drawer_head(), drawer_threads()])
+}
+
+fn drawer_head() -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm, St::PMd])
+        .append([brand_row(), nav(), chat::new_chat_button()])
+}
+
+fn brand_row() -> ElementBuilder {
+    el(El::Div)
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
             St::JustifyBetween,
-            St::PxLg,
-            St::BgSurface,
-            St::BorderBDefault,
+            St::PySm,
         ])
-        .append([brand_and_nav(), status()])
-}
-
-fn brand_and_nav() -> ElementBuilder {
-    el(El::Div)
-        .st([St::DisplayFlex, St::ItemsCenter, St::GapLg])
         .append([
             el(El::Span)
                 .st([St::FontMono, St::FontSemibold, St::TextLg, St::TextAccent])
                 .text("claw"),
-            nav(),
+            status(),
         ])
 }
 
-#[renderer]
-fn nav(ui: &Ui) -> ElementBuilder {
-    el(El::Nav)
-        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-        .append(Tab::ALL.map(|tab| nav_item(tab, ui.tab == tab)))
+/// The scrollable conversation list fills the drawer below the head. It's a plain
+/// flex child (so it actually grows) wrapping the `thread_list` renderer.
+fn drawer_threads() -> ElementBuilder {
+    el(El::Div)
+        .style(Style::new().min_height("0").overflow("auto"))
+        .st([St::Flex1, St::PySm])
+        .append([chat::thread_list()])
 }
 
-fn nav_item(tab: Tab, active: bool) -> ElementBuilder {
-    let base = el(El::A)
-        .text(tab.label())
+#[renderer]
+fn nav(app: &App) -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::Gap0])
+        .append(Tab::ALL.map(|tab| nav_row(tab, app.tab == tab)))
+}
+
+fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
+    let row = el(El::Div)
         .data("tab", tab.slug())
         .on(Ev::Click, select_tab())
         .st([
             St::PxMd,
-            St::PyMd,
+            St::PySm,
+            St::RoundedMd,
             St::CursorPointer,
             St::FontMono,
             St::TextSm,
-        ]);
+        ])
+        .append([Text::body(tab.label().to_owned()).build()]);
     if active {
-        base.st([St::TextAccent, St::BorderBAccent])
+        row.st([St::BgActive, St::TextHigh])
     } else {
-        base.st([St::TextMuted])
+        row.st([St::TextMuted])
     }
 }
 
@@ -78,51 +113,69 @@ fn status(app: &App) -> ElementBuilder {
         .append([
             el(El::Span).st([St::WSp2, St::HSp2, St::RoundedFull, dot]),
             el(El::Span)
-                .st([St::FontMono, St::TextSm, St::TextMuted])
+                .st([St::FontMono, St::TextXs, St::TextMuted])
                 .text(label),
         ])
 }
 
-#[renderer]
-fn content(ui: &Ui) -> ElementBuilder {
-    // Every panel stays mounted; switching tabs only toggles visibility. rwire
-    // won't populate a synced renderer that appears after first paint, so removing
-    // and re-adding a panel (the chat surface in particular) would render it empty.
-    el(El::Main)
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::OverflowHidden])
-        .append([
-            panel(ui.tab == Tab::Chat, chat::surface()),
-            panel(
-                ui.tab == Tab::System,
-                tabs::placeholder("System Map", "The layered admin lands in Phase 3."),
-            ),
-            panel(
-                ui.tab == Tab::Activity,
-                tabs::placeholder("Activity", "Live run activity lands in Phase 4."),
-            ),
-            panel(
-                ui.tab == Tab::Logs,
-                tabs::placeholder("Logs", "Structured logs land in Phase 4."),
-            ),
-        ])
+// ── Main area ─────────────────────────────────────────────────────────────────
+
+fn main_area() -> ElementBuilder {
+    el(El::Div)
+        .style(
+            Style::new()
+                .position("fixed")
+                .set("top", "0")
+                .set("right", "0")
+                .set("bottom", "0")
+                .set("left", DRAWER_W),
+        )
+        .st([St::OverflowHidden])
+        .append([content()])
 }
 
-fn panel(active: bool, content: ElementBuilder) -> ElementBuilder {
-    // Inactive panels must carry ONLY `display:none` — adding the flex display
-    // utility too lets `display:flex` win by stylesheet source order, leaving every
-    // panel visible (all four tabs stacked).
+#[renderer]
+fn content(app: &App) -> ElementBuilder {
+    // All panels stay mounted (a renderer introduced after first paint renders
+    // empty); the inactive ones are display:none. Each fills the positioned main.
+    el(El::Div).style(fill()).append([
+        panel(app.tab == Tab::Chat, chat::surface()),
+        panel(app.tab == Tab::System, pages::admin()),
+        panel(
+            app.tab == Tab::Activity,
+            pages::placeholder("Activity", "Live run activity lands in Phase 4."),
+        ),
+        panel(
+            app.tab == Tab::Logs,
+            pages::placeholder("Logs", "Structured logs land in Phase 4."),
+        ),
+    ])
+}
+
+fn panel(active: bool, body: ElementBuilder) -> ElementBuilder {
     if active {
         el(El::Div)
-            .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::OverflowHidden])
-            .append([content])
+            .style(fill())
+            .st([St::DisplayFlex, St::FlexCol, St::OverflowHidden])
+            .append([body])
     } else {
-        el(El::Div).st([St::DisplayNone]).append([content])
+        // Only display:none — no competing display utility (else flex would win by
+        // source order and every panel would show at once).
+        el(El::Div)
+            .style(Style::new().display("none"))
+            .append([body])
     }
 }
 
+/// `position:absolute; inset:0` — fills the nearest positioned ancestor regardless
+/// of the inline synced spans in between.
+fn fill() -> Style {
+    Style::new().position("absolute").set("inset", "0")
+}
+
 #[handler]
-fn select_tab(ui: &mut Ui, ctx: &EventContext) {
+fn select_tab(app: &mut App, ctx: &EventContext) {
     if let Some(tab) = ctx.data("tab").and_then(Tab::from_slug) {
-        ui.tab = tab;
+        app.tab = tab;
     }
 }

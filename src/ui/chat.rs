@@ -1,6 +1,8 @@
-//! The chat surface: a thread sidebar, a transcript, and a read-on-send composer.
-//! Handlers mutate `App` optimistically and post a `Command`; the bridge persists
-//! and projects the authoritative thread back.
+//! The chat surface. `surface()` is the main-area view (a scrolling transcript over
+//! a pinned composer); `thread_list()` and `new_chat_button()` live in the left
+//! drawer. Layout fills its panel via plain-div flex items — renderer outputs are
+//! wrapped in inline `__synced_` spans, so they only ever sit *inside* a plain
+//! flex/scroll container, never act as one.
 
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
@@ -8,39 +10,180 @@ use rwire_components::{Button, EmptyState, Spinner, SpinnerSize, Text};
 use rwire_markdown::Markdown;
 
 use crate::bridge::{self, Command};
-use crate::state::{App, ChatMessage, MessageRole};
+use crate::state::{App, ChatMessage, MessageRole, Tab};
+
+const COLUMN: &str = "48rem";
+
+// ── Main area ───────────────────────────────────────────────────────────────
 
 pub fn surface() -> ElementBuilder {
     el(El::Div)
-        .st([St::Flex1, St::DisplayFlex, St::OverflowHidden])
-        .append([sidebar_panel(), thread_panel()])
+        .style(Style::new().min_height("0"))
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::OverflowHidden])
+        .append([transcript_scroll(), composer_bar()])
 }
 
-fn sidebar_panel() -> ElementBuilder {
-    el(El::Aside)
-        .style(Style::new().width("16rem").set("flex", "0 0 16rem"))
-        .st([
-            St::BgSidebar,
-            St::BorderRDefault,
-            St::DisplayFlex,
-            St::FlexCol,
-            St::OverflowHidden,
-        ])
-        .append([new_chat_bar(), sidebar_list()])
-}
-
-fn new_chat_bar() -> ElementBuilder {
+fn transcript_scroll() -> ElementBuilder {
     el(El::Div)
-        .st([St::PSm, St::BorderBSubtle])
-        .append([Button::primary("+ New chat")
-            .full_width(true)
-            .build()
-            .data("act", "new-chat")
-            .on(Ev::Click, new_chat())])
+        .style(Style::new().min_height("0").overflow("auto"))
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol])
+        .append([transcript()])
+}
+
+fn composer_bar() -> ElementBuilder {
+    el(El::Div).st([St::BorderTSubtle]).append([composer()])
 }
 
 #[renderer]
-fn sidebar_list(app: &App) -> ElementBuilder {
+fn transcript(app: &App) -> ElementBuilder {
+    if app.open_chat.is_none() {
+        return centered(
+            EmptyState::new()
+                .title("No chat selected")
+                .description("Pick a conversation or start a new one.")
+                .build(),
+        );
+    }
+
+    let mut items: Vec<ElementBuilder> = app.messages.iter().map(message_row).collect();
+    if app.sending {
+        items.push(sending_row());
+    }
+    if items.is_empty() {
+        return centered(
+            Text::body("Say hello to start the conversation.")
+                .muted()
+                .build(),
+        );
+    }
+
+    column(
+        el(El::Div)
+            .st([St::DisplayFlex, St::FlexCol, St::GapMd, St::PXl])
+            .append(items),
+    )
+}
+
+fn message_row(message: &ChatMessage) -> ElementBuilder {
+    let (justify, bubble_bg, body) = match message.role {
+        MessageRole::User => (
+            St::JustifyEnd,
+            St::BgAccent,
+            el(El::Span).st([St::TextOnAccent]).text(&message.text),
+        ),
+        MessageRole::Agent => (
+            St::JustifyStart,
+            St::BgSurface,
+            Markdown::new(message.text.clone()).build(),
+        ),
+    };
+    el(El::Div)
+        .st([St::DisplayFlex, justify])
+        .append([el(El::Div)
+            .style(Style::new().max_width("80%"))
+            .st([bubble_bg, St::PxMd, St::PyMd, St::RoundedLg])
+            .append([body])])
+}
+
+fn sending_row() -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::JustifyStart])
+        .append([el(El::Div)
+            .st([
+                St::DisplayFlex,
+                St::ItemsCenter,
+                St::GapSm,
+                St::BgSurface,
+                St::PxMd,
+                St::PyMd,
+                St::RoundedLg,
+            ])
+            .append([
+                Spinner::new().size(SpinnerSize::Sm).build(),
+                Text::body("thinking…").muted().build(),
+            ])])
+}
+
+/// Keyed by transcript length so the textarea is a fresh (empty) element after each
+/// turn — clears the input on send without a dedicated client opcode.
+#[renderer]
+fn composer(app: &App) -> ElementBuilder {
+    let field_id = format!("composer-{}", app.messages.len());
+    let pill = el(El::Div)
+        .st([
+            St::Flex1,
+            St::DisplayFlex,
+            St::ItemsEnd,
+            St::GapSm,
+            St::BgSurface,
+            St::RoundedXl,
+            St::PxMd,
+            St::PySm,
+        ])
+        .append([
+            el(El::Textarea)
+                .id(&field_id)
+                .attr("name", "message")
+                .attr("rows", "1")
+                .at_str(rwire::At::Placeholder, "Message claw…")
+                .st([St::Flex1, St::TextDefault])
+                .style(
+                    Style::new()
+                        .background("transparent")
+                        .border("none")
+                        .set("outline", "none")
+                        .set("resize", "none")
+                        .padding("0.25rem 0"),
+                ),
+            Button::primary("Send")
+                .build()
+                .attr("type", "submit")
+                .data("act", "send"),
+        ]);
+    column(
+        el(El::Form)
+            .st([St::DisplayFlex, St::ItemsEnd, St::GapSm, St::PMd])
+            .on(Ev::Submit, send_message())
+            .append([pill]),
+    )
+}
+
+/// A readable centered column (matches the transcript width).
+fn column(inner: ElementBuilder) -> ElementBuilder {
+    el(El::Div)
+        .style(
+            Style::new()
+                .width("100%")
+                .max_width(COLUMN)
+                .margin("0 auto"),
+        )
+        .append([inner])
+}
+
+fn centered(inner: ElementBuilder) -> ElementBuilder {
+    el(El::Div)
+        .st([
+            St::Flex1,
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::JustifyCenter,
+            St::PXl,
+        ])
+        .append([inner])
+}
+
+// ── Drawer ───────────────────────────────────────────────────────────────────
+
+pub fn new_chat_button() -> ElementBuilder {
+    Button::secondary("+  New chat")
+        .full_width(true)
+        .build()
+        .data("act", "new-chat")
+        .on(Ev::Click, new_chat())
+}
+
+#[renderer]
+pub fn thread_list(app: &App) -> ElementBuilder {
     if app.chats.is_empty() {
         return el(El::Div)
             .st([St::PMd])
@@ -52,8 +195,7 @@ fn sidebar_list(app: &App) -> ElementBuilder {
         .iter()
         .map(|chat| chat_row(&chat.id, &chat.title, open == Some(&chat.id), chat.busy));
     el(El::Div)
-        .style(Style::new().set("overflow-y", "auto"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol])
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::PxSm])
         .append(rows)
 }
 
@@ -76,6 +218,7 @@ fn chat_row(id: &str, title: &str, active: bool, busy: bool) -> ElementBuilder {
             St::GapSm,
             St::PxMd,
             St::PySm,
+            St::RoundedMd,
             St::CursorPointer,
             St::TextSm,
         ])
@@ -87,132 +230,18 @@ fn chat_row(id: &str, title: &str, active: bool, busy: bool) -> ElementBuilder {
     }
 }
 
-fn thread_panel() -> ElementBuilder {
-    el(El::Div)
-        .style(Style::new().set("min-height", "0"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol])
-        .append([transcript(), composer()])
-}
-
-#[renderer]
-fn transcript(app: &App) -> ElementBuilder {
-    if app.open_chat.is_none() {
-        return el(El::Div)
-            .st([
-                St::Flex1,
-                St::DisplayFlex,
-                St::ItemsCenter,
-                St::JustifyCenter,
-            ])
-            .append([EmptyState::new()
-                .title("No chat selected")
-                .description("Start a new chat to begin.")
-                .build()]);
-    }
-
-    let mut items: Vec<ElementBuilder> = app.messages.iter().map(message_row).collect();
-    if app.sending {
-        items.push(sending_row());
-    }
-    if items.is_empty() {
-        items.push(
-            el(El::Div)
-                .st([St::PMd])
-                .append([Text::body("Say hello to start the conversation.")
-                    .muted()
-                    .build()]),
-        );
-    }
-
-    el(El::Div)
-        .style(
-            Style::new()
-                .set("min-height", "0")
-                .set("overflow-y", "auto"),
-        )
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapMd, St::PLg])
-        .append(items)
-}
-
-fn message_row(message: &ChatMessage) -> ElementBuilder {
-    let (justify, bubble_bg, body) = match message.role {
-        MessageRole::User => (
-            St::JustifyEnd,
-            St::BgAccent,
-            el(El::Span).st([St::TextOnAccent]).text(&message.text),
-        ),
-        MessageRole::Agent => (
-            St::JustifyStart,
-            St::BgSurface,
-            Markdown::new(message.text.clone()).build(),
-        ),
-    };
-    el(El::Div)
-        .st([St::DisplayFlex, justify])
-        .append([el(El::Div)
-            .style(Style::new().set("max-width", "70%"))
-            .st([bubble_bg, St::PxMd, St::PyMd, St::RoundedMd])
-            .append([body])])
-}
-
-fn sending_row() -> ElementBuilder {
-    el(El::Div)
-        .st([St::DisplayFlex, St::JustifyStart])
-        .append([el(El::Div)
-            .st([
-                St::DisplayFlex,
-                St::ItemsCenter,
-                St::GapSm,
-                St::BgSurface,
-                St::PxMd,
-                St::PyMd,
-                St::RoundedMd,
-            ])
-            .append([
-                Spinner::new().size(SpinnerSize::Sm).build(),
-                Text::body("thinking…").muted().build(),
-            ])])
-}
-
-/// Keyed by transcript length: each sent/received turn changes the textarea's id,
-/// so DOM morphing replaces it with a fresh (empty) element — clearing the input
-/// on send without a dedicated client opcode. Typing doesn't touch `messages`, so
-/// the field is stable between sends.
-#[renderer]
-fn composer(app: &App) -> ElementBuilder {
-    let field_id = format!("composer-{}", app.messages.len());
-    el(El::Form)
-        .st([
-            St::DisplayFlex,
-            St::ItemsEnd,
-            St::GapSm,
-            St::PMd,
-            St::BorderTSubtle,
-        ])
-        .on(Ev::Submit, send_message())
-        .append([
-            el(El::Textarea)
-                .id(&field_id)
-                .attr("name", "message")
-                .attr("rows", "1")
-                .at_str(rwire::At::Placeholder, "Message…")
-                .st([St::Flex1])
-                .style(Style::new().set("resize", "none")),
-            Button::primary("Send")
-                .build()
-                .attr("type", "submit")
-                .data("act", "send"),
-        ])
-}
+// ── Handlers ──────────────────────────────────────────────────────────────────
 
 #[handler]
-fn new_chat(_app: &mut App) {
+fn new_chat(app: &mut App) {
+    app.tab = Tab::Chat;
     bridge::send(Command::NewChat);
 }
 
 #[handler]
 fn select_chat(app: &mut App, ctx: &EventContext) {
     if let Some(id) = ctx.data("chat") {
+        app.tab = Tab::Chat;
         app.open_chat = Some(id.to_owned());
         bridge::send(Command::OpenChat(id.to_owned()));
     }

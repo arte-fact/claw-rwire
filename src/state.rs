@@ -75,6 +75,9 @@ pub struct ChatMessage {
 #[derive(Debug, Default, State)]
 #[storage(shared)]
 pub struct App {
+    /// The active main-area surface. Shared (not per-connection) so an `App`
+    /// handler — selecting a conversation — can also switch to the chat view.
+    pub tab: Tab,
     /// Set by the bridge once the pipeline thread has booted and primed state.
     pub pipeline_ready: bool,
     /// Chat threads for the sidebar.
@@ -85,11 +88,4 @@ pub struct App {
     pub messages: Vec<ChatMessage>,
     /// The agent is producing a reply on the open thread.
     pub sending: bool,
-}
-
-/// Per-connection view state.
-#[derive(Debug, Default, State)]
-#[storage(memory)]
-pub struct Ui {
-    pub tab: Tab,
 }
