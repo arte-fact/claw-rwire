@@ -43,15 +43,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let central_db = dir.join("central.db");
     db::open(&central_db)?;
 
-    match auth::init()? {
-        auth::TokenSource::Configured => println!("Auth: using CLAW_AUTH_TOKEN"),
-        auth::TokenSource::Generated(token) => {
-            println!("Auth: no CLAW_AUTH_TOKEN set — generated one for this run: {token}");
-        }
+    let creds = auth::resolve()?;
+    if creds.generated {
+        println!(
+            "Auth: no CLAW_AUTH_TOKEN set — generated a password for user '{}': {}",
+            creds.user, creds.password
+        );
+    } else {
+        println!("Auth: HTTP Basic enabled for user '{}'", creds.user);
     }
 
     let mut server = Server::bind(&bind_addr())?
         .root(ui::app)
+        .basic_auth(&creds.user, &creds.password)
         .capsule_config(CapsuleConfig::new())
         .theme(app_theme());
 
