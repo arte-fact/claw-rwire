@@ -9,6 +9,7 @@
 
 mod chat;
 mod pages;
+mod system_map;
 
 use rwire::router::RoutePattern;
 use rwire::style::Style;
@@ -188,7 +189,7 @@ fn content(app: &App) -> ElementBuilder {
     // rwire's nested synced-region updates reconcile children correctly.
     el(El::Div).style(fill()).append([
         panel(app.tab == Tab::Chat, chat::surface()),
-        panel(app.tab == Tab::System, pages::admin()),
+        panel(app.tab == Tab::System, system_map::page()),
         panel(
             app.tab == Tab::Activity,
             pages::placeholder("Activity", "Live run activity lands in Phase 4."),

@@ -88,6 +88,25 @@ pub struct ChatMessage {
     pub time: String,
 }
 
+/// An endpoint row for the System Map. The secret is never projected — only whether
+/// one is set — so the read-model can't leak it to the UI.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EndpointView {
+    pub name: String,
+    pub base_url: String,
+    pub has_key: bool,
+    pub api_key_env: Option<String>,
+}
+
+/// An agent row for the System Map, with its endpoint link and model.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentView {
+    pub id: String,
+    pub name: String,
+    pub endpoint: Option<String>,
+    pub model: Option<String>,
+}
+
 /// Process-global projection. Selection (`open_chat`) lives here rather than in
 /// per-connection `Ui` so a single `App`-typed renderer can draw the thread; for a
 /// single-operator assistant, tabs sharing the open chat is acceptable (and matches
@@ -111,4 +130,9 @@ pub struct App {
     /// A transient error from the last turn (e.g. the endpoint failed). Shown as a
     /// banner; never persisted, cleared on the next send.
     pub error: Option<String>,
+    /// System Map: registry read-models, projected by the bridge.
+    pub endpoints: Vec<EndpointView>,
+    pub agents: Vec<AgentView>,
+    /// The agent id the web channel currently routes to.
+    pub web_agent: Option<String>,
 }

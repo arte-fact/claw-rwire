@@ -7,12 +7,14 @@
 //!
 //! Phase 2 ships a stand-in "echo" agent in place of the real provider loop.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Sender};
 
 use rwire::{ChangeSet, SharedServerState};
+
+mod admin;
 
 use crate::agent;
 use crate::db::{self, agents, chat, endpoints, resolution};
@@ -36,6 +38,27 @@ pub enum Command {
         chat: String,
         result: Result<String, String>,
     },
+    // ── System Map admin (registry CRUD) ──
+    UpsertEndpoint {
+        name: String,
+        base_url: String,
+        api_key: Option<String>,
+    },
+    DeleteEndpoint {
+        name: String,
+    },
+    UpsertAgent {
+        id: Option<String>,
+        name: String,
+        endpoint: Option<String>,
+        model: Option<String>,
+    },
+    DeleteAgent {
+        id: String,
+    },
+    SetWebAgent {
+        id: String,
+    },
 }
 
 static TX: OnceLock<Sender<Command>> = OnceLock::new();
@@ -50,21 +73,23 @@ pub fn send(command: Command) {
 pub fn spawn(shared: Arc<SharedServerState>, central_db: PathBuf) {
     let (tx, rx) = mpsc::channel();
     let _ = TX.set(tx);
-    std::thread::spawn(move || run(&rx, &shared, &central_db));
-}
-
-fn run(rx: &Receiver<Command>, shared: &SharedServerState, central_db: &Path) {
-    let conn = match db::open(central_db) {
+    let conn = match db::open(&central_db) {
         Ok(conn) => conn,
         Err(err) => {
             eprintln!("bridge: cannot open central db: {err}");
             return;
         }
     };
-    boot(&conn, shared);
-    while let Ok(command) = rx.recv() {
-        handle(&conn, shared, command);
-    }
+    // Prime shared state *before* the server serves any connection, so the first
+    // render already has the chats + registry. Otherwise a connection that paints
+    // before the projection lands shows blank data, and a client-side tab switch —
+    // which doesn't touch those fields — never re-renders it (needs a reload).
+    boot(&conn, &shared);
+    std::thread::spawn(move || {
+        while let Ok(command) = rx.recv() {
+            handle(&conn, &shared, command);
+        }
+    });
 }
 
 /// Prime the projection from the DB and select the most recent thread. On first
@@ -75,8 +100,9 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
     {
         let _ = chat::create_chat(conn, &id, "New chat");
     }
-    sync_provider(conn);
+    seed_provider(conn);
     link_chats_to_default_agent(conn);
+    admin::project_registry(conn, shared);
     let chats = chat::list_chats(conn).unwrap_or_default();
     let selected = chats.first().map(|chat| chat.id.clone());
     let messages = selected
@@ -99,31 +125,27 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
     );
 }
 
-/// Keep the env-managed `default` endpoint + agent in sync with `.env` on every boot,
-/// so editing `.env` and restarting actually takes effect (the DB is otherwise the
-/// source of record). With no env config, the DB is left untouched and the bridge
-/// falls back to echo. The System Map admin will manage non-default endpoints later.
-fn sync_provider(conn: &rusqlite::Connection) {
+/// First-boot bootstrap: when no endpoint exists yet, seed a `default` endpoint +
+/// agent from `.env` so the chat talks to a real model out of the box. Once any
+/// endpoint exists the DB is the source of record and the System Map admin owns it —
+/// env never clobbers UI edits on restart. No env config → echo fallback.
+fn seed_provider(conn: &rusqlite::Connection) {
+    match endpoints::is_empty(conn) {
+        Ok(true) => {}
+        _ => return, // already configured (admin-set) — or a read error; don't touch it
+    }
     let (Ok(base_url), Ok(model)) = (env("CLAW_ENDPOINT"), env("CLAW_MODEL")) else {
-        return; // not configured via env — leave the DB as-is (admin-set or echo)
+        return;
     };
     let api_key = env("CLAW_API_KEY").ok().filter(|key| !key.is_empty());
     if let Err(err) = endpoints::upsert(conn, "default", &base_url, api_key.as_deref(), None) {
-        eprintln!("bridge: sync endpoint failed: {err}");
+        eprintln!("bridge: seed endpoint failed: {err}");
         return;
     }
-    let agent = match agents::ensure_default(conn, Some("default"), Some(&model)) {
-        Ok(agent) => agent,
-        Err(err) => {
-            eprintln!("bridge: ensure agent failed: {err}");
-            return;
-        }
-    };
-    if let Err(err) = agents::set_provider(conn, &agent.id, Some("default"), Some(&model)) {
-        eprintln!("bridge: sync agent failed: {err}");
-        return;
+    match agents::ensure_default(conn, Some("default"), Some(&model)) {
+        Ok(_) => println!("Agent: native endpoint {base_url} (model {model})"),
+        Err(err) => eprintln!("bridge: seed agent failed: {err}"),
     }
-    println!("Agent: native endpoint {base_url} (model {model})");
 }
 
 /// Read a non-empty, trimmed env var.
@@ -154,6 +176,20 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::OpenChat(id) => open_chat(conn, shared, &id),
         Command::Submit { chat, text } => submit(conn, shared, &chat, &text),
         Command::AgentReply { chat, result } => agent_reply(conn, shared, &chat, result),
+        Command::UpsertEndpoint {
+            name,
+            base_url,
+            api_key,
+        } => admin::upsert_endpoint(conn, shared, &name, &base_url, api_key),
+        Command::DeleteEndpoint { name } => admin::delete_endpoint(conn, shared, &name),
+        Command::UpsertAgent {
+            id,
+            name,
+            endpoint,
+            model,
+        } => admin::upsert_agent(conn, shared, id, &name, endpoint, model),
+        Command::DeleteAgent { id } => admin::delete_agent(conn, shared, &id),
+        Command::SetWebAgent { id } => admin::set_web_agent(conn, shared, &id),
     }
 }
 

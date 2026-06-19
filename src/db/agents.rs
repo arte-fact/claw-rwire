@@ -63,21 +63,6 @@ pub fn ensure_default(
     get(conn, DEFAULT_ID).map(|group| group.expect("agent group just inserted"))
 }
 
-/// Point an agent group at an endpoint + model. Used to keep the env-managed default
-/// agent in sync with `.env` on each boot.
-pub fn set_provider(
-    conn: &Connection,
-    id: &str,
-    endpoint: Option<&str>,
-    model: Option<&str>,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE agent_groups SET endpoint = ?2, model = ?3 WHERE id = ?1",
-        params![id, endpoint, model],
-    )?;
-    Ok(())
-}
-
 /// Bind a chat to an agent group (idempotent on the pair). The link id is derived
 /// from the pair so re-linking is a no-op.
 pub fn link(conn: &Connection, chat_id: &str, agent_group_id: &str) -> rusqlite::Result<()> {
@@ -109,6 +94,84 @@ pub fn agent_for_chat(conn: &Connection, chat_id: &str) -> rusqlite::Result<Opti
     .optional()
 }
 
+pub fn list(conn: &Connection) -> rusqlite::Result<Vec<AgentGroup>> {
+    let mut stmt = conn.prepare(&format!("{SELECT} ORDER BY created_at ASC"))?;
+    let rows = stmt.query_map([], from_row)?;
+    rows.collect()
+}
+
+/// Create an agent group (admin). `folder` is the id, which is unique by construction;
+/// claw-rwire's web chats don't use the workspace folder.
+pub fn create(
+    conn: &Connection,
+    id: &str,
+    name: &str,
+    endpoint: Option<&str>,
+    model: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO agent_groups (id, name, folder, endpoint, model, created_at)
+         VALUES (?1, ?2, ?1, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        params![id, name, endpoint, model],
+    )?;
+    Ok(())
+}
+
+pub fn update(
+    conn: &Connection,
+    id: &str,
+    name: &str,
+    endpoint: Option<&str>,
+    model: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE agent_groups SET name = ?2, endpoint = ?3, model = ?4 WHERE id = ?1",
+        params![id, name, endpoint, model],
+    )?;
+    Ok(())
+}
+
+pub fn delete(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM agent_groups WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// The agent group every web chat currently routes to, if any (they share one).
+pub fn web_agent(conn: &Connection) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT m.agent_group_id
+           FROM messaging_group_agents m
+           JOIN messaging_groups g ON g.id = m.messaging_group_id
+          WHERE g.channel_type = 'web'
+          ORDER BY m.created_at ASC
+          LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// Point every web chat at `agent_id` (the Channels→Agent link). Replaces existing
+/// web links so the channel routes to exactly one agent.
+pub fn relink_web_chats(conn: &Connection, agent_id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM messaging_group_agents
+          WHERE messaging_group_id IN
+            (SELECT id FROM messaging_groups WHERE channel_type = 'web')",
+        [],
+    )?;
+    let chat_ids: Vec<String> = {
+        let mut stmt =
+            conn.prepare("SELECT id FROM messaging_groups WHERE channel_type = 'web'")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    for chat_id in chat_ids {
+        link(conn, &chat_id, agent_id)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +199,47 @@ mod tests {
         link(&conn, "chat-1", &agent.id).expect("link");
         link(&conn, "chat-1", &agent.id).expect("re-link is a no-op");
         assert_eq!(agent_for_chat(&conn, "chat-1").expect("some"), Some(agent));
+    }
+
+    #[test]
+    fn create_update_delete_and_list() {
+        let conn = open_in_memory().expect("db");
+        endpoints::upsert(&conn, "e1", "http://e1/v1", None, None).expect("e1");
+        create(&conn, "ag-1", "Writer", Some("e1"), Some("m1")).expect("create");
+        assert_eq!(
+            get(&conn, "ag-1").expect("get"),
+            Some(AgentGroup {
+                id: "ag-1".to_owned(),
+                name: "Writer".to_owned(),
+                endpoint: Some("e1".to_owned()),
+                model: Some("m1".to_owned()),
+            })
+        );
+        update(&conn, "ag-1", "Editor", Some("e1"), Some("m2")).expect("update");
+        let updated = get(&conn, "ag-1").expect("get").expect("some");
+        assert_eq!(updated.name, "Editor");
+        assert_eq!(updated.model.as_deref(), Some("m2"));
+        assert_eq!(list(&conn).expect("list").len(), 1);
+        delete(&conn, "ag-1").expect("delete");
+        assert!(list(&conn).expect("list").is_empty());
+    }
+
+    #[test]
+    fn relink_web_chats_points_every_web_chat_at_one_agent() {
+        let conn = open_in_memory().expect("db");
+        endpoints::upsert(&conn, "e", "http://e/v1", None, None).expect("e");
+        create(&conn, "ag-a", "A", Some("e"), Some("m")).expect("a");
+        create(&conn, "ag-b", "B", Some("e"), Some("m")).expect("b");
+        chat::create_chat(&conn, "c1", "x").expect("c1");
+        chat::create_chat(&conn, "c2", "y").expect("c2");
+
+        relink_web_chats(&conn, "ag-a").expect("relink a");
+        assert_eq!(web_agent(&conn).expect("web"), Some("ag-a".to_owned()));
+        assert_eq!(agent_for_chat(&conn, "c1").expect("c1").unwrap().id, "ag-a");
+
+        // Re-pointing the channel moves every web chat, leaving no duplicate links.
+        relink_web_chats(&conn, "ag-b").expect("relink b");
+        assert_eq!(web_agent(&conn).expect("web"), Some("ag-b".to_owned()));
+        assert_eq!(agent_for_chat(&conn, "c2").expect("c2").unwrap().id, "ag-b");
     }
 }
