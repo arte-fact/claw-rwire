@@ -244,9 +244,12 @@ fn chat_row(id: &str, title: &str, active: bool, busy: bool) -> ElementBuilder {
     let label = Text::body(title.to_owned())
         .build()
         .st([St::Flex1, St::Truncate]);
-    let row = el(El::Div)
-        .data("chat", id)
-        .on(Ev::Click, select_chat())
+    // `<a data-route href="/chat/:id">`: selecting a conversation is navigation —
+    // the rwire client router pushes the URL and `on_route` opens it.
+    let href = format!("/chat/{id}");
+    let row = el(El::A)
+        .attr("href", &href)
+        .attr("data-route", "")
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
@@ -255,6 +258,7 @@ fn chat_row(id: &str, title: &str, active: bool, busy: bool) -> ElementBuilder {
             St::PrMd,
             St::CursorPointer,
             St::TextSm,
+            St::NoUnderline,
         ])
         .hover([St::TextHigh])
         .append([accent_bar(active), dot, label]);
@@ -272,14 +276,14 @@ fn new_chat(_app: &mut App) {
     bridge::send(Command::NewChat);
 }
 
-#[handler]
-fn select_chat(app: &mut App, ctx: &EventContext) {
-    if let Some(id) = ctx.data("chat") {
-        app.open_chat = Some(id.to_owned());
-        app.messages.clear();
-        app.sending = false;
-        bridge::send(Command::OpenChat(id.to_owned()));
-    }
+/// Optimistically open a conversation (called by the router on a `/chat/:id`
+/// route): show it at once, clear the previous transcript, and ask the bridge to
+/// load its messages.
+pub fn open(app: &mut App, id: &str) {
+    app.open_chat = Some(id.to_owned());
+    app.messages.clear();
+    app.sending = false;
+    bridge::send(Command::OpenChat(id.to_owned()));
 }
 
 #[handler]

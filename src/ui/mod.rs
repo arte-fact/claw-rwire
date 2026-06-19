@@ -10,6 +10,7 @@
 mod chat;
 mod pages;
 
+use rwire::router::RoutePattern;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, St, el, handler, icons, renderer};
 use rwire_components::Text;
@@ -221,11 +222,25 @@ fn fill() -> Style {
 }
 
 /// Client-side route changes (link clicks, back/forward, deep links) arrive here
-/// with the new path in `ctx.text()`. Mirror it into `app.tab` so the nav and
-/// content renderers reflect the URL. Registered via `Server::on_route`.
+/// with the new path in `ctx.text()`. Mirror the URL into state so the nav and
+/// content renderers reflect it. Registered via `Server::on_route`.
 #[handler]
 pub fn on_route(app: &mut App, ctx: &EventContext) {
-    if let Some(tab) = ctx.text().and_then(Tab::from_path) {
+    let Some(path) = ctx.text() else {
+        return;
+    };
+    // `/chat/:id` selects a conversation on the Chat surface.
+    if let Some(id) = RoutePattern::new("/chat/:id")
+        .matches(path)
+        .and_then(|params| params.get("id").map(str::to_owned))
+    {
+        app.tab = Tab::Chat;
+        if app.open_chat.as_deref() != Some(id.as_str()) {
+            chat::open(app, &id);
+        }
+        return;
+    }
+    if let Some(tab) = Tab::from_path(path) {
         app.tab = tab;
     }
 }
