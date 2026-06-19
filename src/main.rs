@@ -59,6 +59,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut server = Server::bind(&bind_addr())?
         .root(ui::app)
         .auth(&creds.user, &creds.password)
+        .auth_brand("claw")
         .capsule_config(CapsuleConfig::new())
         .theme(app_theme());
 
