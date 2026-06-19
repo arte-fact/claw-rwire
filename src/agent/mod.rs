@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::db::resolution::ResolvedInference;
 use crate::state::{ChatMessage as Turn, MessageRole};
 
-const TIMEOUT: Duration = Duration::from_secs(300);
+/// Fail fast when the host is unreachable or the wrong scheme is configured.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Overall deadline, generous enough for local generation but not a silent 5-min hang.
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The default system prompt until per-agent prompts exist.
 pub const SYSTEM_PROMPT: &str = "You are claw, a concise and helpful personal assistant.";
@@ -79,7 +82,10 @@ pub fn build_messages(system: &str, turns: &[Turn]) -> Vec<ChatMessage> {
 /// Call the endpoint and return the assistant's reply text. Blocking.
 pub fn complete(inf: &ResolvedInference, messages: &[ChatMessage]) -> Result<String, AgentError> {
     let url = format!("{}/chat/completions", inf.base_url.trim_end_matches('/'));
-    let http = ureq::AgentBuilder::new().timeout(TIMEOUT).build();
+    let http = ureq::AgentBuilder::new()
+        .timeout_connect(CONNECT_TIMEOUT)
+        .timeout(RESPONSE_TIMEOUT)
+        .build();
     let mut request = http.post(&url).set("Content-Type", "application/json");
     if let Some(key) = &inf.api_key {
         request = request.set("Authorization", &format!("Bearer {key}"));

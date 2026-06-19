@@ -98,7 +98,7 @@ mod tests {
 
     fn seeded() -> rusqlite::Connection {
         let conn = open_in_memory().expect("db");
-        endpoints::insert(
+        endpoints::upsert(
             &conn,
             "default",
             "http://localhost:8000/v1",

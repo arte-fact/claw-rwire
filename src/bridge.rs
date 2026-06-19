@@ -75,7 +75,7 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
     {
         let _ = chat::create_chat(conn, &id, "New chat");
     }
-    seed_provider(conn);
+    sync_provider(conn);
     link_chats_to_default_agent(conn);
     let chats = chat::list_chats(conn).unwrap_or_default();
     let selected = chats.first().map(|chat| chat.id.clone());
@@ -99,27 +99,31 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
     );
 }
 
-/// On first boot, seed a `default` endpoint + agent group from env so the chat talks
-/// to a real model. Skipped once any endpoint exists (the DB is the source of record;
-/// the System Map admin edits it later). With no env config, the endpoint stays empty
-/// and the bridge falls back to echo.
-fn seed_provider(conn: &rusqlite::Connection) {
-    match endpoints::is_empty(conn) {
-        Ok(true) => {}
-        _ => return, // already configured, or a read error — don't touch it
-    }
+/// Keep the env-managed `default` endpoint + agent in sync with `.env` on every boot,
+/// so editing `.env` and restarting actually takes effect (the DB is otherwise the
+/// source of record). With no env config, the DB is left untouched and the bridge
+/// falls back to echo. The System Map admin will manage non-default endpoints later.
+fn sync_provider(conn: &rusqlite::Connection) {
     let (Ok(base_url), Ok(model)) = (env("CLAW_ENDPOINT"), env("CLAW_MODEL")) else {
-        return;
+        return; // not configured via env — leave the DB as-is (admin-set or echo)
     };
     let api_key = env("CLAW_API_KEY").ok().filter(|key| !key.is_empty());
-    if let Err(err) = endpoints::insert(conn, "default", &base_url, api_key.as_deref(), None) {
-        eprintln!("bridge: seed endpoint failed: {err}");
+    if let Err(err) = endpoints::upsert(conn, "default", &base_url, api_key.as_deref(), None) {
+        eprintln!("bridge: sync endpoint failed: {err}");
         return;
     }
-    match agents::ensure_default(conn, Some("default"), Some(&model)) {
-        Ok(_) => println!("Agent: native endpoint {base_url} (model {model})"),
-        Err(err) => eprintln!("bridge: seed agent failed: {err}"),
+    let agent = match agents::ensure_default(conn, Some("default"), Some(&model)) {
+        Ok(agent) => agent,
+        Err(err) => {
+            eprintln!("bridge: ensure agent failed: {err}");
+            return;
+        }
+    };
+    if let Err(err) = agents::set_provider(conn, &agent.id, Some("default"), Some(&model)) {
+        eprintln!("bridge: sync agent failed: {err}");
+        return;
     }
+    println!("Agent: native endpoint {base_url} (model {model})");
 }
 
 /// Read a non-empty, trimmed env var.

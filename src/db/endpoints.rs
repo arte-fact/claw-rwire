@@ -12,12 +12,9 @@ pub struct Endpoint {
     pub api_key_env: Option<String>,
 }
 
-pub fn is_empty(conn: &Connection) -> rusqlite::Result<bool> {
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM endpoints", [], |row| row.get(0))?;
-    Ok(count == 0)
-}
-
-pub fn insert(
+/// Insert or update an endpoint, keeping `created_at`. Used to keep the env-managed
+/// `default` endpoint in sync with `.env` on each boot.
+pub fn upsert(
     conn: &Connection,
     name: &str,
     base_url: &str,
@@ -26,7 +23,11 @@ pub fn insert(
 ) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO endpoints (name, base_url, api_key, api_key_env, created_at)
-         VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+         VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         ON CONFLICT(name) DO UPDATE SET
+           base_url = excluded.base_url,
+           api_key = excluded.api_key,
+           api_key_env = excluded.api_key_env",
         params![name, base_url, api_key, api_key_env],
     )?;
     Ok(())
@@ -53,12 +54,15 @@ mod tests {
     use super::*;
     use crate::db::open_in_memory;
 
+    fn count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM endpoints", [], |row| row.get(0))
+            .expect("count")
+    }
+
     #[test]
-    fn insert_then_get_roundtrips_and_empty_tracks_rows() {
+    fn upsert_then_get_roundtrips() {
         let conn = open_in_memory().expect("db");
-        assert!(is_empty(&conn).expect("empty"));
-        insert(&conn, "default", "http://x/v1", Some("sk-1"), None).expect("insert");
-        assert!(!is_empty(&conn).expect("not empty"));
+        upsert(&conn, "default", "http://x/v1", Some("sk-1"), None).expect("upsert");
         let got = get(&conn, "default").expect("get").expect("some");
         assert_eq!(
             got,
@@ -70,5 +74,16 @@ mod tests {
             }
         );
         assert!(get(&conn, "missing").expect("get").is_none());
+    }
+
+    #[test]
+    fn upsert_updates_base_url_in_place() {
+        let conn = open_in_memory().expect("db");
+        upsert(&conn, "default", "https://old/v1", Some("k1"), None).expect("insert");
+        upsert(&conn, "default", "http://new/v1", None, None).expect("update");
+        let got = get(&conn, "default").expect("get").expect("some");
+        assert_eq!(got.base_url, "http://new/v1");
+        assert_eq!(got.api_key, None);
+        assert_eq!(count(&conn), 1, "upsert must not add a second row");
     }
 }

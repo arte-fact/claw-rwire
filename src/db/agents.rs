@@ -63,6 +63,21 @@ pub fn ensure_default(
     get(conn, DEFAULT_ID).map(|group| group.expect("agent group just inserted"))
 }
 
+/// Point an agent group at an endpoint + model. Used to keep the env-managed default
+/// agent in sync with `.env` on each boot.
+pub fn set_provider(
+    conn: &Connection,
+    id: &str,
+    endpoint: Option<&str>,
+    model: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE agent_groups SET endpoint = ?2, model = ?3 WHERE id = ?1",
+        params![id, endpoint, model],
+    )?;
+    Ok(())
+}
+
 /// Bind a chat to an agent group (idempotent on the pair). The link id is derived
 /// from the pair so re-linking is a no-op.
 pub fn link(conn: &Connection, chat_id: &str, agent_group_id: &str) -> rusqlite::Result<()> {
@@ -103,7 +118,7 @@ mod tests {
     fn ensure_default_is_idempotent_and_carries_endpoint_model() {
         let conn = open_in_memory().expect("db");
         // The endpoint must exist first (agent_groups.endpoint is a FK).
-        endpoints::insert(&conn, "default", "http://x/v1", None, None).expect("endpoint");
+        endpoints::upsert(&conn, "default", "http://x/v1", None, None).expect("endpoint");
         let a = ensure_default(&conn, Some("default"), Some("m1")).expect("ensure");
         assert_eq!(a.endpoint.as_deref(), Some("default"));
         assert_eq!(a.model.as_deref(), Some("m1"));
