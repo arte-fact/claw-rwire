@@ -87,14 +87,25 @@ pub struct AgentView {
     pub model: Option<String>,
 }
 
-/// What the System Map's right drawer is editing, if open. Holds the row's *key*
-/// (not a snapshot) so the drawer always reads current values from `App` and closes
-/// itself if the row is deleted. Inner `None` = create a new row.
+/// What the System Map's right drawer is editing, if open. Endpoints/Channel keep the
+/// row *key* (the drawer reads current values from `App`); the agent form is
+/// *controlled* — it carries a live draft so it can re-render (when discovered models
+/// arrive) without resetting the operator's in-progress input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Editing {
     Endpoint(Option<String>),
-    Agent(Option<String>),
+    Agent(AgentDraft),
     Channel,
+}
+
+/// In-progress agent edit. `id == None` is a new agent; the rest mirror the form
+/// fields so a re-render restores them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentDraft {
+    pub id: Option<String>,
+    pub name: String,
+    pub endpoint: Option<String>,
+    pub model: String,
 }
 
 /// Process-global projection. Selection (`open_chat`) lives here rather than in
@@ -124,4 +135,7 @@ pub struct App {
     pub web_agent: Option<String>,
     /// The System Map drawer's current target, or `None` when it's closed.
     pub editing: Option<Editing>,
+    /// Models discovered from the agent draft's selected endpoint (`/v1/models`),
+    /// populating the agent form's model dropdown. Empty until an endpoint is chosen.
+    pub endpoint_models: Vec<String>,
 }

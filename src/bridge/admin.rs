@@ -5,7 +5,8 @@
 
 use rwire::{ChangeSet, SharedServerState};
 
-use crate::db::{agents, endpoints};
+use crate::agent;
+use crate::db::{agents, endpoints, resolution};
 use crate::state::{AgentView, App, EndpointView};
 
 /// Load the registry into the shared read-models. Called at boot and after each edit.
@@ -117,6 +118,25 @@ pub fn set_web_agent(conn: &rusqlite::Connection, shared: &SharedServerState, ag
         return surface_error(shared, format!("route the Web channel: {err}"));
     }
     project_registry(conn, shared);
+}
+
+/// Fetch the endpoint's advertised models into `App.endpoint_models`. A lookup or
+/// network failure just yields an empty list (the form falls back to free text) — a
+/// missing model list shouldn't block editing an agent.
+pub fn discover_models(conn: &rusqlite::Connection, shared: &SharedServerState, endpoint: &str) {
+    let models = match endpoints::get(conn, endpoint) {
+        Ok(Some(row)) => {
+            let api_key = resolution::api_key_for(&row, |var| std::env::var(var).ok())
+                .ok()
+                .flatten();
+            agent::list_models(&row.base_url, api_key.as_deref()).unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_ENDPOINT_MODELS]),
+        |app| app.endpoint_models = models,
+    );
 }
 
 fn surface_error(shared: &SharedServerState, message: String) {

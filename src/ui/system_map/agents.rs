@@ -1,13 +1,13 @@
 //! Agents tier: a read-only column of agent rows (each opens the drawer to edit) plus
-//! an add button. The drawer form links the agent to an endpoint (a `<select>`, the
-//! Agent→Endpoint edge of the map).
+//! an add button. The drawer form is *controlled* (its fields live in `App.editing`'s
+//! `AgentDraft`) so it can re-render when discovered models arrive without resetting
+//! the operator's input. Picking an endpoint fetches its `/v1/models` into a dropdown.
 
-use rwire::style::Style;
-use rwire::{At, El, ElementBuilder, St, el, handler, renderer};
+use rwire::{At, El, ElementBuilder, Ev, St, el, handler, renderer};
 
-use super::{action, badge, card, drawer_form, field, labeled, row_head, select_st, submit};
+use super::{action, badge, card, drawer_form, labeled, row_head, select_st, submit, text_input};
 use crate::bridge::{self, Command};
-use crate::state::{AgentView, App, Editing, EndpointView};
+use crate::state::{AgentDraft, AgentView, App, Editing};
 
 #[renderer]
 pub fn column(app: &App) -> ElementBuilder {
@@ -32,47 +32,30 @@ fn row(agent: &AgentView) -> ElementBuilder {
     ])
 }
 
-/// The drawer form: `None` = create; `Some(id)` = edit that agent.
-pub fn form(app: &App, key: Option<&str>) -> ElementBuilder {
-    let existing = key.and_then(|id| app.agents.iter().find(|a| a.id == id));
-    if key.is_some() && existing.is_none() {
-        return el(El::Div).style(Style::new().display("none"));
-    }
-    let name = existing.map(|a| a.name.as_str()).unwrap_or("");
-    let endpoint = existing.and_then(|a| a.endpoint.as_deref());
-    let model = existing.and_then(|a| a.model.as_deref()).unwrap_or("");
+/// The controlled drawer form, rendered from `draft`. The Model control is a dropdown
+/// of `app.endpoint_models` (discovered for the draft's endpoint), or a free-text
+/// fallback when none were discovered.
+pub fn form(app: &App, draft: &AgentDraft) -> ElementBuilder {
+    let name = labeled(
+        "Name",
+        text_input("name", &draft.name, "e.g. Coder", name_changed()),
+    );
+    let endpoint = endpoint_select(app, draft.endpoint.as_deref());
+    let model = model_field(app, draft);
 
-    let fields = [
-        field("Name", "name", name, "e.g. Coder", false),
-        endpoint_select(&app.endpoints, endpoint),
-        field("Model", "model", model, "model name", false),
-    ];
-    if existing.is_some() {
-        drawer_form(
-            save(),
-            fields,
-            [
-                submit("Save"),
-                action("Delete", delete()).data("act", "delete"),
-                action("Cancel", super::close()).data("act", "cancel"),
-            ],
-        )
-    } else {
-        drawer_form(
-            save(),
-            fields,
-            [
-                submit("Add"),
-                action("Cancel", super::close()).data("act", "cancel"),
-            ],
-        )
+    let mut actions = vec![submit(if draft.id.is_some() { "Save" } else { "Add" })];
+    if draft.id.is_some() {
+        actions.push(action("Delete", delete()).data("act", "delete"));
     }
+    actions.push(action("Cancel", super::close()).data("act", "cancel"));
+
+    drawer_form(save(), [name, endpoint, model], actions)
 }
 
-fn endpoint_select(endpoints: &[EndpointView], selected: Option<&str>) -> ElementBuilder {
+fn endpoint_select(app: &App, selected: Option<&str>) -> ElementBuilder {
     let mut options: Vec<ElementBuilder> =
         vec![el(El::Option).attr("value", "").text("— no endpoint —")];
-    for endpoint in endpoints {
+    for endpoint in &app.endpoints {
         let option = el(El::Option)
             .attr("value", &endpoint.name)
             .text(&endpoint.name);
@@ -86,6 +69,39 @@ fn endpoint_select(endpoints: &[EndpointView], selected: Option<&str>) -> Elemen
         "Endpoint",
         el(El::Select)
             .attr("name", "endpoint")
+            .on(Ev::Change, endpoint_changed())
+            .st(select_st())
+            .append(options),
+    )
+}
+
+fn model_field(app: &App, draft: &AgentDraft) -> ElementBuilder {
+    if app.endpoint_models.is_empty() {
+        // No endpoint chosen, or discovery returned nothing — keep it free text.
+        return labeled(
+            "Model",
+            text_input("model", &draft.model, "model name", model_changed()),
+        );
+    }
+    // The draft's current model may not be advertised (a hand-set value); keep it.
+    let mut models = app.endpoint_models.clone();
+    if !draft.model.is_empty() && !models.iter().any(|m| m == &draft.model) {
+        models.insert(0, draft.model.clone());
+    }
+    let mut options = vec![el(El::Option).attr("value", "").text("— select model —")];
+    for model in &models {
+        let option = el(El::Option).attr("value", model).text(model);
+        options.push(if draft.model == *model {
+            option.bool_attr(At::Selected)
+        } else {
+            option
+        });
+    }
+    labeled(
+        "Model",
+        el(El::Select)
+            .attr("name", "model")
+            .on(Ev::Change, model_changed())
             .st(select_st())
             .append(options),
     )
@@ -93,20 +109,63 @@ fn endpoint_select(endpoints: &[EndpointView], selected: Option<&str>) -> Elemen
 
 #[handler]
 fn open_new(app: &mut App) {
-    app.editing = Some(Editing::Agent(None));
+    app.editing = Some(Editing::Agent(AgentDraft::default()));
+    app.endpoint_models = Vec::new();
 }
 
 #[handler]
 fn open_edit(app: &mut App, ctx: &EventContext) {
-    if let Some(id) = ctx.data("id") {
-        app.editing = Some(Editing::Agent(Some(id.to_owned())));
+    let Some(id) = ctx.data("id") else {
+        return;
+    };
+    let Some(agent) = app.agents.iter().find(|a| a.id.as_str() == id) else {
+        return;
+    };
+    let draft = AgentDraft {
+        id: Some(agent.id.clone()),
+        name: agent.name.clone(),
+        endpoint: agent.endpoint.clone(),
+        model: agent.model.clone().unwrap_or_default(),
+    };
+    let endpoint = draft.endpoint.clone();
+    app.editing = Some(Editing::Agent(draft));
+    app.endpoint_models = Vec::new();
+    if let Some(endpoint) = endpoint {
+        bridge::send(Command::DiscoverModels { endpoint });
+    }
+}
+
+#[handler]
+fn name_changed(app: &mut App, ctx: &EventContext) {
+    if let Some(Editing::Agent(draft)) = app.editing.as_mut() {
+        draft.name = ctx.text().unwrap_or_default().to_owned();
+    }
+}
+
+#[handler]
+fn endpoint_changed(app: &mut App, ctx: &EventContext) {
+    let endpoint = ctx.text().map(str::to_owned).filter(|v| !v.is_empty());
+    if let Some(Editing::Agent(draft)) = app.editing.as_mut() {
+        draft.endpoint = endpoint.clone();
+        draft.model.clear();
+    }
+    app.endpoint_models = Vec::new();
+    if let Some(endpoint) = endpoint {
+        bridge::send(Command::DiscoverModels { endpoint });
+    }
+}
+
+#[handler]
+fn model_changed(app: &mut App, ctx: &EventContext) {
+    if let Some(Editing::Agent(draft)) = app.editing.as_mut() {
+        draft.model = ctx.text().unwrap_or_default().to_owned();
     }
 }
 
 #[handler]
 fn save(app: &mut App, ctx: &EventContext) {
-    let id = match &app.editing {
-        Some(Editing::Agent(id)) => id.clone(),
+    let id = match app.editing.as_ref() {
+        Some(Editing::Agent(draft)) => draft.id.clone(),
         _ => return,
     };
     let name = ctx.field("name").unwrap_or_default().trim().to_owned();
@@ -133,8 +192,11 @@ fn save(app: &mut App, ctx: &EventContext) {
 
 #[handler]
 fn delete(app: &mut App) {
-    if let Some(Editing::Agent(Some(id))) = &app.editing {
-        let id = id.clone();
+    let id = match app.editing.as_ref() {
+        Some(Editing::Agent(draft)) => draft.id.clone(),
+        _ => return,
+    };
+    if let Some(id) = id {
         app.error = None;
         app.editing = None;
         bridge::send(Command::DeleteAgent { id });

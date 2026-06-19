@@ -59,6 +59,11 @@ pub enum Command {
     SetWebAgent {
         id: String,
     },
+    /// Fetch an endpoint's advertised models into `App.endpoint_models` (the agent
+    /// form's model dropdown).
+    DiscoverModels {
+        endpoint: String,
+    },
 }
 
 static TX: OnceLock<Sender<Command>> = OnceLock::new();
@@ -190,6 +195,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         } => admin::upsert_agent(conn, shared, id, &name, endpoint, model),
         Command::DeleteAgent { id } => admin::delete_agent(conn, shared, &id),
         Command::SetWebAgent { id } => admin::set_web_agent(conn, shared, &id),
+        Command::DiscoverModels { endpoint } => admin::discover_models(conn, shared, &endpoint),
     }
 }
 

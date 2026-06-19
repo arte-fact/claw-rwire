@@ -125,13 +125,13 @@ fn drawer(app: &App) -> ElementBuilder {
             },
             endpoints::form(app, key.as_deref()),
         ),
-        Some(Editing::Agent(key)) => (
-            if key.is_some() {
+        Some(Editing::Agent(draft)) => (
+            if draft.id.is_some() {
                 "Edit agent"
             } else {
                 "New agent"
             },
-            agents::form(app, key.as_deref()),
+            agents::form(app, draft),
         ),
         Some(Editing::Channel) => ("Web channel", channel_form(app)),
         None => ("", el(El::Div)),
@@ -267,6 +267,25 @@ pub(super) fn select_st() -> [St; 8] {
         St::TextHigh,
         St::OutlineNone,
     ]
+}
+
+/// A controlled text input that reports its value on `change` (blur). The agent form
+/// re-renders when discovered models arrive, so its inputs can't be uncontrolled.
+pub(super) fn text_input(
+    name: &str,
+    value: &str,
+    placeholder: &str,
+    on_change: HandlerSpec,
+) -> ElementBuilder {
+    el(El::Input)
+        .attr("name", name)
+        .attr("value", value)
+        .attr("placeholder", placeholder)
+        .attr("autocomplete", "off")
+        .st(select_st())
+        .style(Style::new().set("font", "inherit"))
+        .focus([St::BorderAccent])
+        .on(Ev::Change, on_change)
 }
 
 /// A labeled control (its child input/select), stacked.

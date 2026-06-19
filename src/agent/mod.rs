@@ -109,6 +109,51 @@ pub fn complete(inf: &ResolvedInference, messages: &[ChatMessage]) -> Result<Str
     }
 }
 
+/// Discover the model ids an OpenAI-compatible endpoint advertises (`GET /v1/models`),
+/// sorted and de-duplicated. Used to populate the System Map's agent model dropdown.
+pub fn list_models(base_url: &str, api_key: Option<&str>) -> Result<Vec<String>, AgentError> {
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let http = ureq::AgentBuilder::new()
+        .timeout_connect(CONNECT_TIMEOUT)
+        .timeout(RESPONSE_TIMEOUT)
+        .build();
+    let mut request = http.get(&url);
+    if let Some(key) = api_key {
+        request = request.set("Authorization", &format!("Bearer {key}"));
+    }
+    match request.call() {
+        Ok(response) => {
+            let text = response
+                .into_string()
+                .map_err(|err| AgentError::Http(err.to_string()))?;
+            let parsed: ModelList = serde_json::from_str(&text)
+                .map_err(|err| AgentError::Malformed(err.to_string()))?;
+            let mut ids: Vec<String> = parsed.data.into_iter().map(|model| model.id).collect();
+            ids.sort();
+            ids.dedup();
+            Ok(ids)
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            Err(AgentError::Api {
+                status,
+                body: truncate(&body, 500),
+            })
+        }
+        Err(ureq::Error::Transport(transport)) => Err(AgentError::Http(transport.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+struct ModelList {
+    data: Vec<ModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct ModelEntry {
+    id: String,
+}
+
 fn parse_reply(body: &str) -> Result<String, AgentError> {
     let parsed: ChatResponse =
         serde_json::from_str(body).map_err(|err| AgentError::Malformed(err.to_string()))?;
