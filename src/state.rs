@@ -87,6 +87,16 @@ pub struct AgentView {
     pub model: Option<String>,
 }
 
+/// What the System Map's right drawer is editing, if open. Holds the row's *key*
+/// (not a snapshot) so the drawer always reads current values from `App` and closes
+/// itself if the row is deleted. Inner `None` = create a new row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Editing {
+    Endpoint(Option<String>),
+    Agent(Option<String>),
+    Channel,
+}
+
 /// Process-global projection. Selection (`open_chat`) lives here rather than in
 /// per-connection `Ui` so a single `App`-typed renderer can draw the thread; for a
 /// single-operator assistant, tabs sharing the open chat is acceptable (and matches
@@ -112,4 +122,6 @@ pub struct App {
     pub agents: Vec<AgentView>,
     /// The agent id the web channel currently routes to.
     pub web_agent: Option<String>,
+    /// The System Map drawer's current target, or `None` when it's closed.
+    pub editing: Option<Editing>,
 }

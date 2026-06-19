@@ -1,70 +1,72 @@
-//! Agents tier of the System Map: edit/delete existing agents + add new. Each agent
-//! links to an endpoint (a `<select>`), which is the Agent→Endpoint edge of the map.
+//! Agents tier: a read-only column of agent rows (each opens the drawer to edit) plus
+//! an add button. The drawer form links the agent to an endpoint (a `<select>`, the
+//! Agent→Endpoint edge of the map).
 
 use rwire::style::Style;
-use rwire::{At, El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{At, El, ElementBuilder, St, el, handler, renderer};
 
-use super::{badge, delete_button, field, form_card, submit_button};
+use super::{action, badge, card, drawer_form, field, labeled, row_head, select_st, submit};
 use crate::bridge::{self, Command};
-use crate::state::{AgentView, App, EndpointView};
+use crate::state::{AgentView, App, Editing, EndpointView};
 
 #[renderer]
-pub fn panel(app: &App) -> ElementBuilder {
-    let mut cards: Vec<ElementBuilder> = app
-        .agents
-        .iter()
-        .map(|agent| edit_card(agent, &app.endpoints))
-        .collect();
-    cards.push(add_card(&app.endpoints));
+pub fn column(app: &App) -> ElementBuilder {
+    let mut items: Vec<ElementBuilder> = app.agents.iter().map(row).collect();
+    items.push(action("+ Add agent", open_new()).data("act", "add-agent"));
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
-        .append(cards)
+        .append(items)
 }
 
-fn edit_card(agent: &AgentView, endpoints: &[EndpointView]) -> ElementBuilder {
+fn row(agent: &AgentView) -> ElementBuilder {
     let link = badge(agent.endpoint.as_deref().unwrap_or("unlinked"));
-    form_card(
-        save(),
-        [
-            el(El::Div)
-                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-                .append([
-                    el(El::Span)
-                        .st([St::TextHigh, St::FontSemibold])
-                        .text(&agent.name),
-                    link,
-                ]),
-            hidden("id", &agent.id),
-            field("Name", "name", &agent.name, "Agent name", false),
-            endpoint_select(endpoints, agent.endpoint.as_deref()),
-            field(
-                "Model",
-                "model",
-                agent.model.as_deref().unwrap_or(""),
-                "model name",
-                false,
-            ),
-        ],
-        [
-            submit_button("Save"),
-            delete_button("id", &agent.id).on(Ev::Click, delete()),
-        ],
-    )
+    let model = agent.model.as_deref().unwrap_or("no model");
+    card([
+        el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::JustifyBetween])
+            .append([
+                row_head(&agent.name, link),
+                action("Edit", open_edit()).data("id", &agent.id),
+            ]),
+        el(El::Div).st([St::TextXs, St::TextMuted]).text(model),
+    ])
 }
 
-fn add_card(endpoints: &[EndpointView]) -> ElementBuilder {
-    form_card(
-        save(),
-        [
-            el(El::Div)
-                .st([St::TextMuted, St::TextSm])
-                .text("+ Add agent"),
-            field("Name", "name", "", "e.g. Coder", false),
-            endpoint_select(endpoints, None),
-            field("Model", "model", "", "model name", false),
-        ],
-        [submit_button("Add")],
-    )
+/// The drawer form: `None` = create; `Some(id)` = edit that agent.
+pub fn form(app: &App, key: Option<&str>) -> ElementBuilder {
+    let existing = key.and_then(|id| app.agents.iter().find(|a| a.id == id));
+    if key.is_some() && existing.is_none() {
+        return el(El::Div).style(Style::new().display("none"));
+    }
+    let name = existing.map(|a| a.name.as_str()).unwrap_or("");
+    let endpoint = existing.and_then(|a| a.endpoint.as_deref());
+    let model = existing.and_then(|a| a.model.as_deref()).unwrap_or("");
+
+    let fields = [
+        field("Name", "name", name, "e.g. Coder", false),
+        endpoint_select(&app.endpoints, endpoint),
+        field("Model", "model", model, "model name", false),
+    ];
+    if existing.is_some() {
+        drawer_form(
+            save(),
+            fields,
+            [
+                submit("Save"),
+                action("Delete", delete()).data("act", "delete"),
+                action("Cancel", super::close()).data("act", "cancel"),
+            ],
+        )
+    } else {
+        drawer_form(
+            save(),
+            fields,
+            [
+                submit("Add"),
+                action("Cancel", super::close()).data("act", "cancel"),
+            ],
+        )
+    }
 }
 
 fn endpoint_select(endpoints: &[EndpointView], selected: Option<&str>) -> ElementBuilder {
@@ -80,51 +82,37 @@ fn endpoint_select(endpoints: &[EndpointView], selected: Option<&str>) -> Elemen
             option
         });
     }
-    el(El::Label)
-        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
-        .append([
-            el(El::Span)
-                .st([
-                    St::TextXs,
-                    St::TextMuted,
-                    St::TextUppercase,
-                    St::TrackingWide,
-                ])
-                .text("Endpoint"),
-            el(El::Select)
-                .attr("name", "endpoint")
-                .st([
-                    St::WFull,
-                    St::PxSm,
-                    St::PySm,
-                    St::BorderDefault,
-                    St::RoundedSm,
-                    St::BgApp,
-                    St::TextHigh,
-                    St::OutlineNone,
-                ])
-                .style(Style::new().set("font", "inherit"))
-                .append(options),
-        ])
+    labeled(
+        "Endpoint",
+        el(El::Select)
+            .attr("name", "endpoint")
+            .st(select_st())
+            .append(options),
+    )
 }
 
-fn hidden(name: &str, value: &str) -> ElementBuilder {
-    el(El::Input)
-        .attr("type", "hidden")
-        .attr("name", name)
-        .attr("value", value)
+#[handler]
+fn open_new(app: &mut App) {
+    app.editing = Some(Editing::Agent(None));
+}
+
+#[handler]
+fn open_edit(app: &mut App, ctx: &EventContext) {
+    if let Some(id) = ctx.data("id") {
+        app.editing = Some(Editing::Agent(Some(id.to_owned())));
+    }
 }
 
 #[handler]
 fn save(app: &mut App, ctx: &EventContext) {
+    let id = match &app.editing {
+        Some(Editing::Agent(id)) => id.clone(),
+        _ => return,
+    };
     let name = ctx.field("name").unwrap_or_default().trim().to_owned();
     if name.is_empty() {
         return;
     }
-    let id = ctx
-        .field("id")
-        .map(str::to_owned)
-        .filter(|id| !id.is_empty());
     let endpoint = ctx
         .field("endpoint")
         .map(str::to_owned)
@@ -134,6 +122,7 @@ fn save(app: &mut App, ctx: &EventContext) {
         .map(str::to_owned)
         .filter(|value| !value.trim().is_empty());
     app.error = None;
+    app.editing = None;
     bridge::send(Command::UpsertAgent {
         id,
         name,
@@ -143,9 +132,11 @@ fn save(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn delete(app: &mut App, ctx: &EventContext) {
-    if let Some(id) = ctx.data("id") {
+fn delete(app: &mut App) {
+    if let Some(Editing::Agent(Some(id))) = &app.editing {
+        let id = id.clone();
         app.error = None;
-        bridge::send(Command::DeleteAgent { id: id.to_owned() });
+        app.editing = None;
+        bridge::send(Command::DeleteAgent { id });
     }
 }

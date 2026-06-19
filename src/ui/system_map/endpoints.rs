@@ -1,89 +1,114 @@
-//! Endpoints tier of the System Map: edit/delete existing endpoints + add new.
+//! Endpoints tier: a read-only column of endpoint rows (each opens the drawer to
+//! edit) plus an add button. The drawer form (create or edit) lives in `form`.
 
-use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::style::Style;
+use rwire::{El, ElementBuilder, St, el, handler, renderer};
 
-use super::{badge, delete_button, field, form_card, submit_button};
+use super::{action, badge, card, drawer_form, field, row_head, submit};
 use crate::bridge::{self, Command};
-use crate::state::{App, EndpointView};
+use crate::state::{App, Editing};
 
 #[renderer]
-pub fn panel(app: &App) -> ElementBuilder {
-    let mut cards: Vec<ElementBuilder> = app.endpoints.iter().map(edit_card).collect();
-    cards.push(add_card());
+pub fn column(app: &App) -> ElementBuilder {
+    let mut items: Vec<ElementBuilder> = app.endpoints.iter().map(row).collect();
+    items.push(action("+ Add endpoint", open_new()).data("act", "add-endpoint"));
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
-        .append(cards)
+        .append(items)
 }
 
-fn edit_card(endpoint: &EndpointView) -> ElementBuilder {
+fn row(endpoint: &crate::state::EndpointView) -> ElementBuilder {
     let key = if endpoint.has_key {
         badge("key set")
     } else {
         badge("no key")
     };
-    form_card(
-        save(),
-        [
-            el(El::Div)
-                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-                .append([
-                    el(El::Span)
-                        .st([St::TextHigh, St::FontSemibold])
-                        .text(&endpoint.name),
-                    key,
-                ]),
-            hidden("name", &endpoint.name),
-            field(
-                "Base URL",
-                "base_url",
-                &endpoint.base_url,
-                "https://host/v1",
-                false,
+    card([
+        el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::JustifyBetween])
+            .append([
+                row_head(&endpoint.name, key),
+                action("Edit", open_edit()).data("name", &endpoint.name),
+            ]),
+        el(El::Div)
+            .st([St::TextXs, St::TextMuted, St::Truncate])
+            .text(&endpoint.base_url),
+    ])
+}
+
+/// The drawer form: `None` = create; `Some(name)` = edit that endpoint (name is the
+/// immutable key, so the edit form omits it).
+pub fn form(app: &App, key: Option<&str>) -> ElementBuilder {
+    match key {
+        None => drawer_form(
+            save(),
+            [
+                field("Name", "name", "", "e.g. openrouter", false),
+                field("Base URL", "base_url", "", "https://host/v1", false),
+                field("API key", "api_key", "", "optional", true),
+            ],
+            [
+                submit("Add"),
+                action("Cancel", super::close()).data("act", "cancel"),
+            ],
+        ),
+        Some(name) => match app.endpoints.iter().find(|e| e.name == name) {
+            None => el(El::Div).style(Style::new().display("none")),
+            Some(endpoint) => drawer_form(
+                save(),
+                [
+                    field(
+                        "Base URL",
+                        "base_url",
+                        &endpoint.base_url,
+                        "https://host/v1",
+                        false,
+                    ),
+                    field("API key", "api_key", "", "leave blank to keep", true),
+                ],
+                [
+                    submit("Save"),
+                    action("Delete", delete()).data("act", "delete"),
+                    action("Cancel", super::close()).data("act", "cancel"),
+                ],
             ),
-            field("API key", "api_key", "", "leave blank to keep", true),
-        ],
-        [
-            submit_button("Save"),
-            delete_button("name", &endpoint.name).on(Ev::Click, delete()),
-        ],
-    )
+        },
+    }
 }
 
-fn add_card() -> ElementBuilder {
-    form_card(
-        save(),
-        [
-            el(El::Div)
-                .st([St::TextMuted, St::TextSm])
-                .text("+ Add endpoint"),
-            field("Name", "name", "", "e.g. openrouter", false),
-            field("Base URL", "base_url", "", "https://host/v1", false),
-            field("API key", "api_key", "", "optional", true),
-        ],
-        [submit_button("Add")],
-    )
+#[handler]
+fn open_new(app: &mut App) {
+    app.editing = Some(Editing::Endpoint(None));
 }
 
-/// A hidden field carrying the row's id through the form submit.
-fn hidden(name: &str, value: &str) -> ElementBuilder {
-    el(El::Input)
-        .attr("type", "hidden")
-        .attr("name", name)
-        .attr("value", value)
+#[handler]
+fn open_edit(app: &mut App, ctx: &EventContext) {
+    if let Some(name) = ctx.data("name") {
+        app.editing = Some(Editing::Endpoint(Some(name.to_owned())));
+    }
 }
 
 #[handler]
 fn save(app: &mut App, ctx: &EventContext) {
-    let name = ctx.field("name").unwrap_or_default().trim().to_owned();
-    if name.is_empty() {
-        return;
-    }
+    // Identity comes from the drawer's target; values from the form.
+    let name = match &app.editing {
+        Some(Editing::Endpoint(Some(name))) => name.clone(),
+        Some(Editing::Endpoint(None)) => {
+            let name = ctx.field("name").unwrap_or_default().trim().to_owned();
+            if name.is_empty() {
+                return;
+            }
+            name
+        }
+        _ => return,
+    };
     let base_url = ctx.field("base_url").unwrap_or_default().trim().to_owned();
     let api_key = ctx
         .field("api_key")
         .map(str::to_owned)
         .filter(|key| !key.trim().is_empty());
     app.error = None;
+    app.editing = None;
     bridge::send(Command::UpsertEndpoint {
         name,
         base_url,
@@ -92,11 +117,11 @@ fn save(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn delete(app: &mut App, ctx: &EventContext) {
-    if let Some(name) = ctx.data("name") {
+fn delete(app: &mut App) {
+    if let Some(Editing::Endpoint(Some(name))) = &app.editing {
+        let name = name.clone();
         app.error = None;
-        bridge::send(Command::DeleteEndpoint {
-            name: name.to_owned(),
-        });
+        app.editing = None;
+        bridge::send(Command::DeleteEndpoint { name });
     }
 }
