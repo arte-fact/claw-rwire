@@ -140,7 +140,7 @@ pub fn discover_models(conn: &rusqlite::Connection, shared: &SharedServerState, 
 }
 
 fn surface_error(shared: &SharedServerState, message: String) {
-    eprintln!("bridge admin: {message}");
+    crate::bridge::log_line(format!("bridge admin: {message}"));
     shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_ERROR]), |app| {
         app.error = Some(message);
     });

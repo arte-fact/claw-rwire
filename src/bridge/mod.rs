@@ -19,7 +19,7 @@ mod admin;
 use crate::agent;
 use crate::db::{self, agents, chat, endpoints, resolution};
 use crate::id;
-use crate::state::{ActivityEntry, ActivityKind, App, ChatSummary, MessageRole};
+use crate::state::{ActivityEntry, ActivityKind, App, ChatSummary, LogLine, MessageRole};
 
 pub enum Command {
     /// Create a conversation with a caller-minted id, so the handler can navigate
@@ -75,13 +75,37 @@ pub fn send(command: Command) {
     }
 }
 
+static LOG_SINK: OnceLock<Arc<SharedServerState>> = OnceLock::new();
+const LOG_CAP: usize = 200;
+
+/// Record an operational log line: print it and append to `App.logs` (newest first,
+/// capped) for the Logs viewer. Must NOT be called from inside an
+/// `update_shared_changed` closure — it takes the shared lock itself.
+pub fn log_line(message: impl Into<String>) {
+    let message = message.into();
+    eprintln!("{message}");
+    if let Some(shared) = LOG_SINK.get() {
+        shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_LOGS]), |app| {
+            app.logs.insert(
+                0,
+                LogLine {
+                    time: now_hm(),
+                    message,
+                },
+            );
+            app.logs.truncate(LOG_CAP);
+        });
+    }
+}
+
 pub fn spawn(shared: Arc<SharedServerState>, central_db: PathBuf) {
     let (tx, rx) = mpsc::channel();
     let _ = TX.set(tx);
+    let _ = LOG_SINK.set(shared.clone());
     let conn = match db::open(&central_db) {
         Ok(conn) => conn,
         Err(err) => {
-            eprintln!("bridge: cannot open central db: {err}");
+            log_line(format!("bridge: cannot open central db: {err}"));
             return;
         }
     };
@@ -144,12 +168,12 @@ fn seed_provider(conn: &rusqlite::Connection) {
     };
     let api_key = env("CLAW_API_KEY").ok().filter(|key| !key.is_empty());
     if let Err(err) = endpoints::upsert(conn, "default", &base_url, api_key.as_deref(), None) {
-        eprintln!("bridge: seed endpoint failed: {err}");
+        log_line(format!("bridge: seed endpoint failed: {err}"));
         return;
     }
     match agents::ensure_default(conn, Some("default"), Some(&model)) {
         Ok(_) => println!("Agent: native endpoint {base_url} (model {model})"),
-        Err(err) => eprintln!("bridge: seed agent failed: {err}"),
+        Err(err) => log_line(format!("bridge: seed agent failed: {err}")),
     }
 }
 
@@ -201,7 +225,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
 
 fn new_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
     if let Err(err) = chat::create_chat(conn, id, "New chat") {
-        eprintln!("bridge: create chat failed: {err}");
+        log_line(format!("bridge: create chat failed: {err}"));
         return;
     }
     if let Ok(Some(agent)) = agents::first(conn) {
@@ -244,7 +268,7 @@ fn open_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) 
 
 fn submit(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str, text: &str) {
     if let Err(err) = chat::append_message(conn, chat_id, MessageRole::User, text) {
-        eprintln!("bridge: append user message failed: {err}");
+        log_line(format!("bridge: append user message failed: {err}"));
         return;
     }
     let _ = chat::title_if_default(conn, chat_id, &first_line_title(text));
@@ -301,7 +325,7 @@ fn dispatch_native(
 fn reply_echo(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str, text: &str) {
     let reply = echo_reply(text);
     if let Err(err) = chat::append_message(conn, chat_id, MessageRole::Agent, &reply) {
-        eprintln!("bridge: append agent message failed: {err}");
+        log_line(format!("bridge: append agent message failed: {err}"));
     }
     project_reply(conn, shared, chat_id);
 }
@@ -317,12 +341,12 @@ fn agent_reply(
     match result {
         Ok(reply) => {
             if let Err(err) = chat::append_message(conn, chat_id, MessageRole::Agent, &reply) {
-                eprintln!("bridge: append agent message failed: {err}");
+                log_line(format!("bridge: append agent message failed: {err}"));
             }
             project_reply(conn, shared, chat_id);
         }
         Err(message) => {
-            eprintln!("bridge: agent turn failed: {message}");
+            log_line(format!("bridge: agent turn failed: {message}"));
             let title = chat_title(conn, chat_id);
             let chat = chat_id.to_owned();
             shared.update_shared_changed::<App>(

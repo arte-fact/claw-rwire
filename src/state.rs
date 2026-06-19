@@ -70,6 +70,14 @@ pub enum ActivityKind {
     Failed,
 }
 
+/// One captured operational log line for the Logs viewer (newest first, capped).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogLine {
+    /// `HH:MM` (UTC).
+    pub time: String,
+    pub message: String,
+}
+
 /// Who authored a transcript turn. `in` rows are the operator; `out` rows are the
 /// agent (the web channel's two `web_messages` directions).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,4 +169,6 @@ pub struct App {
     pub running: Vec<String>,
     /// Recent run-lifecycle events for the Activity board (newest first, capped).
     pub activity: Vec<ActivityEntry>,
+    /// Recent operational log lines for the Logs viewer (newest first, capped).
+    pub logs: Vec<LogLine>,
 }

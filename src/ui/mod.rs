@@ -9,7 +9,7 @@
 
 mod activity;
 mod chat;
-mod pages;
+mod logs;
 mod system_map;
 
 use rwire::router::Link;
@@ -29,12 +29,7 @@ pub fn routes() -> Router {
         .page("/chat/:id", |_| view(chat::surface()))
         .page("/system", |_| view(system_map::page()))
         .page("/activity", |_| view(activity::page()))
-        .page("/logs", |_| {
-            view(pages::placeholder(
-                "Logs",
-                "Structured logs land in Phase 4.",
-            ))
-        })
+        .page("/logs", |_| view(logs::page()))
 }
 
 /// Wrap a route view so it fills the positioned main area (the outlet between them is
