@@ -9,7 +9,8 @@
 use rwire::State;
 
 /// The top-level navigation surfaces (ARCHITECTURE: chat + the System Map admin +
-/// activity/logs). Drives `Ui::tab`.
+/// activity/logs). Defines the drawer's nav menu; the rwire router renders each
+/// path's view and the active item is derived from the live `CurrentRoute`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
     #[default]
@@ -22,15 +23,6 @@ pub enum Tab {
 impl Tab {
     pub const ALL: [Tab; 4] = [Tab::Chat, Tab::System, Tab::Activity, Tab::Logs];
 
-    pub fn slug(self) -> &'static str {
-        match self {
-            Tab::Chat => "chat",
-            Tab::System => "system",
-            Tab::Activity => "activity",
-            Tab::Logs => "logs",
-        }
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             Tab::Chat => "Chat",
@@ -40,10 +32,6 @@ impl Tab {
         }
     }
 
-    pub fn from_slug(slug: &str) -> Option<Tab> {
-        Tab::ALL.into_iter().find(|tab| tab.slug() == slug)
-    }
-
     /// The URL path this tab lives at. Chat is the app root.
     pub fn path(self) -> &'static str {
         match self {
@@ -51,14 +39,6 @@ impl Tab {
             Tab::System => "/system",
             Tab::Activity => "/activity",
             Tab::Logs => "/logs",
-        }
-    }
-
-    /// Resolve a URL path (from the rwire client router) to a tab. `/` is Chat.
-    pub fn from_path(path: &str) -> Option<Tab> {
-        match path.trim_end_matches('/') {
-            "" => Some(Tab::Chat),
-            rest => Tab::from_slug(rest.trim_start_matches('/')),
         }
     }
 }
@@ -114,9 +94,6 @@ pub struct AgentView {
 #[derive(Debug, Default, State)]
 #[storage(shared)]
 pub struct App {
-    /// The active main-area surface. Shared (not per-connection) so an `App`
-    /// handler — selecting a conversation — can also switch to the chat view.
-    pub tab: Tab,
     /// Set by the bridge once the pipeline thread has booted and primed state.
     pub pipeline_ready: bool,
     /// Chat threads for the sidebar.

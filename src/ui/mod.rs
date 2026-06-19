@@ -4,19 +4,51 @@
 //!
 //! Layout note: every `#[renderer]` is wrapped by rwire in an inline `__synced_`
 //! span, which can't act as a flex/positioning container. So the structural
-//! containers here are plain elements (drawer, main, panels), and renderer outputs
-//! only ever sit *inside* them.
+//! containers here are plain elements (drawer, main, the per-view wrapper), and
+//! renderer outputs — including the router `outlet()` — only ever sit *inside* them.
 
 mod chat;
 mod pages;
 mod system_map;
 
+use rwire::router::Link;
 use rwire::router::RoutePattern;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, St, el, handler, icons, renderer};
+use rwire::{CurrentRoute, El, ElementBuilder, Router, St, el, handler, icons, outlet, renderer};
 use rwire_components::Text;
 
+use crate::bridge::{self, Command};
 use crate::state::{App, Tab};
+
+/// The app's routes: each path renders its view into the shell's [`outlet`]. `/` and
+/// `/chat/:id` share the chat surface (the `:id` is opened by [`on_route`]).
+pub fn routes() -> Router {
+    Router::new()
+        .page("/", |_| view(chat::surface()))
+        .page("/chat/:id", |_| view(chat::surface()))
+        .page("/system", |_| view(system_map::page()))
+        .page("/activity", |_| {
+            view(pages::placeholder(
+                "Activity",
+                "Live run activity lands in Phase 4.",
+            ))
+        })
+        .page("/logs", |_| {
+            view(pages::placeholder(
+                "Logs",
+                "Structured logs land in Phase 4.",
+            ))
+        })
+}
+
+/// Wrap a route view so it fills the positioned main area (the outlet between them is
+/// an inline `__synced_` span and can't be the flex container itself).
+fn view(body: ElementBuilder) -> ElementBuilder {
+    el(El::Div)
+        .style(fill())
+        .st([St::DisplayFlex, St::FlexCol, St::OverflowHidden])
+        .append([body])
+}
 
 const DRAWER_W: &str = "16rem";
 
@@ -103,10 +135,20 @@ fn drawer_threads() -> ElementBuilder {
 }
 
 #[renderer]
-fn nav(app: &App) -> ElementBuilder {
+fn nav(route: &CurrentRoute) -> ElementBuilder {
+    let path = route.path();
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::Gap0])
-        .append(Tab::ALL.map(|tab| nav_row(tab, app.tab == tab)))
+        .append(Tab::ALL.map(|tab| nav_row(tab, tab_active(path, tab))))
+}
+
+/// The active nav item is derived from the URL: Chat owns both `/` and any
+/// `/chat/...` thread; the rest match their own path.
+fn tab_active(path: &str, tab: Tab) -> bool {
+    match tab {
+        Tab::Chat => path == "/" || path.starts_with("/chat"),
+        other => path == other.path(),
+    }
 }
 
 fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
@@ -128,12 +170,9 @@ fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
             .build()
             .st([St::TextMuted])
     };
-    // A real `<a data-route>`: rwire's client router intercepts the click, pushes
-    // history, and sends the path to `on_route` — no full page load. The URL is the
-    // source of truth; `app.tab` (set by `on_route`) just mirrors it for styling.
-    el(El::A)
-        .attr("href", tab.path())
-        .attr("data-route", "")
+    // `Link::route` is rwire's client-routed `<a>`: the client router intercepts the
+    // click, pushes history, and re-renders the matched view into the outlet.
+    Link::route(tab.path())
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
@@ -168,6 +207,8 @@ fn status(app: &App) -> ElementBuilder {
 // ── Main area ─────────────────────────────────────────────────────────────────
 
 fn main_area() -> ElementBuilder {
+    // The `outlet()` is where the rwire router renders the matched route view; on
+    // navigation it swaps the view (and registers its renderers) with no reload.
     el(El::Div)
         .style(
             Style::new()
@@ -178,42 +219,7 @@ fn main_area() -> ElementBuilder {
                 .set("left", DRAWER_W),
         )
         .st([St::OverflowHidden])
-        .append([content()])
-}
-
-#[renderer]
-fn content(app: &App) -> ElementBuilder {
-    // All panels stay mounted (a renderer introduced after first paint renders
-    // empty); the inactive ones are display:none. Each fills the positioned main.
-    // The chat panel nests the `transcript` renderer inside this one — safe since
-    // rwire's nested synced-region updates reconcile children correctly.
-    el(El::Div).style(fill()).append([
-        panel(app.tab == Tab::Chat, chat::surface()),
-        panel(app.tab == Tab::System, system_map::page()),
-        panel(
-            app.tab == Tab::Activity,
-            pages::placeholder("Activity", "Live run activity lands in Phase 4."),
-        ),
-        panel(
-            app.tab == Tab::Logs,
-            pages::placeholder("Logs", "Structured logs land in Phase 4."),
-        ),
-    ])
-}
-
-fn panel(active: bool, body: ElementBuilder) -> ElementBuilder {
-    if active {
-        el(El::Div)
-            .style(fill())
-            .st([St::DisplayFlex, St::FlexCol, St::OverflowHidden])
-            .append([body])
-    } else {
-        // Only display:none — no competing display utility (else flex would win by
-        // source order and every panel would show at once).
-        el(El::Div)
-            .style(Style::new().display("none"))
-            .append([body])
-    }
+        .append([outlet()])
 }
 
 /// `position:absolute; inset:0` — fills the nearest positioned ancestor regardless
@@ -222,26 +228,21 @@ fn fill() -> Style {
     Style::new().position("absolute").set("inset", "0")
 }
 
-/// Client-side route changes (link clicks, back/forward, deep links) arrive here
-/// with the new path in `ctx.text()`. Mirror the URL into state so the nav and
-/// content renderers reflect it. Registered via `Server::on_route`.
+/// Route side-effects, alongside the rwire router (which renders the view + nav).
+/// The router handles *which* view shows; this only triggers domain work the URL
+/// implies: asking the bridge to open the conversation a `/chat/:id` points at. It
+/// must NOT mutate `App` — the bridge owns the projection and broadcasts it, and a
+/// broad mutation here would re-render shared renderers and fight the router's swap.
 #[handler]
 pub fn on_route(app: &mut App, ctx: &EventContext) {
+    let _ = app; // side-effect only: no `App` writes, so this emits no re-render
     let Some(path) = ctx.text() else {
         return;
     };
-    // `/chat/:id` selects a conversation on the Chat surface.
     if let Some(id) = RoutePattern::new("/chat/:id")
         .matches(path)
         .and_then(|params| params.get("id").map(str::to_owned))
     {
-        app.tab = Tab::Chat;
-        if app.open_chat.as_deref() != Some(id.as_str()) {
-            chat::open(app, &id);
-        }
-        return;
-    }
-    if let Some(tab) = Tab::from_path(path) {
-        app.tab = tab;
+        bridge::send(Command::OpenChat(id));
     }
 }

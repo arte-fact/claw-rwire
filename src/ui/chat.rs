@@ -4,6 +4,7 @@
 //! wrapped in inline `__synced_` spans, so they only ever sit *inside* a plain
 //! flex/scroll container, never act as one.
 
+use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
 use rwire_components::{Spinner, SpinnerSize, Text};
@@ -271,12 +272,10 @@ fn chat_row(id: &str, title: &str, active: bool, busy: bool) -> ElementBuilder {
     let label = Text::body(title.to_owned())
         .build()
         .st([St::Flex1, St::Truncate]);
-    // `<a data-route href="/chat/:id">`: selecting a conversation is navigation —
-    // the rwire client router pushes the URL and `on_route` opens it.
+    // `Link::route` (client-routed `<a>`): selecting a conversation is navigation —
+    // the client router pushes /chat/:id and the bridge loads the thread.
     let href = format!("/chat/{id}");
-    let row = el(El::A)
-        .attr("href", &href)
-        .attr("data-route", "")
+    let row = Link::route(&href)
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
@@ -311,16 +310,6 @@ fn new_chat(app: &mut App, ctx: &EventContext) {
     app.sending = false;
     ctx.navigate(format!("/chat/{id}"));
     bridge::send(Command::NewChat { id });
-}
-
-/// Optimistically open a conversation (called by the router on a `/chat/:id`
-/// route): show it at once, clear the previous transcript, and ask the bridge to
-/// load its messages.
-pub fn open(app: &mut App, id: &str) {
-    app.open_chat = Some(id.to_owned());
-    app.messages.clear();
-    app.sending = false;
-    bridge::send(Command::OpenChat(id.to_owned()));
 }
 
 #[handler]
