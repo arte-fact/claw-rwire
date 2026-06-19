@@ -1,4 +1,7 @@
+pub mod agents;
 pub mod chat;
+pub mod endpoints;
+pub mod resolution;
 
 use std::path::Path;
 

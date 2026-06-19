@@ -2,9 +2,11 @@
 //! rwire framework. The existing `rust-claw` daemon stays the system of record and
 //! behavioural reference; this project is written from scratch alongside it.
 
+mod agent;
 mod auth;
 mod bridge;
 mod db;
+mod env_file;
 mod id;
 mod state;
 mod ui;
@@ -41,6 +43,7 @@ fn bind_addr() -> String {
 
 #[main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    env_file::load();
     let dir = data_dir();
     std::fs::create_dir_all(&dir)?;
     let central_db = dir.join("central.db");

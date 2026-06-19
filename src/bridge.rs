@@ -14,7 +14,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use rwire::{ChangeSet, SharedServerState};
 
-use crate::db::{self, chat};
+use crate::agent;
+use crate::db::{self, agents, chat, endpoints, resolution};
 use crate::id;
 use crate::state::{App, MessageRole};
 
@@ -28,6 +29,12 @@ pub enum Command {
     Submit {
         chat: String,
         text: String,
+    },
+    /// A worker thread's result from the agent endpoint, posted back so the (DB-owning)
+    /// bridge thread persists it and projects.
+    AgentReply {
+        chat: String,
+        result: Result<String, String>,
     },
 }
 
@@ -68,6 +75,8 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
     {
         let _ = chat::create_chat(conn, &id, "New chat");
     }
+    seed_provider(conn);
+    link_chats_to_default_agent(conn);
     let chats = chat::list_chats(conn).unwrap_or_default();
     let selected = chats.first().map(|chat| chat.id.clone());
     let messages = selected
@@ -90,11 +99,57 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
     );
 }
 
+/// On first boot, seed a `default` endpoint + agent group from env so the chat talks
+/// to a real model. Skipped once any endpoint exists (the DB is the source of record;
+/// the System Map admin edits it later). With no env config, the endpoint stays empty
+/// and the bridge falls back to echo.
+fn seed_provider(conn: &rusqlite::Connection) {
+    match endpoints::is_empty(conn) {
+        Ok(true) => {}
+        _ => return, // already configured, or a read error — don't touch it
+    }
+    let (Ok(base_url), Ok(model)) = (env("CLAW_ENDPOINT"), env("CLAW_MODEL")) else {
+        return;
+    };
+    let api_key = env("CLAW_API_KEY").ok().filter(|key| !key.is_empty());
+    if let Err(err) = endpoints::insert(conn, "default", &base_url, api_key.as_deref(), None) {
+        eprintln!("bridge: seed endpoint failed: {err}");
+        return;
+    }
+    match agents::ensure_default(conn, Some("default"), Some(&model)) {
+        Ok(_) => println!("Agent: native endpoint {base_url} (model {model})"),
+        Err(err) => eprintln!("bridge: seed agent failed: {err}"),
+    }
+}
+
+/// Read a non-empty, trimmed env var.
+fn env(key: &str) -> Result<String, ()> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or(())
+}
+
+/// Bind every web chat to the default agent group (idempotent) so a turn can resolve
+/// its endpoint. Covers chats inherited from an earlier echo-only run.
+fn link_chats_to_default_agent(conn: &rusqlite::Connection) {
+    let Ok(Some(agent)) = agents::first(conn) else {
+        return;
+    };
+    if let Ok(chats) = chat::list_chats(conn) {
+        for summary in &chats {
+            let _ = agents::link(conn, &summary.id, &agent.id);
+        }
+    }
+}
+
 fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Command) {
     match command {
         Command::NewChat { id } => new_chat(conn, shared, &id),
         Command::OpenChat(id) => open_chat(conn, shared, &id),
         Command::Submit { chat, text } => submit(conn, shared, &chat, &text),
+        Command::AgentReply { chat, result } => agent_reply(conn, shared, &chat, result),
     }
 }
 
@@ -102,6 +157,9 @@ fn new_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
     if let Err(err) = chat::create_chat(conn, id, "New chat") {
         eprintln!("bridge: create chat failed: {err}");
         return;
+    }
+    if let Ok(Some(agent)) = agents::first(conn) {
+        let _ = agents::link(conn, id, &agent.id);
     }
     let chats = chat::list_chats(conn).unwrap_or_default();
     let id = id.to_owned();
@@ -145,22 +203,105 @@ fn submit(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str
     }
     let _ = chat::title_if_default(conn, chat_id, &first_line_title(text));
 
+    match resolution::resolve_for_chat(conn, chat_id, |key| std::env::var(key).ok()) {
+        Ok(inference) => dispatch_native(conn, shared, chat_id, inference),
+        Err(_) => reply_echo(conn, shared, chat_id, text),
+    }
+}
+
+/// Native path: show the user's turn + spinner now, then run the (blocking) endpoint
+/// call on a worker thread that posts the result back as `Command::AgentReply`. The
+/// bridge thread stays free to handle other commands meanwhile.
+fn dispatch_native(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    chat_id: &str,
+    inference: resolution::ResolvedInference,
+) {
+    let turns = chat::load_thread(conn, chat_id).unwrap_or_default();
+    let messages = agent::build_messages(agent::SYSTEM_PROMPT, &turns);
+    let chats = chat::list_chats(conn).unwrap_or_default();
+    let proj_chat = chat_id.to_owned();
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[
+            App::FIELD_CHATS,
+            App::FIELD_MESSAGES,
+            App::FIELD_SENDING,
+            App::FIELD_ERROR,
+        ]),
+        |app| {
+            app.chats = chats;
+            if app.open_chat.as_deref() == Some(proj_chat.as_str()) {
+                app.messages = turns;
+            }
+            app.sending = true;
+            app.error = None;
+        },
+    );
+
+    let chat = chat_id.to_owned();
+    std::thread::spawn(move || {
+        let result = agent::complete(&inference, &messages).map_err(|err| err.to_string());
+        send(Command::AgentReply { chat, result });
+    });
+}
+
+/// Echo fallback (no endpoint configured): synchronous stand-in reply.
+fn reply_echo(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str, text: &str) {
     let reply = echo_reply(text);
     if let Err(err) = chat::append_message(conn, chat_id, MessageRole::Agent, &reply) {
         eprintln!("bridge: append agent message failed: {err}");
     }
+    project_reply(conn, shared, chat_id);
+}
 
+/// Persist a worker's endpoint result and project. On error, surface a transient
+/// banner instead of writing a bogus assistant turn into the transcript.
+fn agent_reply(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    chat_id: &str,
+    result: Result<String, String>,
+) {
+    match result {
+        Ok(reply) => {
+            if let Err(err) = chat::append_message(conn, chat_id, MessageRole::Agent, &reply) {
+                eprintln!("bridge: append agent message failed: {err}");
+            }
+            project_reply(conn, shared, chat_id);
+        }
+        Err(message) => {
+            eprintln!("bridge: agent turn failed: {message}");
+            shared.update_shared_changed::<App>(
+                ChangeSet::from_fields(&[App::FIELD_SENDING, App::FIELD_ERROR]),
+                |app| {
+                    app.sending = false;
+                    app.error = Some(message);
+                },
+            );
+        }
+    }
+}
+
+/// Reload the thread + sidebar and clear `sending`/`error` after a reply landed.
+fn project_reply(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str) {
     let chats = chat::list_chats(conn).unwrap_or_default();
     let messages = chat::load_thread(conn, chat_id).unwrap_or_default();
     let chat_id = chat_id.to_owned();
     shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_CHATS, App::FIELD_MESSAGES, App::FIELD_SENDING]),
+        ChangeSet::from_fields(&[
+            App::FIELD_CHATS,
+            App::FIELD_MESSAGES,
+            App::FIELD_SENDING,
+            App::FIELD_ERROR,
+        ]),
         |app| {
             app.chats = chats;
             if app.open_chat.as_deref() == Some(chat_id.as_str()) {
                 app.messages = messages;
             }
             app.sending = false;
+            app.error = None;
         },
     );
 }

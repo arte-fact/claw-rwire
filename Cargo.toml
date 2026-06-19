@@ -13,6 +13,9 @@ rusqlite = { version = "0.34", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2"
+# Blocking HTTP for the OpenAI-compatible endpoint. The bridge is a sync thread, so
+# a blocking pure-Rust client (rustls TLS) fits with no async runtime there.
+ureq = { version = "2", features = ["json"] }
 
 [dev-dependencies]
 tempfile = "3"

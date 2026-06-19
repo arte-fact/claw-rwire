@@ -108,4 +108,7 @@ pub struct App {
     pub messages: Vec<ChatMessage>,
     /// The agent is producing a reply on the open thread.
     pub sending: bool,
+    /// A transient error from the last turn (e.g. the endpoint failed). Shown as a
+    /// banner; never persisted, cleared on the next send.
+    pub error: Option<String>,
 }

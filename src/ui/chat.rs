@@ -34,7 +34,26 @@ fn transcript_scroll() -> ElementBuilder {
 }
 
 fn composer_bar() -> ElementBuilder {
-    el(El::Div).st([St::BgApp]).append([composer()])
+    el(El::Div)
+        .st([St::BgApp])
+        .append([error_banner(), composer()])
+}
+
+/// A transient error from the last turn (endpoint failure). Hidden when clear.
+#[renderer]
+fn error_banner(app: &App) -> ElementBuilder {
+    match &app.error {
+        Some(message) => el(El::Div)
+            .st([
+                St::PxMd,
+                St::PySm,
+                St::TextXs,
+                St::TextError,
+                St::BorderTSubtle,
+            ])
+            .append([el(El::Span).text(&format!("⚠ {message}"))]),
+        None => el(El::Div).style(Style::new().display("none")),
+    }
 }
 
 /// Always renders the same column→list structure; empty states are just a hint
