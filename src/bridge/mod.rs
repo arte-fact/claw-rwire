@@ -64,6 +64,9 @@ pub enum Command {
     DiscoverModels {
         endpoint: String,
     },
+    /// Close the System Map drawer (sent on navigation so it doesn't persist across
+    /// route changes — `editing` is shared state).
+    CloseDrawer,
 }
 
 static TX: OnceLock<Sender<Command>> = OnceLock::new();
@@ -220,7 +223,16 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::DeleteAgent { id } => admin::delete_agent(conn, shared, &id),
         Command::SetWebAgent { id } => admin::set_web_agent(conn, shared, &id),
         Command::DiscoverModels { endpoint } => admin::discover_models(conn, shared, &endpoint),
+        Command::CloseDrawer => close_drawer(shared),
     }
+}
+
+/// Close the System Map drawer. Idempotent — re-rendering the (absent) drawer when no
+/// view subscribes to `editing` is a no-op.
+fn close_drawer(shared: &SharedServerState) {
+    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_EDITING]), |app| {
+        app.editing = None;
+    });
 }
 
 fn new_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {

@@ -3,22 +3,37 @@
 //! appends here.
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, St, el, renderer};
+use rwire::{El, ElementBuilder, St, el, handler, renderer};
 use rwire_components::Text;
 
 use crate::state::{App, LogLine};
+use crate::ui::widgets::{clear_button, page_header};
 
 pub fn page() -> ElementBuilder {
     el(El::Div)
         .style(Style::new().min_height("0").overflow("auto"))
         .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg, St::PXl])
         .append([
-            Text::heading1("Logs").build(),
-            Text::body("Recent bridge diagnostics and errors.")
-                .muted()
-                .build(),
+            page_header(
+                "Logs",
+                "Recent bridge diagnostics and errors.",
+                clear_control(),
+            ),
             list(),
         ])
+}
+
+#[renderer]
+fn clear_control(app: &App) -> ElementBuilder {
+    if app.logs.is_empty() {
+        return el(El::Div).style(Style::new().display("none"));
+    }
+    clear_button("Clear", clear())
+}
+
+#[handler]
+fn clear(app: &mut App) {
+    app.logs.clear();
 }
 
 #[renderer]

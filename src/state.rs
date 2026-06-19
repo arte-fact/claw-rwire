@@ -1,10 +1,11 @@
-//! Application state, split by rwire storage tier.
-//!
-//! `App` is process-global (`#[storage(shared)]`) — the projection the pipeline
-//! writes into and every connection reads. `Ui` is per-connection
-//! (`#[storage(memory)]`) — view-local selection that must not leak between
-//! browser tabs. rwire renderers/handlers take exactly one state type, so the two
-//! are never mixed in a single function; they compose at the element level.
+//! Application state. Everything lives in the process-global `App`
+//! (`#[storage(shared)]`) — the projection the pipeline writes into and every
+//! connection reads. View-local flags (the mobile nav toggle, the System Map drawer
+//! target) live here too rather than in a per-connection `#[storage(memory)]` state:
+//! a *shared*-state renderer nested inside a *memory*-state renderer doesn't receive
+//! the shared cache, and the sidebar's status + thread list are shared-state renderers
+//! that sit inside the drawer. For a single operator, sharing these across tabs is
+//! benign (the desktop sidebar ignores `nav_open` via a breakpoint override anyway).
 
 use rwire::State;
 
@@ -171,4 +172,7 @@ pub struct App {
     pub activity: Vec<ActivityEntry>,
     /// Recent operational log lines for the Logs viewer (newest first, capped).
     pub logs: Vec<LogLine>,
+    /// Whether the mobile slide-in nav drawer is open. The desktop sidebar is always
+    /// visible (a breakpoint override), so this only governs mobile.
+    pub nav_open: bool,
 }

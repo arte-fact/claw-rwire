@@ -11,11 +11,14 @@ mod activity;
 mod chat;
 mod logs;
 mod system_map;
+mod widgets;
 
 use rwire::router::Link;
 use rwire::router::RoutePattern;
 use rwire::style::Style;
-use rwire::{CurrentRoute, El, ElementBuilder, Router, St, el, handler, icons, outlet, renderer};
+use rwire::{
+    CurrentRoute, El, ElementBuilder, Ev, Router, St, el, handler, icons, outlet, renderer,
+};
 use rwire_components::Text;
 
 use crate::bridge::{self, Command};
@@ -44,32 +47,75 @@ fn view(body: ElementBuilder) -> ElementBuilder {
 const DRAWER_W: &str = "16rem";
 
 pub fn app() -> ElementBuilder {
-    // Mono everywhere, small text — the terminal feel of rust-claw. font-family and
-    // font-size inherit through the fixed drawer/main, so set them once at the root.
+    // Mono everywhere, small text — the terminal feel of rust-claw. A flex row so the
+    // drawer is a static sidebar on desktop and a fixed slide-in overlay on mobile.
     el(El::Div)
-        .st([St::BgApp, St::FontMono, St::TextSm])
-        .append([drawer(), main_area()])
+        .style(Style::new().set("height", "100vh"))
+        .st([
+            St::BgApp,
+            St::FontMono,
+            St::TextSm,
+            St::DisplayFlex,
+            St::OverflowHidden,
+        ])
+        .append([nav_drawer(), backdrop(), main_area()])
 }
 
 // ── Drawer ───────────────────────────────────────────────────────────────────
 
-fn drawer() -> ElementBuilder {
+/// The left navigation drawer. On `md+` it's a static, always-visible sidebar; below
+/// that it's a fixed slide-in overlay toggled by `Ui::nav_open` (the hamburger). The
+/// `md` breakpoint overrides force it visible and in-flow regardless of `nav_open`.
+#[renderer]
+fn nav_drawer(app: &App) -> ElementBuilder {
+    let slide = if app.nav_open {
+        St::TransformNone
+    } else {
+        St::TranslateXNegFull
+    };
     el(El::Aside)
         .style(
             Style::new()
-                .position("fixed")
+                .width(DRAWER_W)
+                .set("height", "100vh")
                 .set("top", "0")
                 .set("left", "0")
-                .set("bottom", "0")
-                .width(DRAWER_W),
+                .set("transition", "transform 0.2s ease"),
         )
         .st([
             St::BgSidebar,
             St::BorderRDefault,
             St::DisplayFlex,
             St::FlexCol,
+            St::FlexShrink0,
+            St::PositionFixed,
+            St::Z1400,
+            slide,
         ])
+        .md([St::PositionStatic, St::TransformNone])
         .append([drawer_head(), conversations_label(), drawer_threads()])
+}
+
+/// Dims the page behind the mobile drawer; tap to close. Never shown on `md+`.
+#[renderer]
+fn backdrop(app: &App) -> ElementBuilder {
+    if !app.nav_open {
+        return el(El::Div).style(Style::new().display("none"));
+    }
+    el(El::Div)
+        .st([St::FixedFill, St::BgOverlay50, St::Z1300])
+        .md([St::DisplayNone])
+        .on(Ev::Click, close_nav())
+}
+
+#[handler]
+fn toggle_nav(app: &mut App) {
+    app.nav_open = !app.nav_open;
+}
+
+#[handler]
+pub fn close_nav(app: &mut App) {
+    app.nav_open = false;
 }
 
 fn conversations_label() -> ElementBuilder {
@@ -162,8 +208,10 @@ fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
             .st([St::TextMuted])
     };
     // `Link::route` is rwire's client-routed `<a>`: the client router intercepts the
-    // click, pushes history, and re-renders the matched view into the outlet.
+    // click, pushes history, and re-renders the matched view into the outlet. The
+    // extra `close_nav` collapses the mobile drawer once you've picked a destination.
     Link::route(tab.path())
+        .on(Ev::Click, close_nav())
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
@@ -198,19 +246,67 @@ fn status(app: &App) -> ElementBuilder {
 // ── Main area ─────────────────────────────────────────────────────────────────
 
 fn main_area() -> ElementBuilder {
-    // The `outlet()` is where the rwire router renders the matched route view; on
-    // navigation it swaps the view (and registers its renderers) with no reload.
+    // A flex child that fills the space beside the sidebar (or the whole width on
+    // mobile). `min-width:0` lets it shrink so chat content can't force a horizontal
+    // scroll. The `outlet()` view fills the positioned content wrapper.
     el(El::Div)
-        .style(
-            Style::new()
-                .position("fixed")
-                .set("top", "0")
-                .set("right", "0")
-                .set("bottom", "0")
-                .set("left", DRAWER_W),
-        )
-        .st([St::OverflowHidden])
-        .append([outlet()])
+        .style(Style::new().min_width("0"))
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::OverflowHidden])
+        .append([
+            mobile_topbar(),
+            el(El::Div)
+                .st([St::Flex1, St::PositionRelative, St::OverflowHidden])
+                .append([outlet()]),
+        ])
+}
+
+/// A slim bar shown only below `md`: a hamburger to open the drawer plus the wordmark.
+fn mobile_topbar() -> ElementBuilder {
+    el(El::Div)
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::PSm,
+            St::BorderBDefault,
+            St::BgSidebar,
+        ])
+        .md([St::DisplayNone])
+        .append([
+            hamburger(),
+            el(El::Span)
+                .st([
+                    St::DisplayFlex,
+                    St::ItemsCenter,
+                    St::GapSm,
+                    St::TextAccent,
+                    St::FontSemibold,
+                ])
+                .append([
+                    icons::icon_sized(icons::Icon::Terminal, 16),
+                    el(El::Span).text("claw"),
+                ]),
+        ])
+}
+
+fn hamburger() -> ElementBuilder {
+    el(El::Button)
+        .attr("type", "button")
+        .attr("aria-label", "Toggle navigation")
+        .on(Ev::Click, toggle_nav())
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::PxSm,
+            St::PySm,
+            St::BgApp,
+            St::BorderDefault,
+            St::RoundedSm,
+            St::TextHigh,
+            St::CursorPointer,
+        ])
+        .style(Style::new().set("font", "inherit"))
+        .append([icons::icon_sized(icons::Icon::Menu, 18)])
 }
 
 /// `position:absolute; inset:0` — fills the nearest positioned ancestor regardless
@@ -230,6 +326,9 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     let Some(path) = ctx.text() else {
         return;
     };
+    // Leaving any view closes the System Map drawer (its `editing` is shared state, so
+    // it would otherwise re-open when you return to `/system`).
+    bridge::send(Command::CloseDrawer);
     if let Some(id) = RoutePattern::new("/chat/:id")
         .matches(path)
         .and_then(|params| params.get("id").map(str::to_owned))
