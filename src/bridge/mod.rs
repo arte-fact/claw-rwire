@@ -19,7 +19,7 @@ mod admin;
 use crate::agent;
 use crate::db::{self, agents, chat, endpoints, resolution};
 use crate::id;
-use crate::state::{App, MessageRole};
+use crate::state::{ActivityEntry, ActivityKind, App, ChatSummary, MessageRole};
 
 pub enum Command {
     /// Create a conversation with a caller-minted id, so the handler can navigate
@@ -268,12 +268,15 @@ fn dispatch_native(
     let messages = agent::build_messages(agent::SYSTEM_PROMPT, &turns);
     let chats = chat::list_chats(conn).unwrap_or_default();
     let proj_chat = chat_id.to_owned();
+    let title = title_of(&chats, &proj_chat);
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
             App::FIELD_CHATS,
             App::FIELD_MESSAGES,
             App::FIELD_SENDING,
             App::FIELD_ERROR,
+            App::FIELD_RUNNING,
+            App::FIELD_ACTIVITY,
         ]),
         |app| {
             app.chats = chats;
@@ -282,6 +285,8 @@ fn dispatch_native(
             }
             app.sending = true;
             app.error = None;
+            app.running.push(proj_chat.clone());
+            push_activity(app, title, ActivityKind::Started, String::new());
         },
     );
 
@@ -318,11 +323,20 @@ fn agent_reply(
         }
         Err(message) => {
             eprintln!("bridge: agent turn failed: {message}");
+            let title = chat_title(conn, chat_id);
+            let chat = chat_id.to_owned();
             shared.update_shared_changed::<App>(
-                ChangeSet::from_fields(&[App::FIELD_SENDING, App::FIELD_ERROR]),
+                ChangeSet::from_fields(&[
+                    App::FIELD_SENDING,
+                    App::FIELD_ERROR,
+                    App::FIELD_RUNNING,
+                    App::FIELD_ACTIVITY,
+                ]),
                 |app| {
                     app.sending = false;
-                    app.error = Some(message);
+                    app.error = Some(message.clone());
+                    app.running.retain(|id| id != &chat);
+                    push_activity(app, title, ActivityKind::Failed, message);
                 },
             );
         }
@@ -333,6 +347,7 @@ fn agent_reply(
 fn project_reply(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str) {
     let chats = chat::list_chats(conn).unwrap_or_default();
     let messages = chat::load_thread(conn, chat_id).unwrap_or_default();
+    let title = title_of(&chats, chat_id);
     let chat_id = chat_id.to_owned();
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
@@ -340,6 +355,8 @@ fn project_reply(conn: &rusqlite::Connection, shared: &SharedServerState, chat_i
             App::FIELD_MESSAGES,
             App::FIELD_SENDING,
             App::FIELD_ERROR,
+            App::FIELD_RUNNING,
+            App::FIELD_ACTIVITY,
         ]),
         |app| {
             app.chats = chats;
@@ -348,8 +365,47 @@ fn project_reply(conn: &rusqlite::Connection, shared: &SharedServerState, chat_i
             }
             app.sending = false;
             app.error = None;
+            app.running.retain(|id| id != &chat_id);
+            push_activity(app, title, ActivityKind::Finished, String::new());
         },
     );
+}
+
+/// Newest-first, capped activity log.
+const ACTIVITY_CAP: usize = 50;
+
+fn push_activity(app: &mut App, title: String, kind: ActivityKind, detail: String) {
+    app.activity.insert(
+        0,
+        ActivityEntry {
+            time: now_hm(),
+            title,
+            kind,
+            detail,
+        },
+    );
+    app.activity.truncate(ACTIVITY_CAP);
+}
+
+fn title_of(chats: &[ChatSummary], chat_id: &str) -> String {
+    chats
+        .iter()
+        .find(|chat| chat.id == chat_id)
+        .map_or_else(|| "chat".to_owned(), |chat| chat.title.clone())
+}
+
+fn chat_title(conn: &rusqlite::Connection, chat_id: &str) -> String {
+    title_of(&chat::list_chats(conn).unwrap_or_default(), chat_id)
+}
+
+/// `HH:MM` (UTC), matching the transcript timestamps.
+fn now_hm() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60)
 }
 
 /// The stand-in agent: echoes the message back as markdown so the renderer's

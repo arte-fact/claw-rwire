@@ -253,10 +253,10 @@ pub fn thread_list(app: &App) -> ElementBuilder {
             .append([Text::body("No chats yet").muted().build()]);
     }
     let open = app.open_chat.as_deref();
-    let rows = app
-        .chats
-        .iter()
-        .map(|chat| chat_row(&chat.id, &chat.title, open == Some(&chat.id), chat.busy));
+    let rows = app.chats.iter().map(|chat| {
+        let busy = app.running.iter().any(|id| id == &chat.id);
+        chat_row(&chat.id, &chat.title, open == Some(&chat.id), busy)
+    });
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::PxSm])
         .append(rows)

@@ -7,6 +7,7 @@
 //! containers here are plain elements (drawer, main, the per-view wrapper), and
 //! renderer outputs — including the router `outlet()` — only ever sit *inside* them.
 
+mod activity;
 mod chat;
 mod pages;
 mod system_map;
@@ -27,12 +28,7 @@ pub fn routes() -> Router {
         .page("/", |_| view(chat::surface()))
         .page("/chat/:id", |_| view(chat::surface()))
         .page("/system", |_| view(system_map::page()))
-        .page("/activity", |_| {
-            view(pages::placeholder(
-                "Activity",
-                "Live run activity lands in Phase 4.",
-            ))
-        })
+        .page("/activity", |_| view(activity::page()))
         .page("/logs", |_| {
             view(pages::placeholder(
                 "Logs",

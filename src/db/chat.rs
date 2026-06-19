@@ -40,7 +40,6 @@ pub fn list_chats(conn: &Connection) -> rusqlite::Result<Vec<ChatSummary>> {
         Ok(ChatSummary {
             id: row.get(0)?,
             title: row.get(1)?,
-            busy: false,
         })
     })?;
     rows.collect()

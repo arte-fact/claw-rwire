@@ -43,12 +43,31 @@ impl Tab {
     }
 }
 
-/// One row in the chat sidebar (projected from `messaging_groups` / web threads).
+/// One row in the chat sidebar (projected from `messaging_groups` / web threads). The
+/// busy indicator is derived from `App.running`, not stored here.
 #[derive(Debug, Clone, Default)]
 pub struct ChatSummary {
     pub id: String,
     pub title: String,
-    pub busy: bool,
+}
+
+/// One run-lifecycle event for the Activity board (newest first, capped).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityEntry {
+    /// `HH:MM` (UTC).
+    pub time: String,
+    /// The conversation's title at the time of the event.
+    pub title: String,
+    pub kind: ActivityKind,
+    /// Extra context — the failure message for `Failed`, empty otherwise.
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityKind {
+    Started,
+    Finished,
+    Failed,
 }
 
 /// Who authored a transcript turn. `in` rows are the operator; `out` rows are the
@@ -138,4 +157,8 @@ pub struct App {
     /// Models discovered from the agent draft's selected endpoint (`/v1/models`),
     /// populating the agent form's model dropdown. Empty until an endpoint is chosen.
     pub endpoint_models: Vec<String>,
+    /// Chat ids with an in-flight agent run (drives the sidebar busy dots).
+    pub running: Vec<String>,
+    /// Recent run-lifecycle events for the Activity board (newest first, capped).
+    pub activity: Vec<ActivityEntry>,
 }
