@@ -111,7 +111,15 @@ fn message_row(message: &ChatMessage) -> ElementBuilder {
         .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::Flex1])
         .append([header, body]);
     match message.role {
-        MessageRole::User => block,
+        MessageRole::User => el(El::Div)
+            .st([
+                St::DisplayFlex,
+                St::GapMd,
+                St::MlAuto,
+                St::MaxW40rem,
+                St::WFull,
+            ])
+            .append([accent_bar(true), block]),
         MessageRole::Agent => el(El::Div)
             .st([St::DisplayFlex, St::GapMd])
             .append([accent_bar(true), block]),
