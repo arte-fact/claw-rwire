@@ -58,6 +58,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut server = Server::bind(&bind_addr())?
         .root(ui::app)
+        .on_route(ui::on_route())
         .auth(&creds.user, &creds.password)
         .auth_brand("claw")
         .capsule_config(CapsuleConfig::new())

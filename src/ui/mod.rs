@@ -11,7 +11,7 @@ mod chat;
 mod pages;
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire::{El, ElementBuilder, St, el, handler, icons, renderer};
 use rwire_components::Text;
 
 use crate::state::{App, Tab};
@@ -54,7 +54,7 @@ fn conversations_label() -> ElementBuilder {
                 .text_transform("uppercase")
                 .set("letter-spacing", "0.06em"),
         )
-        .st([St::PxMd, St::PyXs, St::TextXs, St::TextMuted, St::FontMono])
+        .st([St::PyMd, St::PxXs, St::TextXs, St::TextMuted, St::FontMono])
         .append([el(El::Span).text("Conversations")])
 }
 
@@ -126,17 +126,21 @@ fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
             .build()
             .st([St::TextMuted])
     };
-    el(El::Div)
-        .data("tab", tab.slug())
-        .on(Ev::Click, select_tab())
+    // A real `<a data-route>`: rwire's client router intercepts the click, pushes
+    // history, and sends the path to `on_route` — no full page load. The URL is the
+    // source of truth; `app.tab` (set by `on_route`) just mirrors it for styling.
+    el(El::A)
+        .attr("href", tab.path())
+        .attr("data-route", "")
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
-            St::PxSm,
-            St::PyXs,
+            St::PySm,
+            St::PxXs,
             St::CursorPointer,
             St::TextSm,
+            St::NoUnderline,
         ])
         .hover([St::TextHigh])
         .append([bar, label])
@@ -216,9 +220,12 @@ fn fill() -> Style {
     Style::new().position("absolute").set("inset", "0")
 }
 
+/// Client-side route changes (link clicks, back/forward, deep links) arrive here
+/// with the new path in `ctx.text()`. Mirror it into `app.tab` so the nav and
+/// content renderers reflect the URL. Registered via `Server::on_route`.
 #[handler]
-fn select_tab(app: &mut App, ctx: &EventContext) {
-    if let Some(tab) = ctx.data("tab").and_then(Tab::from_slug) {
+pub fn on_route(app: &mut App, ctx: &EventContext) {
+    if let Some(tab) = ctx.text().and_then(Tab::from_path) {
         app.tab = tab;
     }
 }

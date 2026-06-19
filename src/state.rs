@@ -43,6 +43,24 @@ impl Tab {
     pub fn from_slug(slug: &str) -> Option<Tab> {
         Tab::ALL.into_iter().find(|tab| tab.slug() == slug)
     }
+
+    /// The URL path this tab lives at. Chat is the app root.
+    pub fn path(self) -> &'static str {
+        match self {
+            Tab::Chat => "/",
+            Tab::System => "/system",
+            Tab::Activity => "/activity",
+            Tab::Logs => "/logs",
+        }
+    }
+
+    /// Resolve a URL path (from the rwire client router) to a tab. `/` is Chat.
+    pub fn from_path(path: &str) -> Option<Tab> {
+        match path.trim_end_matches('/') {
+            "" => Some(Tab::Chat),
+            rest => Tab::from_slug(rest.trim_start_matches('/')),
+        }
+    }
 }
 
 /// One row in the chat sidebar (projected from `messaging_groups` / web threads).
