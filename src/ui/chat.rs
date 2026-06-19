@@ -280,8 +280,18 @@ fn chat_row(id: &str, title: &str, active: bool, busy: bool) -> ElementBuilder {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 #[handler]
-fn new_chat(_app: &mut App) {
-    bridge::send(Command::NewChat);
+fn new_chat(app: &mut App, ctx: &EventContext) {
+    // Mint the id here so we can navigate to /chat/{id} right away — the bridge
+    // persists it asynchronously. Optimistically show the empty conversation; the
+    // route push (flushed after this update) puts the URL in sync.
+    let Ok(id) = crate::id::new_id() else {
+        return;
+    };
+    app.open_chat = Some(id.clone());
+    app.messages.clear();
+    app.sending = false;
+    ctx.navigate(format!("/chat/{id}"));
+    bridge::send(Command::NewChat { id });
 }
 
 /// Optimistically open a conversation (called by the router on a `/chat/:id`

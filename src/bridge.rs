@@ -19,9 +19,16 @@ use crate::id;
 use crate::state::{App, MessageRole};
 
 pub enum Command {
-    NewChat,
+    /// Create a conversation with a caller-minted id, so the handler can navigate
+    /// to `/chat/{id}` immediately (before this async create completes).
+    NewChat {
+        id: String,
+    },
     OpenChat(String),
-    Submit { chat: String, text: String },
+    Submit {
+        chat: String,
+        text: String,
+    },
 }
 
 static TX: OnceLock<Sender<Command>> = OnceLock::new();
@@ -85,25 +92,19 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
 
 fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Command) {
     match command {
-        Command::NewChat => new_chat(conn, shared),
+        Command::NewChat { id } => new_chat(conn, shared, &id),
         Command::OpenChat(id) => open_chat(conn, shared, &id),
         Command::Submit { chat, text } => submit(conn, shared, &chat, &text),
     }
 }
 
-fn new_chat(conn: &rusqlite::Connection, shared: &SharedServerState) {
-    let id = match id::new_id() {
-        Ok(id) => id,
-        Err(err) => {
-            eprintln!("bridge: id generation failed: {err}");
-            return;
-        }
-    };
-    if let Err(err) = chat::create_chat(conn, &id, "New chat") {
+fn new_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+    if let Err(err) = chat::create_chat(conn, id, "New chat") {
         eprintln!("bridge: create chat failed: {err}");
         return;
     }
     let chats = chat::list_chats(conn).unwrap_or_default();
+    let id = id.to_owned();
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
             App::FIELD_CHATS,
