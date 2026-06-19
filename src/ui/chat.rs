@@ -99,18 +99,34 @@ fn message_row(message: &ChatMessage) -> ElementBuilder {
             .append([el(El::Span).text(&message.text)]),
         MessageRole::Agent => el(El::Div).append([Markdown::new(message.text.clone()).build()]),
     };
-    let block = el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::Flex1])
+    let header = el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
         .append([
             el(El::Span).st([St::FontBold, sender_color]).text(sender),
-            body,
+            el(El::Span)
+                .st([St::TextLow, St::TextXs])
+                .text(&message.time),
         ]);
+    let block = el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::Flex1])
+        .append([header, body]);
     match message.role {
         MessageRole::User => block,
         MessageRole::Agent => el(El::Div)
             .st([St::DisplayFlex, St::GapMd])
             .append([accent_bar(true), block]),
     }
+}
+
+/// `HH:MM` in UTC (matching the DB's UTC `created_at` stamps), for the optimistic
+/// user turn shown before the bridge reloads the persisted thread.
+fn now_hm() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60)
 }
 
 fn sending_row() -> ElementBuilder {
@@ -235,7 +251,7 @@ fn chat_row(id: &str, title: &str, active: bool, busy: bool) -> ElementBuilder {
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
-            St::PySm,
+            St::PyXs,
             St::PrMd,
             St::CursorPointer,
             St::TextSm,
@@ -278,6 +294,7 @@ fn send_message(app: &mut App, ctx: &EventContext) {
     app.messages.push(ChatMessage {
         role: MessageRole::User,
         text: text.clone(),
+        time: now_hm(),
     });
     app.sending = true;
     bridge::send(Command::Submit { chat, text });

@@ -11,7 +11,7 @@ mod chat;
 mod pages;
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 use rwire_components::Text;
 
 use crate::state::{App, Tab};
@@ -73,9 +73,20 @@ fn brand_row() -> ElementBuilder {
             St::PySm,
         ])
         .append([
+            // Glyph + wordmark; the icon inherits currentColor from the accent text.
             el(El::Span)
-                .st([St::FontMono, St::FontSemibold, St::TextLg, St::TextAccent])
-                .text("claw"),
+                .st([
+                    St::DisplayFlex,
+                    St::ItemsCenter,
+                    St::GapSm,
+                    St::TextAccent,
+                    St::FontSemibold,
+                    St::TextLg,
+                ])
+                .append([
+                    icons::icon_sized(icons::Icon::Terminal, 18),
+                    el(El::Span).text("claw"),
+                ]),
             status(),
         ])
 }
@@ -123,7 +134,7 @@ fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
             St::ItemsCenter,
             St::GapSm,
             St::PxSm,
-            St::PySm,
+            St::PyXs,
             St::CursorPointer,
             St::TextSm,
         ])

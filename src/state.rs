@@ -66,6 +66,8 @@ pub enum MessageRole {
 pub struct ChatMessage {
     pub role: MessageRole,
     pub text: String,
+    /// `HH:MM` (UTC) for the transcript timestamp.
+    pub time: String,
 }
 
 /// Process-global projection. Selection (`open_chat`) lives here rather than in

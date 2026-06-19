@@ -68,7 +68,7 @@ pub fn title_if_default(conn: &Connection, id: &str, title: &str) -> rusqlite::R
 
 pub fn load_thread(conn: &Connection, chat_id: &str) -> rusqlite::Result<Vec<ChatMessage>> {
     let mut stmt = conn.prepare(
-        "SELECT direction, body
+        "SELECT direction, body, substr(created_at, 12, 5)
            FROM web_messages
           WHERE messaging_group_id = ?1 AND kind = 'chat'
           ORDER BY id ASC",
@@ -78,6 +78,7 @@ pub fn load_thread(conn: &Connection, chat_id: &str) -> rusqlite::Result<Vec<Cha
         Ok(ChatMessage {
             role: role_from_direction(&direction),
             text: row.get(1)?,
+            time: row.get(2)?,
         })
     })?;
     rows.collect()
