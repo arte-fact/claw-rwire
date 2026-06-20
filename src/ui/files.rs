@@ -10,12 +10,13 @@ use rwire_components::Text;
 
 use crate::bridge::{self, Command};
 use crate::state::{App, FileEntry, FileKind};
-use crate::ui::widgets::page_header;
+use crate::ui::widgets::{accent_submit, action_icon, icon_button, page_header, submit};
 
 pub fn page() -> ElementBuilder {
     el(El::Div)
         .style(Style::new().min_height("0").overflow("auto"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg, St::PXl])
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
+        .md([St::PXl])
         .append([
             page_header(
                 "Files",
@@ -192,37 +193,14 @@ fn crumb(label: &str, path: &str) -> ElementBuilder {
         .text(label)
 }
 
-/// The `+ File` / `+ Folder` icon buttons in the browser header.
+/// The New-file / New-folder buttons in the browser header — the shared bordered style.
 fn create_actions() -> ElementBuilder {
     el(El::Div)
-        .st([St::DisplayFlex, St::ItemsCenter, St::GapXs, St::FlexShrink0])
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::FlexShrink0])
         .append([
-            ghost_button(icons::Icon::FileText, "File", start_new_file()),
-            ghost_button(icons::Icon::Folder, "Folder", start_new_folder()),
+            action_icon(icons::Icon::FileText, "File", start_new_file(), false),
+            action_icon(icons::Icon::Folder, "Folder", start_new_folder(), false),
         ])
-}
-
-fn ghost_button(icon: icons::Icon, label: &str, on_click: HandlerSpec) -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "button")
-        .on(Ev::Click, on_click)
-        .style(
-            Style::new()
-                .set("font", "inherit")
-                .set("border", "none")
-                .set("background", "transparent"),
-        )
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapXs,
-            St::PxXs,
-            St::TextXs,
-            St::TextMuted,
-            St::CursorPointer,
-        ])
-        .hover([St::TextAccent])
-        .append([icons::icon_sized(icon, 13), el(El::Span).text(label)])
 }
 
 /// The inline create prompt shown above the listing when `+ File`/`+ Folder` is clicked.
@@ -267,7 +245,7 @@ fn create_row(kind: &str, value: &str) -> ElementBuilder {
                     St::OutlineNone,
                 ])
                 .focus([St::BorderAccent]),
-            pill_button("Create", submit_create(), true),
+            submit("Create"),
             row_action(icons::Icon::Close, cancel_create(), None, false),
         ])
 }
@@ -453,61 +431,20 @@ fn rename_row(current: &str) -> ElementBuilder {
                     St::OutlineNone,
                 ])
                 .focus([St::BorderAccent]),
-            pill_button("Rename", submit_rename(), false),
+            submit("Rename"),
             row_action(icons::Icon::Close, cancel_rename(), None, false),
         ])
 }
 
-/// A subtle pill button (used for inline confirms). `submit_handler` is unused here — the
-/// button is a form submit — but kept so callers read declaratively.
-fn pill_button(label: &str, _submit_handler: HandlerSpec, accent: bool) -> ElementBuilder {
-    let (bg, fg) = if accent {
-        (St::BgAccent, St::TextOnAccent)
-    } else {
-        (St::BgApp, St::TextHigh)
-    };
-    el(El::Button)
-        .attr("type", "submit")
-        .style(Style::new().set("font", "inherit").set("border", "none"))
-        .st([
-            St::FlexShrink0,
-            St::PxMd,
-            St::PyXs,
-            St::RoundedSm,
-            bg,
-            fg,
-            St::TextXs,
-            St::CursorPointer,
-        ])
-        .text(label)
-}
-
+/// A row's inline icon action (rename / delete / cancel) — the shared bare-icon button,
+/// with the target `path` on `data-path` when the handler needs it.
 fn row_action(
     icon: icons::Icon,
     on_click: HandlerSpec,
     path: Option<&str>,
     danger: bool,
 ) -> ElementBuilder {
-    let color = if danger { St::TextError } else { St::TextLow };
-    let button = el(El::Button)
-        .attr("type", "button")
-        .on(Ev::Click, on_click)
-        .style(
-            Style::new()
-                .set("font", "inherit")
-                .set("border", "none")
-                .set("background", "transparent"),
-        )
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::PxXs,
-            St::FlexShrink0,
-            St::CursorPointer,
-            color,
-        ])
-        .hover([St::TextHigh])
-        .append([icons::icon_sized(icon, 14)]);
+    let button = icon_button(icon, on_click, danger);
     match path {
         Some(p) => button.data("path", p),
         None => button,
@@ -566,7 +503,10 @@ fn editor(app: &App) -> ElementBuilder {
                     St::PySm,
                     St::BorderBSubtle,
                 ])
-                .append([header_row([filename, save_button()])]),
+                .append([header_row([
+                    filename,
+                    accent_submit(icons::Icon::Check, "Save"),
+                ])]),
             el(El::Textarea)
                 .id(&field_id)
                 .attr("name", "content")
@@ -628,29 +568,6 @@ fn header_row(children: [ElementBuilder; 2]) -> ElementBuilder {
             St::Flex1,
         ])
         .append(children)
-}
-
-fn save_button() -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "submit")
-        .style(Style::new().set("font", "inherit").set("border", "none"))
-        .st([
-            St::FlexShrink0,
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapXs,
-            St::PxMd,
-            St::PyXs,
-            St::RoundedMd,
-            St::BgAccent,
-            St::TextOnAccent,
-            St::CursorPointer,
-        ])
-        .hover([St::BgAccentHover])
-        .append([
-            icons::icon_sized(icons::Icon::Check, 14),
-            el(El::Span).text("Save"),
-        ])
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

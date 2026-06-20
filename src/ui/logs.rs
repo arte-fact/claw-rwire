@@ -12,7 +12,8 @@ use crate::ui::widgets::{clear_button, page_header};
 pub fn page() -> ElementBuilder {
     el(El::Div)
         .style(Style::new().min_height("0").overflow("auto"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg, St::PXl])
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
+        .md([St::PXl])
         .append([
             page_header(
                 "Logs",

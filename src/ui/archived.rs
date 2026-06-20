@@ -4,7 +4,7 @@
 //! filled by `Command::ListArchived` when the `/archived` route opens (see `on_route`).
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, HandlerSpec, St, el, handler, icons, renderer};
+use rwire::{El, ElementBuilder, HandlerSpec, St, el, handler, icons, renderer};
 use rwire_components::Text;
 
 use crate::bridge::{self, Command};
@@ -14,7 +14,8 @@ use crate::ui::widgets::page_header;
 pub fn page() -> ElementBuilder {
     el(El::Div)
         .style(Style::new().min_height("0").overflow("auto"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg, St::PXl])
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
+        .md([St::PXl])
         .append([
             page_header(
                 "Archived",
@@ -96,8 +97,8 @@ fn row(chat: &ChatSummary, pending_delete: bool) -> ElementBuilder {
         .append(children)
 }
 
-/// A small icon+label action button. `chat_id` rides on `data-chat` for the handlers
-/// that target a specific row; `danger` colours it as a destructive action.
+/// A small icon+label action button (the shared style). `chat_id` rides on `data-chat`
+/// for the handlers that target a specific row; `danger` colours it as destructive.
 fn button(
     icon: icons::Icon,
     label: &str,
@@ -105,25 +106,7 @@ fn button(
     chat_id: Option<&str>,
     danger: bool,
 ) -> ElementBuilder {
-    let color = if danger { St::TextError } else { St::TextMuted };
-    let button = el(El::Button)
-        .attr("type", "button")
-        .on(Ev::Click, on_click)
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::PxMd,
-            St::PySm,
-            St::BorderDefault,
-            St::RoundedSm,
-            St::BgApp,
-            color,
-            St::CursorPointer,
-        ])
-        .style(Style::new().set("font", "inherit"))
-        .hover([St::TextHigh, St::BorderAccent])
-        .append([icons::icon_sized(icon, 14), el(El::Span).text(label)]);
+    let button = crate::ui::widgets::action_icon(icon, label, on_click, danger);
     match chat_id {
         Some(id) => button.data("chat", id),
         None => button,

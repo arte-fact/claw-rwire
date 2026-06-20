@@ -19,7 +19,8 @@ use crate::state::{App, Editing};
 pub fn page() -> ElementBuilder {
     el(El::Div)
         .style(Style::new().min_height("0").overflow("auto"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg, St::PXl])
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
+        .md([St::PXl])
         .append([
             Text::heading1("System").build(),
             Text::body("Channels route to agents; agents call endpoints.")
@@ -218,43 +219,10 @@ pub(super) fn row_head(name: &str, badge: ElementBuilder) -> ElementBuilder {
         ])
 }
 
-/// A small `type=button` action (Edit / Delete / Cancel / Add-row). Attach a
-/// `.data(..)` before wiring the handler when the target id must travel with it.
-pub(super) fn action(label: &str, handler: HandlerSpec) -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "button")
-        .on(Ev::Click, handler)
-        .st([
-            St::PxSm,
-            St::PySm,
-            St::BorderDefault,
-            St::RoundedSm,
-            St::BgApp,
-            St::TextMuted,
-            St::CursorPointer,
-        ])
-        .style(Style::new().set("font", "inherit"))
-        .hover([St::TextHigh, St::BorderAccent])
-        .text(label)
-}
-
-/// The primary `type=submit` button inside a drawer form (Save / Add).
-pub(super) fn submit(label: &str) -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "submit")
-        .st([
-            St::PxMd,
-            St::PySm,
-            St::BorderDefault,
-            St::RoundedSm,
-            St::BgApp,
-            St::TextHigh,
-            St::CursorPointer,
-        ])
-        .style(Style::new().set("font", "inherit"))
-        .hover([St::BorderAccent])
-        .text(label)
-}
+// Edit/Delete/Cancel/Add-row buttons and the drawer-form Save/Add submit use the shared
+// button family, so the System Map matches every other surface. Re-exported so existing
+// `super::{action, submit}` imports in this module keep resolving.
+pub(super) use crate::ui::widgets::{action, submit};
 
 pub(super) fn select_st() -> [St; 8] {
     [
