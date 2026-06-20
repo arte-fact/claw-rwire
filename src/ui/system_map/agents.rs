@@ -60,9 +60,11 @@ pub fn form(app: &App, draft: &AgentDraft) -> ElementBuilder {
     )
 }
 
-/// The workspace picker: assign the agent to a workspace (created in the Workspaces tier),
-/// or leave it with none. Assigning a workspace another agent already uses shares that
-/// project — same files + the same `AGENT.md` brief.
+/// The workspace section: assign the agent to a workspace (created in the Workspaces tier)
+/// or leave it with none, then — when one is assigned — the **workspace tools** (bash/read/
+/// write/edit) that operate on it. Assigning a workspace another agent already uses shares
+/// that project (same files + the same `AGENT.md` brief). The tools are grouped here, not
+/// with the web tools, because they do nothing without a workspace.
 fn workspace_field(app: &App, draft: &AgentDraft) -> ElementBuilder {
     let selected = draft.workspace.as_deref();
     let none = el(El::Option).attr("value", "").text("— no workspace —");
@@ -81,62 +83,57 @@ fn workspace_field(app: &App, draft: &AgentDraft) -> ElementBuilder {
             option
         });
     }
-    labeled(
+    let picker = labeled(
         "Workspace",
         el(El::Select)
             .attr("name", "workspace")
             .on(Ev::Change, workspace_changed())
             .st(select_st())
             .append(options),
-    )
+    );
+    let mut children = vec![picker];
+    // Workspace tools only matter when a workspace is assigned (they're gated on one at
+    // run time), so they appear only once one is picked.
+    if draft.workspace.is_some() {
+        let chips = tool_chips(app, draft, "workspace");
+        if !chips.is_empty() {
+            children.push(labeled("Workspace tools", chip_wrap(chips)));
+        }
+    }
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapMd])
+        .append(children)
 }
 
-/// The per-tool picker: toggle-chips grouped by source (Web / Coder), built from the
-/// projected `app.tool_catalog`. Each chip is on iff its name is in `draft.tools`.
+/// The web-tool picker: toggle-chips for the connected MCP server's tools (workspace tools
+/// live in the Workspace section). Each chip is on iff its name is in `draft.tools`.
 fn tools_field(app: &App, draft: &AgentDraft) -> ElementBuilder {
-    let mut sections: Vec<ElementBuilder> = Vec::new();
-    for (key, label) in [("web", "Web"), ("coder", "Coder")] {
-        let chips: Vec<ElementBuilder> = app
-            .tool_catalog
-            .iter()
-            .filter(|entry| entry.group == key)
-            .map(|entry| tool_chip(&entry.name, draft.tools.iter().any(|t| t == &entry.name)))
-            .collect();
-        if chips.is_empty() {
-            continue;
-        }
-        sections.push(
-            el(El::Div)
-                .st([St::DisplayFlex, St::FlexCol, St::GapXs])
-                .append([
-                    el(El::Span)
-                        .st([
-                            St::TextXs,
-                            St::TextMuted,
-                            St::TextUppercase,
-                            St::TrackingWide,
-                        ])
-                        .text(label),
-                    el(El::Div)
-                        .style(Style::new().set("flex-wrap", "wrap"))
-                        .st([St::DisplayFlex, St::GapXs])
-                        .append(chips),
-                ]),
-        );
-    }
-    if sections.is_empty() {
-        sections.push(
-            el(El::Div)
-                .st([St::TextXs, St::TextMuted])
-                .text("No tools available"),
-        );
-    }
-    labeled(
-        "Tools",
+    let chips = tool_chips(app, draft, "web");
+    let body = if chips.is_empty() {
         el(El::Div)
-            .st([St::DisplayFlex, St::FlexCol, St::GapSm])
-            .append(sections),
-    )
+            .st([St::TextXs, St::TextMuted])
+            .text("No web tools available")
+    } else {
+        chip_wrap(chips)
+    };
+    labeled("Web tools", body)
+}
+
+/// The chips for one tool `group`, each on iff selected in `draft.tools`.
+fn tool_chips(app: &App, draft: &AgentDraft, group: &str) -> Vec<ElementBuilder> {
+    app.tool_catalog
+        .iter()
+        .filter(|entry| entry.group == group)
+        .map(|entry| tool_chip(&entry.name, draft.tools.iter().any(|t| t == &entry.name)))
+        .collect()
+}
+
+/// A wrapping flex row of tool chips.
+fn chip_wrap(chips: Vec<ElementBuilder>) -> ElementBuilder {
+    el(El::Div)
+        .style(Style::new().set("flex-wrap", "wrap"))
+        .st([St::DisplayFlex, St::GapXs])
+        .append(chips)
 }
 
 /// A clickable on/off chip for one tool. The `data-tool` rides the name to the handler.

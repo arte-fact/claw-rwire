@@ -38,6 +38,22 @@ pub fn rename(conn: &Connection, id: &str, name: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+pub fn get(conn: &Connection, id: &str) -> rusqlite::Result<Option<Workspace>> {
+    conn.query_row(
+        "SELECT id, name FROM workspaces WHERE id = ?1",
+        params![id],
+        from_row,
+    )
+    .optional()
+}
+
+/// Delete a workspace row. The caller is responsible for checking no agents are still
+/// assigned (FK enforcement is off) and for removing the directory on disk.
+pub fn delete(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
 pub fn list(conn: &Connection) -> rusqlite::Result<Vec<Workspace>> {
     let mut stmt = conn.prepare("SELECT id, name FROM workspaces ORDER BY created_at ASC")?;
     let rows = stmt.query_map([], from_row)?;
@@ -152,11 +168,20 @@ mod tests {
     }
 
     #[test]
-    fn rename_changes_the_name() {
+    fn rename_changes_the_name_and_get_reads_it() {
         let conn = seeded();
         create(&conn, "ws-1", "Old").expect("create");
         rename(&conn, "ws-1", "New").expect("rename");
-        assert_eq!(list(&conn).expect("list")[0].name, "New");
+        assert_eq!(get(&conn, "ws-1").expect("get").unwrap().name, "New");
+    }
+
+    #[test]
+    fn delete_removes_the_workspace() {
+        let conn = seeded();
+        create(&conn, "ws-1", "One").expect("create");
+        delete(&conn, "ws-1").expect("delete");
+        assert_eq!(get(&conn, "ws-1").expect("get"), None);
+        assert!(list(&conn).expect("list").is_empty());
     }
 
     #[test]

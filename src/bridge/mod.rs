@@ -23,7 +23,8 @@ use crate::id;
 use crate::mcp::{self, McpClient};
 use crate::state::{ActivityEntry, ActivityKind, App, ChatSummary, LogLine, MessageRole};
 use crate::tools::{
-    CODER_TOOLS, CoderToolbox, CompositeToolbox, EmptyToolbox, FilteredToolbox, McpToolbox, Toolbox,
+    CoderToolbox, CompositeToolbox, EmptyToolbox, FilteredToolbox, McpToolbox, Toolbox,
+    WORKSPACE_TOOLS,
 };
 use crate::workspace;
 
@@ -95,6 +96,10 @@ pub enum Command {
         id: Option<String>,
         name: String,
     },
+    /// Delete a workspace + its directory (refused while agents are still assigned).
+    DeleteWorkspace {
+        id: String,
+    },
     /// Fetch an endpoint's advertised models into `App.endpoint_models` (the agent
     /// form's model dropdown).
     DiscoverModels {
@@ -103,38 +108,38 @@ pub enum Command {
     /// Close the System Map drawer (sent on navigation so it doesn't persist across
     /// route changes — `editing` is shared state).
     CloseDrawer,
-    // ── Files view (browse + edit an agent's workspace) ──
-    /// `/files` opened — browse the default agent's workspace root.
+    // ── Files view (browse + edit a workspace) ──
+    /// `/files` opened — browse the first workspace's root.
     OpenFiles,
-    /// List a directory in an agent's workspace.
+    /// List a directory in a workspace.
     ListDir {
-        agent: String,
+        workspace: String,
         path: String,
     },
     /// Read a file into the editor pane.
     OpenFile {
-        agent: String,
+        workspace: String,
         path: String,
     },
     /// Save (or create) a file with the given content.
     WriteFile {
-        agent: String,
+        workspace: String,
         path: String,
         content: String,
     },
     /// Create a directory.
     NewFolder {
-        agent: String,
+        workspace: String,
         path: String,
     },
     /// Delete a file or directory.
     DeleteEntry {
-        agent: String,
+        workspace: String,
         path: String,
     },
     /// Rename/move an entry.
     RenameEntry {
-        agent: String,
+        workspace: String,
         from: String,
         to: String,
     },
@@ -219,13 +224,13 @@ pub(crate) fn web_mcp() -> Option<Arc<McpClient>> {
     WEB_MCP.get().cloned()
 }
 
-/// Every selectable tool as `(group, name)` — the built-in coder tools plus the connected
-/// web MCP server's tools. The drawer's tool picker and the per-agent persistence both
-/// build from this single source of truth.
+/// Every selectable tool as `(group, name)` — the built-in workspace tools plus the
+/// connected web MCP server's tools. The drawer's tool picker and the per-agent persistence
+/// both build from this single source of truth.
 pub(crate) fn tool_catalog() -> Vec<(String, String)> {
-    let mut catalog: Vec<(String, String)> = CODER_TOOLS
+    let mut catalog: Vec<(String, String)> = WORKSPACE_TOOLS
         .iter()
-        .map(|name| ("coder".to_owned(), (*name).to_owned()))
+        .map(|name| ("workspace".to_owned(), (*name).to_owned()))
         .collect();
     if let Some(client) = web_mcp() {
         for tool in client.tools() {
@@ -412,21 +417,28 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadAgentTools { id } => admin::load_agent_tools(conn, shared, &id),
         Command::SetWebAgent { id } => admin::set_web_agent(conn, shared, &id),
         Command::UpsertWorkspace { id, name } => admin::upsert_workspace(conn, shared, id, &name),
+        Command::DeleteWorkspace { id } => admin::delete_workspace(conn, shared, &id),
         Command::DiscoverModels { endpoint } => admin::discover_models(conn, shared, &endpoint),
         Command::CloseDrawer => close_drawer(shared),
         Command::OpenFiles => files::open_files(conn, shared),
-        Command::ListDir { agent, path } => files::list_dir(conn, shared, &agent, &path),
-        Command::OpenFile { agent, path } => files::open_file(conn, shared, &agent, &path),
+        Command::ListDir { workspace, path } => files::list_dir(conn, shared, &workspace, &path),
+        Command::OpenFile { workspace, path } => files::open_file(conn, shared, &workspace, &path),
         Command::WriteFile {
-            agent,
+            workspace,
             path,
             content,
-        } => files::write_file(conn, shared, &agent, &path, &content),
-        Command::NewFolder { agent, path } => files::new_folder(conn, shared, &agent, &path),
-        Command::DeleteEntry { agent, path } => files::delete_entry(conn, shared, &agent, &path),
-        Command::RenameEntry { agent, from, to } => {
-            files::rename_entry(conn, shared, &agent, &from, &to)
+        } => files::write_file(conn, shared, &workspace, &path, &content),
+        Command::NewFolder { workspace, path } => {
+            files::new_folder(conn, shared, &workspace, &path)
         }
+        Command::DeleteEntry { workspace, path } => {
+            files::delete_entry(conn, shared, &workspace, &path)
+        }
+        Command::RenameEntry {
+            workspace,
+            from,
+            to,
+        } => files::rename_entry(conn, shared, &workspace, &from, &to),
     }
 }
 
@@ -677,10 +689,10 @@ fn build_toolbox(selection: Option<Vec<String>>, workspace: Option<PathBuf>) -> 
     }
 
     let mut boxes: Vec<Box<dyn Toolbox>> = Vec::new();
-    // Coder tools, only if the agent has a workspace and at least one coder tool is
-    // selected (else don't touch the filesystem).
+    // Workspace tools, only if the agent has a workspace and at least one is selected
+    // (else don't touch the filesystem).
     if let Some(workspace) = workspace
-        && CODER_TOOLS
+        && WORKSPACE_TOOLS
             .iter()
             .any(|tool| allowed.iter().any(|name| name == tool))
     {

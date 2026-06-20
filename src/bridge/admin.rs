@@ -8,6 +8,7 @@ use rwire::{ChangeSet, SharedServerState};
 use crate::agent;
 use crate::db::{agent_prompts, agent_tools, agents, endpoints, resolution, workspaces};
 use crate::state::{AgentView, App, Editing, EndpointView, ToolCatalogEntry, WorkspaceView};
+use crate::workspace;
 
 /// Load the registry into the shared read-models. Called at boot and after each edit.
 pub fn project_registry(conn: &rusqlite::Connection, shared: &SharedServerState) {
@@ -179,6 +180,37 @@ pub fn upsert_workspace(
     };
     if let Err(err) = result {
         return surface_error(shared, format!("save workspace: {err}"));
+    }
+    project_registry(conn, shared);
+}
+
+/// Delete a workspace and its directory. Refused while agents are still assigned (they'd
+/// be orphaned — FK enforcement is off), so the operator re-points them first.
+pub fn delete_workspace(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+    match workspaces::agents_in(conn, id) {
+        Ok(agents) if !agents.is_empty() => {
+            return surface_error(
+                shared,
+                format!(
+                    "delete workspace: reassign its agent(s) first — {}",
+                    agents.join(", ")
+                ),
+            );
+        }
+        Err(err) => return surface_error(shared, format!("delete workspace: {err}")),
+        Ok(_) => {}
+    }
+    if let Err(err) = workspaces::delete(conn, id) {
+        return surface_error(shared, format!("delete workspace: {err}"));
+    }
+    // Remove the workspace directory (best-effort; absence is fine — it may never have run).
+    let dir = workspace::dir_for(&super::data_dir(), id);
+    if let Err(err) = std::fs::remove_dir_all(&dir)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        super::log_line(format!(
+            "admin: removing workspace dir '{id}' failed: {err}"
+        ));
     }
     project_registry(conn, shared);
 }

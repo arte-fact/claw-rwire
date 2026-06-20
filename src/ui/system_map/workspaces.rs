@@ -46,10 +46,11 @@ pub fn form(draft: &WorkspaceDraft) -> ElementBuilder {
         "Name",
         text_input("name", &draft.name, "e.g. Website", name_changed()),
     );
-    let actions = [
-        submit(if draft.id.is_some() { "Save" } else { "Add" }),
-        action("Cancel", super::close()).data("act", "cancel"),
-    ];
+    let mut actions = vec![submit(if draft.id.is_some() { "Save" } else { "Add" })];
+    if draft.id.is_some() {
+        actions.push(action("Delete", delete()).data("act", "delete"));
+    }
+    actions.push(action("Cancel", super::close()).data("act", "cancel"));
     drawer_form(save(), [name], actions)
 }
 
@@ -92,4 +93,17 @@ fn save(app: &mut App, ctx: &EventContext) {
     app.error = None;
     app.editing = None;
     bridge::send(Command::UpsertWorkspace { id, name });
+}
+
+#[handler]
+fn delete(app: &mut App) {
+    let id = match app.editing.as_ref() {
+        Some(Editing::Workspace(draft)) => draft.id.clone(),
+        _ => return,
+    };
+    if let Some(id) = id {
+        app.error = None;
+        app.editing = None;
+        bridge::send(Command::DeleteWorkspace { id });
+    }
 }

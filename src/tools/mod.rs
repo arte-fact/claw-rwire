@@ -8,8 +8,10 @@ mod exec;
 
 pub use coder::CoderToolbox;
 
-/// The coder tool names, in display order — the static half of the selectable catalog.
-pub const CODER_TOOLS: [&str; 4] = [coder::BASH, coder::READ, coder::WRITE, coder::EDIT];
+/// The workspace tool names, in display order — the static half of the selectable catalog.
+/// They operate on the agent's workspace (`coder` module), so they're only offered when the
+/// agent has one.
+pub const WORKSPACE_TOOLS: [&str; 4] = [coder::BASH, coder::READ, coder::WRITE, coder::EDIT];
 
 use std::sync::Arc;
 

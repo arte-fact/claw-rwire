@@ -20,32 +20,34 @@ pub fn page() -> ElementBuilder {
         .append([
             page_header(
                 "Files",
-                "Browse and edit an agent's workspace.",
-                agent_select(),
+                "Browse and edit a workspace (shared by the agents assigned to it).",
+                workspace_select(),
             ),
             error_banner(),
             panes(),
         ])
 }
 
-/// A `<select>` of agents; switching re-lists that agent's workspace root.
+/// A `<select>` of workspaces; switching re-lists that workspace's root.
 #[renderer]
-fn agent_select(app: &App) -> ElementBuilder {
-    if app.agents.is_empty() {
+fn workspace_select(app: &App) -> ElementBuilder {
+    if app.workspaces.is_empty() {
         return el(El::Div).style(Style::new().display("none"));
     }
-    let selected = app.files_agent.as_deref();
-    let options = app.agents.iter().map(|agent| {
-        let option = el(El::Option).attr("value", &agent.id).text(&agent.name);
-        if selected == Some(agent.id.as_str()) {
+    let selected = app.files_workspace.as_deref();
+    let options = app.workspaces.iter().map(|workspace| {
+        let option = el(El::Option)
+            .attr("value", &workspace.id)
+            .text(&workspace.name);
+        if selected == Some(workspace.id.as_str()) {
             option.bool_attr(rwire::At::Selected)
         } else {
             option
         }
     });
     el(El::Select)
-        .attr("name", "agent")
-        .on(Ev::Change, agent_changed())
+        .attr("name", "workspace")
+        .on(Ev::Change, workspace_changed())
         .style(Style::new().set("font", "inherit"))
         .st([
             St::PxSm,
@@ -602,11 +604,11 @@ fn size_label(entry: &FileEntry) -> String {
 // ── Handlers ────────────────────────────────────────────────────────────────────
 
 #[handler]
-fn agent_changed(app: &mut App, ctx: &EventContext) {
-    let _ = app; // side-effect only: the bridge re-projects files_agent
-    if let Some(agent) = ctx.text().map(str::to_owned).filter(|v| !v.is_empty()) {
+fn workspace_changed(app: &mut App, ctx: &EventContext) {
+    let _ = app; // side-effect only: the bridge re-projects files_workspace
+    if let Some(workspace) = ctx.text().map(str::to_owned).filter(|v| !v.is_empty()) {
         bridge::send(Command::ListDir {
-            agent,
+            workspace,
             path: String::new(),
         });
     }
@@ -615,9 +617,9 @@ fn agent_changed(app: &mut App, ctx: &EventContext) {
 /// Navigate into the directory named by the clicked element's `data-path`.
 #[handler]
 fn navigate(app: &mut App, ctx: &EventContext) {
-    if let (Some(agent), Some(path)) = (app.files_agent.clone(), ctx.data("path")) {
+    if let (Some(workspace), Some(path)) = (app.files_workspace.clone(), ctx.data("path")) {
         bridge::send(Command::ListDir {
-            agent,
+            workspace,
             path: path.to_owned(),
         });
     }
@@ -625,9 +627,9 @@ fn navigate(app: &mut App, ctx: &EventContext) {
 
 #[handler]
 fn open_file(app: &mut App, ctx: &EventContext) {
-    if let (Some(agent), Some(path)) = (app.files_agent.clone(), ctx.data("path")) {
+    if let (Some(workspace), Some(path)) = (app.files_workspace.clone(), ctx.data("path")) {
         bridge::send(Command::OpenFile {
-            agent,
+            workspace,
             path: path.to_owned(),
         });
     }
@@ -658,7 +660,7 @@ fn new_name_changed(app: &mut App, ctx: &EventContext) {
 
 #[handler]
 fn submit_create(app: &mut App, ctx: &EventContext) {
-    let Some(agent) = app.files_agent.clone() else {
+    let Some(workspace) = app.files_workspace.clone() else {
         return;
     };
     // The name is controlled in `files_new_name`, but a fast submit may beat the change
@@ -674,9 +676,9 @@ fn submit_create(app: &mut App, ctx: &EventContext) {
     }
     let path = join(&app.files_path, &name);
     match app.files_creating.as_deref() {
-        Some("folder") => bridge::send(Command::NewFolder { agent, path }),
+        Some("folder") => bridge::send(Command::NewFolder { workspace, path }),
         _ => bridge::send(Command::WriteFile {
-            agent,
+            workspace,
             path,
             content: String::new(),
         }),
@@ -697,7 +699,8 @@ fn cancel_rename(app: &mut App) {
 
 #[handler]
 fn submit_rename(app: &mut App, ctx: &EventContext) {
-    let (Some(agent), Some(from)) = (app.files_agent.clone(), app.files_rename.take()) else {
+    let (Some(workspace), Some(from)) = (app.files_workspace.clone(), app.files_rename.take())
+    else {
         return;
     };
     let name = ctx.field("to").unwrap_or_default().trim().to_owned();
@@ -705,7 +708,11 @@ fn submit_rename(app: &mut App, ctx: &EventContext) {
         return;
     }
     let to = join(&app.files_path, &name);
-    bridge::send(Command::RenameEntry { agent, from, to });
+    bridge::send(Command::RenameEntry {
+        workspace,
+        from,
+        to,
+    });
 }
 
 #[handler]
@@ -722,20 +729,23 @@ fn cancel_delete(app: &mut App) {
 
 #[handler]
 fn confirm_delete(app: &mut App) {
-    if let (Some(agent), Some(path)) = (app.files_agent.clone(), app.files_pending_delete.take()) {
-        bridge::send(Command::DeleteEntry { agent, path });
+    if let (Some(workspace), Some(path)) =
+        (app.files_workspace.clone(), app.files_pending_delete.take())
+    {
+        bridge::send(Command::DeleteEntry { workspace, path });
     }
 }
 
 #[handler]
 fn save_file(app: &mut App, ctx: &EventContext) {
-    let (Some(agent), Some(open)) = (app.files_agent.clone(), app.files_open.as_ref()) else {
+    let (Some(workspace), Some(open)) = (app.files_workspace.clone(), app.files_open.as_ref())
+    else {
         return;
     };
     let path = open.path.clone();
     let content = ctx.field("content").unwrap_or_default().to_owned();
     bridge::send(Command::WriteFile {
-        agent,
+        workspace,
         path,
         content,
     });

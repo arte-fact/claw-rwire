@@ -118,15 +118,19 @@ claw-rwire stops resolving through them.
 ### Implementation notes (what shipped)
 
 - **Workspaces are explicit, named resources** (the chosen open-decision). The System Map has
-  a **Workspaces tier**: create / rename a workspace and see which agents share each ("N
-  agents" + their names). The agent drawer's picker assigns the agent to an existing
-  workspace or **"— no workspace —"** (a pure chat agent: coder tools gated off, no brief
-  injected). There is no auto-mint "own workspace" — you create the workspace, then assign.
+  a **Workspaces tier**: create / rename / **delete** a workspace and see which agents share
+  each ("N agents" + their names). Deletion removes the row + the directory and is **refused
+  while agents are still assigned** (they'd be orphaned). The agent drawer's picker assigns
+  the agent to an existing workspace or **"— no workspace —"** (a pure chat agent). There is
+  no auto-mint "own workspace" — you create the workspace, then assign.
+- **Workspace tools** (`bash`/`read`/`write`/`edit`, formerly "coder") live in the drawer's
+  **Workspace section**, shown only when a workspace is assigned — they operate on it and are
+  gated on one at run time. Web/MCP tools are a separate "Web tools" field.
+- The **Files view is keyed by the workspace** (a workspace selector, not an agent): browsing
+  / editing a workspace and its `AGENT.md` is visible to every agent sharing it.
 - Migration seeds `agent_prompts` empty: an existing agent's old `AGENT.md` becomes its
   workspace's project brief, and its identity prompt starts blank (falls back to base + brief
   until the operator sets one in the drawer).
-- **Deferred:** deleting a workspace (needs reassigning its agents + removing the dir) and a
-  Files-view selector keyed directly by workspace rather than by agent.
 
 ## Open decisions
 

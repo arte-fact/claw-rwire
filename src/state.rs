@@ -291,8 +291,8 @@ pub struct App {
     /// Workspaces (shareable agent project dirs), projected with the registry — the source
     /// for the agent drawer's workspace picker.
     pub workspaces: Vec<WorkspaceView>,
-    /// Files view: the agent whose workspace is being browsed.
-    pub files_agent: Option<String>,
+    /// Files view: the id of the workspace being browsed.
+    pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).
     pub files_path: String,
     /// Files view: entries of `files_path` (dirs first).

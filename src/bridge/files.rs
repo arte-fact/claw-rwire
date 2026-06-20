@@ -1,30 +1,25 @@
-//! Files view: directory browsing + file edit/create/rename/delete over an agent's
-//! workspace, run on the bridge thread (it owns fs access). Each command resolves the
-//! agent's workspace, runs a `workspace::ops` call, then re-projects the listing into the
-//! `App.files_*` read-models. Errors surface in `files_error` rather than crashing.
+//! Files view: directory browsing + file edit/create/rename/delete over a workspace, run
+//! on the bridge thread (it owns fs access). Each command resolves the workspace dir, runs
+//! a `workspace::ops` call, then re-projects the listing into the `App.files_*` read-models.
+//! Errors surface in `files_error` rather than crashing. A workspace is shared by every
+//! agent assigned to it, so editing here is visible to all of them.
 
 use std::path::PathBuf;
 
 use rwire::{ChangeSet, SharedServerState};
 
-use crate::db::{agents, workspaces};
+use crate::db::workspaces;
 use crate::state::{App, FileEntry, FileKind, OpenFile};
 use crate::workspace::ops::{self, EntryKind};
 use crate::workspace::{self, WorkspaceError};
 
-/// Resolve an agent id to its (scaffolded) workspace dir + display name. The workspace is
-/// the one the agent is assigned to (shared agents resolve to the same dir); an unmapped
-/// agent falls back to its legacy `folder`.
-fn resolve(conn: &rusqlite::Connection, agent_id: &str) -> Option<(PathBuf, String)> {
-    let agent = agents::get(conn, agent_id).ok().flatten()?;
-    let workspace_id = workspaces::for_agent(conn, agent_id)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| agent.folder.clone());
-    let dir = workspace::dir_for(&super::data_dir(), &workspace_id);
-    // Ensure the workspace exists (+ a starter AGENT.md) so a never-run agent isn't empty.
-    let _ = workspace::scaffold(&dir, &agent.name);
-    Some((dir, agent.name))
+/// Resolve a workspace id to its (scaffolded) directory + display name.
+fn resolve(conn: &rusqlite::Connection, workspace_id: &str) -> Option<(PathBuf, String)> {
+    let workspace = workspaces::get(conn, workspace_id).ok().flatten()?;
+    let dir = workspace::dir_for(&super::data_dir(), &workspace.id);
+    // Ensure the dir exists (+ a starter AGENT.md) so a never-run workspace isn't empty.
+    let _ = workspace::scaffold(&dir, &workspace.name);
+    Some((dir, workspace.name))
 }
 
 /// The parent directory of a workspace-relative path (`""` for a top-level entry).
@@ -47,38 +42,53 @@ fn to_entries(entries: Vec<ops::Entry>) -> Vec<FileEntry> {
         .collect()
 }
 
-/// `/files` opened: browse the default agent's (web agent, else first) workspace root.
+/// `/files` opened: browse the first workspace's root.
 pub fn open_files(conn: &rusqlite::Connection, shared: &SharedServerState) {
-    let agent = agents::web_agent(conn)
+    match workspaces::list(conn)
         .ok()
-        .flatten()
-        .or_else(|| agents::first(conn).ok().flatten().map(|a| a.id));
-    match agent {
-        Some(id) => list_dir(conn, shared, &id, ""),
+        .and_then(|list| list.into_iter().next())
+    {
+        Some(workspace) => list_dir(conn, shared, &workspace.id, ""),
         None => project_dir(
             shared,
             "",
             "",
             Vec::new(),
-            Some("No agents configured.".into()),
+            Some("No workspaces configured.".into()),
         ),
     }
 }
 
-/// List `path` in `agent`'s workspace and show it (clearing any open file).
-pub fn list_dir(conn: &rusqlite::Connection, shared: &SharedServerState, agent: &str, path: &str) {
-    let Some((dir, _)) = resolve(conn, agent) else {
-        return project_dir(shared, agent, "", Vec::new(), Some("Unknown agent.".into()));
+/// List `path` in `workspace` and show it (clearing any open file).
+pub fn list_dir(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    path: &str,
+) {
+    let Some((dir, _)) = resolve(conn, workspace) else {
+        return project_dir(
+            shared,
+            workspace,
+            "",
+            Vec::new(),
+            Some("Unknown workspace.".into()),
+        );
     };
     match ops::list(&dir, path) {
-        Ok(entries) => project_dir(shared, agent, path, to_entries(entries), None),
-        Err(err) => project_dir(shared, agent, path, Vec::new(), Some(message(&err))),
+        Ok(entries) => project_dir(shared, workspace, path, to_entries(entries), None),
+        Err(err) => project_dir(shared, workspace, path, Vec::new(), Some(message(&err))),
     }
 }
 
 /// Read a file into the editor pane (binary/oversized → a read-only note).
-pub fn open_file(conn: &rusqlite::Connection, shared: &SharedServerState, agent: &str, path: &str) {
-    let Some((dir, _)) = resolve(conn, agent) else {
+pub fn open_file(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    path: &str,
+) {
+    let Some((dir, _)) = resolve(conn, workspace) else {
         return;
     };
     let open = match ops::read_text(&dir, path) {
@@ -108,11 +118,11 @@ pub fn open_file(conn: &rusqlite::Connection, shared: &SharedServerState, agent:
 pub fn write_file(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
-    agent: &str,
+    workspace: &str,
     path: &str,
     content: &str,
 ) {
-    let Some((dir, _)) = resolve(conn, agent) else {
+    let Some((dir, _)) = resolve(conn, workspace) else {
         return;
     };
     if let Err(err) = ops::write_text(&dir, path, content) {
@@ -126,49 +136,51 @@ pub fn write_file(
         editable: true,
         note: None,
     };
-    project_dir_keep_open(shared, agent, &parent, entries, Some(open));
+    project_dir_keep_open(shared, workspace, &parent, entries, Some(open));
 }
 
 /// Create a directory at `path`, then re-list its parent.
 pub fn new_folder(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
-    agent: &str,
+    workspace: &str,
     path: &str,
 ) {
-    relist_after(conn, shared, agent, path, |dir| ops::mkdir(dir, path));
+    relist_after(conn, shared, workspace, path, |dir| ops::mkdir(dir, path));
 }
 
 /// Delete `path` (file or directory), then re-list its parent.
 pub fn delete_entry(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
-    agent: &str,
+    workspace: &str,
     path: &str,
 ) {
-    relist_after(conn, shared, agent, path, |dir| ops::delete(dir, path));
+    relist_after(conn, shared, workspace, path, |dir| ops::delete(dir, path));
 }
 
 /// Rename `from` → `to`, then re-list `from`'s directory.
 pub fn rename_entry(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
-    agent: &str,
+    workspace: &str,
     from: &str,
     to: &str,
 ) {
-    relist_after(conn, shared, agent, from, |dir| ops::rename(dir, from, to));
+    relist_after(conn, shared, workspace, from, |dir| {
+        ops::rename(dir, from, to)
+    });
 }
 
 /// Run a mutating op, then re-list the parent of `path` (clearing the open file).
 fn relist_after(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
-    agent: &str,
+    workspace: &str,
     path: &str,
     op: impl FnOnce(&std::path::Path) -> Result<(), WorkspaceError>,
 ) {
-    let Some((dir, _)) = resolve(conn, agent) else {
+    let Some((dir, _)) = resolve(conn, workspace) else {
         return;
     };
     if let Err(err) = op(&dir) {
@@ -176,8 +188,8 @@ fn relist_after(
     }
     let parent = parent_dir(path).to_owned();
     match ops::list(&dir, &parent) {
-        Ok(entries) => project_dir(shared, agent, &parent, to_entries(entries), None),
-        Err(err) => project_dir(shared, agent, &parent, Vec::new(), Some(message(&err))),
+        Ok(entries) => project_dir(shared, workspace, &parent, to_entries(entries), None),
+        Err(err) => project_dir(shared, workspace, &parent, Vec::new(), Some(message(&err))),
     }
 }
 
@@ -195,16 +207,16 @@ fn not_editable(path: &str, note: &str) -> OpenFile {
 /// that keeps a file open after a save.
 fn project_dir(
     shared: &SharedServerState,
-    agent: &str,
+    workspace: &str,
     path: &str,
     entries: Vec<FileEntry>,
     error: Option<String>,
 ) {
-    let agent = agent.to_owned();
+    let workspace = workspace.to_owned();
     let path = path.to_owned();
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
-            App::FIELD_FILES_AGENT,
+            App::FIELD_FILES_WORKSPACE,
             App::FIELD_FILES_PATH,
             App::FIELD_FILES_ENTRIES,
             App::FIELD_FILES_ERROR,
@@ -215,7 +227,7 @@ fn project_dir(
             App::FIELD_FILES_OPEN,
         ]),
         move |app| {
-            app.files_agent = (!agent.is_empty()).then_some(agent);
+            app.files_workspace = (!workspace.is_empty()).then_some(workspace);
             app.files_path = path;
             app.files_entries = entries;
             app.files_error = error;
@@ -231,16 +243,16 @@ fn project_dir(
 /// Like [`project_dir`] but sets the open file (used after a successful save).
 fn project_dir_keep_open(
     shared: &SharedServerState,
-    agent: &str,
+    workspace: &str,
     path: &str,
     entries: Vec<FileEntry>,
     open: Option<OpenFile>,
 ) {
-    let agent = agent.to_owned();
+    let workspace = workspace.to_owned();
     let path = path.to_owned();
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
-            App::FIELD_FILES_AGENT,
+            App::FIELD_FILES_WORKSPACE,
             App::FIELD_FILES_PATH,
             App::FIELD_FILES_ENTRIES,
             App::FIELD_FILES_ERROR,
@@ -251,7 +263,7 @@ fn project_dir_keep_open(
             App::FIELD_FILES_OPEN,
         ]),
         move |app| {
-            app.files_agent = (!agent.is_empty()).then_some(agent);
+            app.files_workspace = (!workspace.is_empty()).then_some(workspace);
             app.files_path = path;
             app.files_entries = entries;
             app.files_error = None;
