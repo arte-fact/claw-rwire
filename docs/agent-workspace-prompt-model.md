@@ -140,8 +140,47 @@ claw-rwire stops resolving through them.
 - **Agent self-editing its own persona** via an `update_instructions` tool — deferred; the
   workspace `AGENT.md` already gives agents an editable surface.
 
+## Revision (planned with the task board): workspace owner + multi-workspace membership
+
+The shipped model above is effectively agent→workspace 1:1 (an agent has ≤1 workspace; N
+agents may share one). The [task board](task-board.md) needs two changes, which split the
+agent↔workspace relationship into two distinct roles:
+
+- **Every workspace has an owner agent.** `workspaces.owner_agent_id` (NOT NULL, **UNIQUE** —
+  an agent owns at most one workspace, its *home*). The owner is the workspace's **domain
+  lead**: it receives the concierge's delegated requests, runs a **planning turn** to create
+  tasks, and is the **default task assignee**. (The user-facing chat agent is a separate role
+  — the global **concierge**; see the [shell IA](ui-information-architecture.md). The owner is
+  not itself a chat surface in v1.)
+- **Membership is many-to-many.** `agent_workspaces` PK becomes `(agent_group_id,
+  workspace_id)`, so an agent can be a *member* of several workspaces — the teams whose tasks
+  it can be assigned and whose files it may touch. The owner is implicitly a member of its own.
+
+```
+concierge ───────────► the one user-facing chat agent (today's web_agent, re-roled)
+agent ──owns 1───────► workspace      home: its domain — files + the workspace's tasks
+agent ──member of N──► workspaces      teams: assignable for tasks + file access
+workspace ──owner (1) / members (M)──► agents
+```
+
+The agent's **identity + tools stay per-agent**; the **workspace it operates in is
+contextual** — its *home* (owned) when it acts as a workspace lead, the *task's workspace* on
+a task run. Membership is what grants that cross-workspace file access.
+
+Ripple to the shipped code (do this alongside the task board, not before):
+
+- Schema: `agent_workspaces` PK → `(agent_group_id, workspace_id)` (table rebuild);
+  `workspaces.owner_agent_id` ADD COLUMN, backfilled to the agent that owned the migrated
+  folder.
+- Resolution: `for_agent` (one workspace) splits into `owned_by` (home) and `member_of`
+  (teams). **Chat keeps a single front agent** (the concierge / `web_agent`), so there is *no*
+  chat↔workspace mapping to add — a task run resolves the *task's* workspace, and a workspace
+  lead acts in its *owned* one.
+- Management moves to the **workspace drawer / Team section** (set the owner + multi-select
+  members), replacing the agent drawer's single-select workspace picker.
+
 ## Out of scope (later)
 
-- Per-chat / per-session workspaces (the Step 3 session-model pivot) — this model is
-  per-agent-shared, deliberately.
-- Agent-to-agent delegation (Step 4) — but a shared workspace is a natural substrate for it.
+- Per-workspace chat (drill into a workspace owner) — deferred; v1 is global concierge chat.
+- Agent-to-agent delegation generalised beyond concierge→owner — the shared workspace + the
+  task board are the substrate.
