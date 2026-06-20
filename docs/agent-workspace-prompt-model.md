@@ -112,22 +112,21 @@ claw-rwire stops resolving through them.
 | 2 | Resolution: 3-layer prompt compose + workspace-via-mapping | `db/resolution.rs`, `workspace` | ✅ done |
 | 3 | Run wiring: resolve workspace, gate coder tools on workspace presence | `bridge` | ✅ done |
 | 4 | UI: drawer per-agent prompt + workspace picker; Files keyed by workspace | `ui/` | ✅ done |
-| 5 | Workspace management (create/rename/assign) | System Map or Files | ⏳ partial |
+| 5 | Workspace management (create/rename/assign) | System Map Workspaces tier | ✅ done |
 | 6 | Boot migration of existing agents → workspaces | `bridge::boot` | ✅ done |
 
 ### Implementation notes (what shipped)
 
-- The drawer picker covers **assign to a shared workspace** and **mint the agent its own**
-  ("— own workspace —", named after the agent). A new agent always gets a workspace (its own
-  or a shared one); the DB + resolution *support* a workspace-less pure-chat agent (coder
-  tools gated off, no brief injected), but the drawer doesn't yet expose "no workspace".
-- **Step 5 is partial.** The dedicated management surface — **rename** a workspace, create a
-  *named* standalone workspace, and see *which agents share* each — is not built yet. The
-  `workspaces::{rename, get, unassign}` helpers were trimmed (no `#[allow(dead_code)]`) and
-  should be re-added with that UI.
+- **Workspaces are explicit, named resources** (the chosen open-decision). The System Map has
+  a **Workspaces tier**: create / rename a workspace and see which agents share each ("N
+  agents" + their names). The agent drawer's picker assigns the agent to an existing
+  workspace or **"— no workspace —"** (a pure chat agent: coder tools gated off, no brief
+  injected). There is no auto-mint "own workspace" — you create the workspace, then assign.
 - Migration seeds `agent_prompts` empty: an existing agent's old `AGENT.md` becomes its
   workspace's project brief, and its identity prompt starts blank (falls back to base + brief
   until the operator sets one in the drawer).
+- **Deferred:** deleting a workspace (needs reassigning its agents + removing the dir) and a
+  Files-view selector keyed directly by workspace rather than by agent.
 
 ## Open decisions
 

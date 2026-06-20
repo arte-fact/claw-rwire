@@ -89,6 +89,12 @@ pub enum Command {
     SetWebAgent {
         id: String,
     },
+    /// Create a workspace (`id == None`) or rename an existing one (the System Map's
+    /// Workspaces tier).
+    UpsertWorkspace {
+        id: Option<String>,
+        name: String,
+    },
     /// Fetch an endpoint's advertised models into `App.endpoint_models` (the agent
     /// form's model dropdown).
     DiscoverModels {
@@ -405,6 +411,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadAgentPrompt { id } => admin::load_agent_prompt(conn, shared, &id),
         Command::LoadAgentTools { id } => admin::load_agent_tools(conn, shared, &id),
         Command::SetWebAgent { id } => admin::set_web_agent(conn, shared, &id),
+        Command::UpsertWorkspace { id, name } => admin::upsert_workspace(conn, shared, id, &name),
         Command::DiscoverModels { endpoint } => admin::discover_models(conn, shared, &endpoint),
         Command::CloseDrawer => close_drawer(shared),
         Command::OpenFiles => files::open_files(conn, shared),

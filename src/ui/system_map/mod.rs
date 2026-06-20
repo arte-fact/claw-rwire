@@ -8,6 +8,7 @@
 
 mod agents;
 mod endpoints;
+mod workspaces;
 
 use rwire::style::Style;
 use rwire::{At, El, ElementBuilder, Ev, HandlerSpec, St, el, handler, renderer};
@@ -59,6 +60,7 @@ fn board() -> ElementBuilder {
         .append([
             column("Channels", channels()),
             column("Agents", agents::column()),
+            column("Workspaces", workspaces::column()),
             column("Endpoints", endpoints::column()),
         ])
 }
@@ -133,6 +135,14 @@ fn drawer(app: &App) -> ElementBuilder {
                 "New agent"
             },
             agents::form(app, draft),
+        ),
+        Some(Editing::Workspace(draft)) => (
+            if draft.id.is_some() {
+                "Edit workspace"
+            } else {
+                "New workspace"
+            },
+            workspaces::form(draft),
         ),
         Some(Editing::Channel) => ("Web channel", channel_form(app)),
         None => ("", el(El::Div)),

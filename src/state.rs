@@ -166,12 +166,14 @@ pub struct AgentView {
     pub model: Option<String>,
 }
 
-/// A workspace row for the agent drawer's workspace picker. A workspace is a shareable
-/// directory under `<data>/workspaces/<id>`; several agents may point at one.
+/// A workspace row for the System Map's Workspaces tier + the agent drawer's picker. A
+/// workspace is a shareable directory under `<data>/workspaces/<id>`; `agents` are the
+/// names of the agents that share it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkspaceView {
     pub id: String,
     pub name: String,
+    pub agents: Vec<String>,
 }
 
 /// One selectable tool in the agent drawer's tool picker: its source `group`
@@ -218,7 +220,16 @@ pub struct OpenFile {
 pub enum Editing {
     Endpoint(Option<String>),
     Agent(AgentDraft),
+    Workspace(WorkspaceDraft),
     Channel,
+}
+
+/// In-progress workspace edit. `id == None` is a new workspace (the bridge mints the id);
+/// editing only changes the display name (the directory id is immutable).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceDraft {
+    pub id: Option<String>,
+    pub name: String,
 }
 
 /// In-progress agent edit. `id == None` is a new agent; the rest mirror the form

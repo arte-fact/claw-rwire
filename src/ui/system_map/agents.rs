@@ -60,16 +60,16 @@ pub fn form(app: &App, draft: &AgentDraft) -> ElementBuilder {
     )
 }
 
-/// The workspace picker: assign the agent to a shared workspace, or leave it on its own.
-/// "Own workspace" (value `""`) mints/keeps a workspace named after the agent; selecting
-/// another agent's workspace shares that project — same files + the same `AGENT.md` brief.
+/// The workspace picker: assign the agent to a workspace (created in the Workspaces tier),
+/// or leave it with none. Assigning a workspace another agent already uses shares that
+/// project — same files + the same `AGENT.md` brief.
 fn workspace_field(app: &App, draft: &AgentDraft) -> ElementBuilder {
     let selected = draft.workspace.as_deref();
-    let own = el(El::Option).attr("value", "").text("— own workspace —");
+    let none = el(El::Option).attr("value", "").text("— no workspace —");
     let mut options = vec![if selected.is_none() {
-        own.bool_attr(At::Selected)
+        none.bool_attr(At::Selected)
     } else {
-        own
+        none
     }];
     for workspace in &app.workspaces {
         let option = el(El::Option)

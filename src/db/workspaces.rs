@@ -30,9 +30,29 @@ pub fn create(conn: &Connection, id: &str, name: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+pub fn rename(conn: &Connection, id: &str, name: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE workspaces SET name = ?2 WHERE id = ?1",
+        params![id, name],
+    )?;
+    Ok(())
+}
+
 pub fn list(conn: &Connection) -> rusqlite::Result<Vec<Workspace>> {
     let mut stmt = conn.prepare("SELECT id, name FROM workspaces ORDER BY created_at ASC")?;
     let rows = stmt.query_map([], from_row)?;
+    rows.collect()
+}
+
+/// The names of the agents assigned to `workspace_id` (those that share it), sorted.
+pub fn agents_in(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT a.name FROM agent_workspaces w
+           JOIN agent_groups a ON a.id = w.agent_group_id
+          WHERE w.workspace_id = ?1
+          ORDER BY a.name",
+    )?;
+    let rows = stmt.query_map(params![workspace_id], |row| row.get(0))?;
     rows.collect()
 }
 
@@ -43,6 +63,15 @@ pub fn assign(conn: &Connection, agent_id: &str, workspace_id: &str) -> rusqlite
         "INSERT INTO agent_workspaces (agent_group_id, workspace_id) VALUES (?1, ?2)
          ON CONFLICT(agent_group_id) DO UPDATE SET workspace_id = excluded.workspace_id",
         params![agent_id, workspace_id],
+    )?;
+    Ok(())
+}
+
+/// Drop an agent's workspace assignment (it becomes a pure chat agent with no workspace).
+pub fn unassign(conn: &Connection, agent_id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM agent_workspaces WHERE agent_group_id = ?1",
+        params![agent_id],
     )?;
     Ok(())
 }
@@ -116,5 +145,27 @@ mod tests {
             for_agent(&conn, "ag-b").expect("b"),
             Some("ws-shared".to_owned())
         );
+        assert_eq!(
+            agents_in(&conn, "ws-shared").expect("agents_in"),
+            vec!["Coder".to_owned(), "Writer".to_owned()]
+        );
+    }
+
+    #[test]
+    fn rename_changes_the_name() {
+        let conn = seeded();
+        create(&conn, "ws-1", "Old").expect("create");
+        rename(&conn, "ws-1", "New").expect("rename");
+        assert_eq!(list(&conn).expect("list")[0].name, "New");
+    }
+
+    #[test]
+    fn unassign_clears_the_mapping() {
+        let conn = seeded();
+        create(&conn, "ws-1", "One").expect("ws");
+        assign(&conn, "ag-a", "ws-1").expect("assign");
+        unassign(&conn, "ag-a").expect("unassign");
+        assert_eq!(for_agent(&conn, "ag-a").expect("none"), None);
+        assert!(agents_in(&conn, "ws-1").expect("empty").is_empty());
     }
 }

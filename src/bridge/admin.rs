@@ -35,9 +35,13 @@ pub fn project_registry(conn: &rusqlite::Connection, shared: &SharedServerState)
     let workspace_views: Vec<WorkspaceView> = workspaces::list(conn)
         .unwrap_or_default()
         .into_iter()
-        .map(|workspace| WorkspaceView {
-            id: workspace.id,
-            name: workspace.name,
+        .map(|workspace| {
+            let agents = workspaces::agents_in(conn, &workspace.id).unwrap_or_default();
+            WorkspaceView {
+                id: workspace.id,
+                name: workspace.name,
+                agents,
+            }
         })
         .collect();
     shared.update_shared_changed::<App>(
@@ -138,17 +142,43 @@ pub fn upsert_agent(
     if let Err(err) = agent_prompts::set(conn, &id, &prompt) {
         return surface_error(shared, format!("save agent prompt: {err}"));
     }
-    // Assign the chosen workspace, or mint the agent its own (id = agent id) when none was
-    // picked, so a fresh agent is immediately usable. `create` is idempotent, so sharing
-    // an existing workspace never renames it.
-    let workspace_id = workspace
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| id.clone());
-    if let Err(err) = workspaces::create(conn, &workspace_id, name) {
-        return surface_error(shared, format!("save workspace: {err}"));
+    // Assign the chosen workspace, or detach the agent (no workspace) when none was picked.
+    // Workspaces are created explicitly in the Workspaces tier, so a picked id exists.
+    match workspace.filter(|value| !value.trim().is_empty()) {
+        Some(workspace_id) => {
+            if let Err(err) = workspaces::assign(conn, &id, &workspace_id) {
+                return surface_error(shared, format!("assign workspace: {err}"));
+            }
+        }
+        None => {
+            if let Err(err) = workspaces::unassign(conn, &id) {
+                return surface_error(shared, format!("detach workspace: {err}"));
+            }
+        }
     }
-    if let Err(err) = workspaces::assign(conn, &id, &workspace_id) {
-        return surface_error(shared, format!("assign workspace: {err}"));
+    project_registry(conn, shared);
+}
+
+/// Create a workspace (minting an id) or rename an existing one, then re-project.
+pub fn upsert_workspace(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    id: Option<String>,
+    name: &str,
+) {
+    let name = name.trim();
+    if name.is_empty() {
+        return surface_error(shared, "workspace name can't be empty".to_owned());
+    }
+    let result = match &id {
+        Some(id) => workspaces::rename(conn, id, name),
+        None => match crate::id::new_id() {
+            Ok(new_id) => workspaces::create(conn, &new_id, name),
+            Err(err) => return surface_error(shared, format!("create workspace: {err}")),
+        },
+    };
+    if let Err(err) = result {
+        return surface_error(shared, format!("save workspace: {err}"));
     }
     project_registry(conn, shared);
 }
