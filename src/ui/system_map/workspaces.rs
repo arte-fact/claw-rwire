@@ -4,11 +4,12 @@
 //! name (the directory id is immutable). Agents are assigned to a workspace in the Agents
 //! tier's drawer, so several can share one project.
 
-use rwire::{El, ElementBuilder, St, el, handler, renderer};
+use rwire::{El, ElementBuilder, St, el, handler, icons, renderer};
 
 use super::{action, badge, card, drawer_form, labeled, row_head, submit, text_input};
 use crate::bridge::{self, Command};
 use crate::state::{App, Editing, WorkspaceDraft, WorkspaceView};
+use crate::ui::widgets::action_icon;
 
 #[renderer]
 pub fn column(app: &App) -> ElementBuilder {
@@ -46,11 +47,24 @@ pub fn form(draft: &WorkspaceDraft) -> ElementBuilder {
         "Name",
         text_input("name", &draft.name, "e.g. Website", name_changed()),
     );
-    let mut actions = vec![submit(if draft.id.is_some() { "Save" } else { "Add" })];
-    if draft.id.is_some() {
-        actions.push(action("Delete", delete()).data("act", "delete"));
-    }
-    actions.push(action("Cancel", super::close()).data("act", "cancel"));
+    let actions = if draft.confirm_delete {
+        // Armed confirm: deletion removes the directory + its files, so it's a deliberate
+        // second click. (The bridge still refuses while agents are assigned.)
+        vec![
+            el(El::Span)
+                .st([St::TextXs, St::TextError])
+                .text("Delete workspace and its files?"),
+            action_icon(icons::Icon::Trash, "Delete", confirm_delete(), true),
+            action("Cancel", cancel_delete()).data("act", "cancel-delete"),
+        ]
+    } else {
+        let mut actions = vec![submit(if draft.id.is_some() { "Save" } else { "Add" })];
+        if draft.id.is_some() {
+            actions.push(action("Delete", arm_delete()).data("act", "delete"));
+        }
+        actions.push(action("Cancel", super::close()).data("act", "cancel"));
+        actions
+    };
     drawer_form(save(), [name], actions)
 }
 
@@ -70,6 +84,7 @@ fn open_edit(app: &mut App, ctx: &EventContext) {
     app.editing = Some(Editing::Workspace(WorkspaceDraft {
         id: Some(workspace.id.clone()),
         name: workspace.name.clone(),
+        confirm_delete: false,
     }));
 }
 
@@ -95,8 +110,25 @@ fn save(app: &mut App, ctx: &EventContext) {
     bridge::send(Command::UpsertWorkspace { id, name });
 }
 
+/// Arm the inline delete confirm (the actions row swaps to a confirm/cancel prompt).
 #[handler]
-fn delete(app: &mut App) {
+fn arm_delete(app: &mut App) {
+    if let Some(Editing::Workspace(draft)) = app.editing.as_mut() {
+        draft.confirm_delete = true;
+    }
+}
+
+/// Disarm the delete confirm, restoring the normal Save/Delete/Cancel actions.
+#[handler]
+fn cancel_delete(app: &mut App) {
+    if let Some(Editing::Workspace(draft)) = app.editing.as_mut() {
+        draft.confirm_delete = false;
+    }
+}
+
+/// Confirm: delete the workspace (the bridge refuses if agents are still assigned).
+#[handler]
+fn confirm_delete(app: &mut App) {
     let id = match app.editing.as_ref() {
         Some(Editing::Workspace(draft)) => draft.id.clone(),
         _ => return,

@@ -225,11 +225,13 @@ pub enum Editing {
 }
 
 /// In-progress workspace edit. `id == None` is a new workspace (the bridge mints the id);
-/// editing only changes the display name (the directory id is immutable).
+/// editing only changes the display name (the directory id is immutable). `confirm_delete`
+/// arms the drawer's two-step delete confirm (deletion removes the directory on disk).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkspaceDraft {
     pub id: Option<String>,
     pub name: String,
+    pub confirm_delete: bool,
 }
 
 /// In-progress agent edit. `id == None` is a new agent; the rest mirror the form
