@@ -18,7 +18,7 @@ mod admin;
 mod files;
 
 use crate::agent;
-use crate::db::{self, agents, chat, endpoints, resolution};
+use crate::db::{self, agents, chat, endpoints, resolution, workspaces};
 use crate::id;
 use crate::mcp::{self, McpClient};
 use crate::state::{ActivityEntry, ActivityKind, App, ChatSummary, LogLine, MessageRole};
@@ -66,15 +66,19 @@ pub enum Command {
         name: String,
         endpoint: Option<String>,
         model: Option<String>,
-        /// The agent's `AGENT.md` body from the drawer's System-prompt textarea.
+        /// The agent's identity prompt from the drawer's System-prompt textarea
+        /// (operator-owned config, stored in `agent_prompts`).
         prompt: String,
         /// The enabled tool names ticked in the drawer's tool picker.
         tools: Vec<String>,
+        /// The workspace the agent is assigned to, or `None` to mint/keep its own.
+        workspace: Option<String>,
     },
     DeleteAgent {
         id: String,
     },
-    /// Read an existing agent's `AGENT.md` into the open drawer draft (prefill).
+    /// Read an existing agent's identity prompt + workspace assignment into the open
+    /// drawer draft (prefill).
     LoadAgentPrompt {
         id: String,
     },
@@ -277,6 +281,7 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
         let _ = chat::create_chat(conn, &id, "New chat");
     }
     seed_provider(conn);
+    migrate_workspaces(conn);
     link_chats_to_default_agent(conn);
     admin::project_registry(conn, shared);
     let chats = chat::list_chats(conn).unwrap_or_default();
@@ -321,6 +326,29 @@ fn seed_provider(conn: &rusqlite::Connection) {
     match agents::ensure_default(conn, Some("default"), Some(&model)) {
         Ok(_) => println!("Agent: native endpoint {base_url} (model {model})"),
         Err(err) => log_line(format!("bridge: seed agent failed: {err}")),
+    }
+}
+
+/// Give every agent a first-class workspace + assignment (idempotent). An agent that
+/// predates the workspace model — or one inherited from a shared rust-claw central.db —
+/// is mapped to a workspace whose id is its legacy `folder`, so its existing directory and
+/// `AGENT.md` (now the workspace's project brief) carry over untouched. The per-agent
+/// identity prompt starts empty (the run falls back to base + brief until the operator
+/// sets one). Agents already assigned are left alone.
+fn migrate_workspaces(conn: &rusqlite::Connection) {
+    let Ok(agents) = agents::list(conn) else {
+        return;
+    };
+    for agent in agents {
+        if workspaces::for_agent(conn, &agent.id)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            continue;
+        }
+        let _ = workspaces::create(conn, &agent.folder, &agent.name);
+        let _ = workspaces::assign(conn, &agent.id, &agent.folder);
     }
 }
 
@@ -369,7 +397,10 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             model,
             prompt,
             tools,
-        } => admin::upsert_agent(conn, shared, id, &name, endpoint, model, prompt, tools),
+            workspace,
+        } => admin::upsert_agent(
+            conn, shared, id, &name, endpoint, model, prompt, tools, workspace,
+        ),
         Command::DeleteAgent { id } => admin::delete_agent(conn, shared, &id),
         Command::LoadAgentPrompt { id } => admin::load_agent_prompt(conn, shared, &id),
         Command::LoadAgentTools { id } => admin::load_agent_tools(conn, shared, &id),
@@ -561,16 +592,24 @@ fn dispatch_native(
     chat_id: &str,
     inference: resolution::ResolvedInference,
 ) {
-    // The agent's workspace: scaffold it (dir + starter AGENT.md) then read AGENT.md as
-    // the system prompt, appended to the base prompt. Best-effort — a scaffold failure
-    // just means we run with the base prompt and no usable coder workspace.
-    let workspace = workspace::dir_for(&data_dir(), &inference.folder);
-    if let Err(err) = workspace::scaffold(&workspace, &inference.agent_name) {
+    // The agent's workspace (if it has one): scaffold the dir + starter AGENT.md, then read
+    // AGENT.md as the shared project-brief layer. The system prompt is layered —
+    // base + the agent's identity prompt + the workspace brief. Best-effort: a scaffold
+    // failure just drops the brief layer.
+    let workspace_dir = inference
+        .workspace
+        .as_deref()
+        .map(|id| workspace::dir_for(&data_dir(), id));
+    if let Some(dir) = &workspace_dir
+        && let Err(err) = workspace::scaffold(dir, &inference.agent_name)
+    {
         log_line(format!("bridge: workspace scaffold failed: {err}"));
     }
+    let brief = workspace_dir.as_deref().and_then(workspace::read_agent_md);
     let system_prompt = workspace::compose_system_prompt(
         agent::SYSTEM_PROMPT,
-        workspace::read_agent_md(&workspace),
+        inference.agent_prompt.clone(),
+        brief,
     );
 
     // Two views of the transcript: the display thread (chat turns + tool cards) for the
@@ -604,7 +643,7 @@ fn dispatch_native(
 
     // Build the run's toolbox from the agent's tool selection: web MCP tools and/or the
     // workspace coder tools, each filtered to the enabled set.
-    let toolbox = build_toolbox(inference.tools.clone(), workspace);
+    let toolbox = build_toolbox(inference.tools.clone(), workspace_dir);
     let chat = chat_id.to_owned();
     std::thread::spawn(move || {
         let result =
@@ -617,7 +656,7 @@ fn dispatch_native(
 /// configured names, or `None` for an unconfigured agent — which defaults to all web/MCP
 /// tools (coder tools off), preserving the pre-selection behaviour. Each source is wrapped
 /// in a [`FilteredToolbox`] so only enabled tools are advertised and callable.
-fn build_toolbox(selection: Option<Vec<String>>, workspace: PathBuf) -> Box<dyn Toolbox> {
+fn build_toolbox(selection: Option<Vec<String>>, workspace: Option<PathBuf>) -> Box<dyn Toolbox> {
     let client = web_mcp();
     let allowed: Vec<String> = match selection {
         Some(names) => names,
@@ -631,10 +670,12 @@ fn build_toolbox(selection: Option<Vec<String>>, workspace: PathBuf) -> Box<dyn 
     }
 
     let mut boxes: Vec<Box<dyn Toolbox>> = Vec::new();
-    // Coder tools, only if at least one is selected (else don't touch the workspace).
-    if CODER_TOOLS
-        .iter()
-        .any(|tool| allowed.iter().any(|name| name == tool))
+    // Coder tools, only if the agent has a workspace and at least one coder tool is
+    // selected (else don't touch the filesystem).
+    if let Some(workspace) = workspace
+        && CODER_TOOLS
+            .iter()
+            .any(|tool| allowed.iter().any(|name| name == tool))
     {
         let coder: Box<dyn Toolbox> = Box::new(CoderToolbox::new(workspace));
         boxes.push(Box::new(FilteredToolbox::new(coder, allowed.clone())));

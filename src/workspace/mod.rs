@@ -75,22 +75,23 @@ pub fn read_agent_md(workspace: &Path) -> Option<String> {
     }
 }
 
-/// Write `AGENT.md` (the System-prompt editor in the drawer). Creates the workspace first.
-pub fn write_agent_md(workspace: &Path, body: &str) -> Result<(), WorkspaceError> {
-    std::fs::create_dir_all(workspace)?;
-    std::fs::write(workspace.join("AGENT.md"), body)?;
-    Ok(())
-}
-
-/// Compose the run's system prompt: the base prompt, then the agent's `AGENT.md` (if any),
-/// separated by a blank line. Mirrors rust-claw's `compose_system_prompt`.
+/// Compose the run's layered system prompt, blank-line-separated, skipping empty layers:
+/// the global `base`, then the agent's identity `agent_prompt` ("who am I", per-agent),
+/// then the workspace `agent_md` project brief ("what we build", shared). Identity precedes
+/// project context so the persona frames the brief.
 #[must_use]
-pub fn compose_system_prompt(base: &str, agent_md: Option<String>) -> String {
-    match (base.is_empty(), agent_md) {
-        (true, Some(md)) => md,
-        (false, Some(md)) => format!("{base}\n\n{md}"),
-        (_, None) => base.to_owned(),
-    }
+pub fn compose_system_prompt(
+    base: &str,
+    agent_prompt: Option<String>,
+    agent_md: Option<String>,
+) -> String {
+    [Some(base.to_owned()), agent_prompt, agent_md]
+        .into_iter()
+        .flatten()
+        .map(|layer| layer.trim().to_owned())
+        .filter(|layer| !layer.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[cfg(test)]
@@ -119,7 +120,7 @@ mod tests {
         assert!(first.contains("You are Coder"));
 
         // A second scaffold must not clobber an edited AGENT.md.
-        write_agent_md(&ws, "custom prompt").expect("write");
+        std::fs::write(ws.join("AGENT.md"), "custom prompt").expect("write");
         scaffold(&ws, "Coder").expect("scaffold again");
         assert_eq!(read_agent_md(&ws).as_deref(), Some("custom prompt"));
     }
@@ -128,17 +129,25 @@ mod tests {
     fn empty_agent_md_reads_as_none() {
         let ws = dir_for(&tmp(), "blank");
         std::fs::create_dir_all(&ws).expect("mkdir");
-        write_agent_md(&ws, "   \n\t").expect("write");
+        std::fs::write(ws.join("AGENT.md"), "   \n\t").expect("write");
         assert_eq!(read_agent_md(&ws), None);
     }
 
     #[test]
-    fn compose_joins_base_and_agent_md() {
-        assert_eq!(compose_system_prompt("base", None), "base");
+    fn compose_joins_the_present_layers_in_identity_then_context_order() {
+        assert_eq!(compose_system_prompt("base", None, None), "base");
         assert_eq!(
-            compose_system_prompt("base", Some("md".to_owned())),
-            "base\n\nmd"
+            compose_system_prompt("base", None, Some("brief".to_owned())),
+            "base\n\nbrief"
         );
-        assert_eq!(compose_system_prompt("", Some("md".to_owned())), "md");
+        assert_eq!(
+            compose_system_prompt("base", Some("persona".to_owned()), Some("brief".to_owned())),
+            "base\n\npersona\n\nbrief"
+        );
+        // Empty layers (and an empty base) drop out rather than leaving blank gaps.
+        assert_eq!(
+            compose_system_prompt("", Some("   ".to_owned()), Some("brief".to_owned())),
+            "brief"
+        );
     }
 }

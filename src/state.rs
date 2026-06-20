@@ -166,6 +166,14 @@ pub struct AgentView {
     pub model: Option<String>,
 }
 
+/// A workspace row for the agent drawer's workspace picker. A workspace is a shareable
+/// directory under `<data>/workspaces/<id>`; several agents may point at one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceView {
+    pub id: String,
+    pub name: String,
+}
+
 /// One selectable tool in the agent drawer's tool picker: its source `group`
 /// (`"web"` / `"coder"`) and `name`. Projected once at boot from the connected MCP
 /// server + the built-in coder tools.
@@ -214,9 +222,10 @@ pub enum Editing {
 }
 
 /// In-progress agent edit. `id == None` is a new agent; the rest mirror the form
-/// fields so a re-render restores them. `prompt` is the agent's `AGENT.md` (its system
-/// prompt) and `tools` its enabled tool names — both loaded from disk/DB when an
-/// existing agent is opened.
+/// fields so a re-render restores them. `prompt` is the agent's identity prompt (its
+/// persona, stored in `agent_prompts`), `tools` its enabled tool names, and `workspace`
+/// the id of the workspace it's assigned to (`None` = mint/keep its own) — all loaded from
+/// the DB when an existing agent is opened.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentDraft {
     pub id: Option<String>,
@@ -225,6 +234,7 @@ pub struct AgentDraft {
     pub model: String,
     pub prompt: String,
     pub tools: Vec<String>,
+    pub workspace: Option<String>,
 }
 
 /// Process-global projection. Selection (`open_chat`) lives here rather than in
@@ -267,6 +277,9 @@ pub struct App {
     /// Every selectable tool (web + coder), projected once at boot — the source for the
     /// agent drawer's tool picker.
     pub tool_catalog: Vec<ToolCatalogEntry>,
+    /// Workspaces (shareable agent project dirs), projected with the registry — the source
+    /// for the agent drawer's workspace picker.
+    pub workspaces: Vec<WorkspaceView>,
     /// Files view: the agent whose workspace is being browsed.
     pub files_agent: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).

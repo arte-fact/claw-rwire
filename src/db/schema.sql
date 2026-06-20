@@ -175,6 +175,32 @@ CREATE TABLE IF NOT EXISTS agent_tools (
   PRIMARY KEY (agent_group_id, tool_name)
 );
 
+-- The agent's identity prompt ("who am I"), operator-owned. Kept out of the workspace so
+-- a shared workspace's AGENT.md stays the project brief while each agent keeps a distinct
+-- persona. Additive (claw-rwire-only) — rust-claw never reads it.
+CREATE TABLE IF NOT EXISTS agent_prompts (
+  agent_group_id TEXT PRIMARY KEY REFERENCES agent_groups(id),
+  body           TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+
+-- First-class, shareable workspaces: a named directory under <data>/workspaces/<id> that
+-- one or more agents work in (their coder tools + the AGENT.md project brief). Additive
+-- (claw-rwire-only); claw resolves an agent's workspace through agent_workspaces rather
+-- than the legacy agent_groups.folder column.
+CREATE TABLE IF NOT EXISTS workspaces (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+-- Which workspace an agent works in (N agents -> 1 workspace; an agent may have none).
+-- Additive (claw-rwire-only).
+CREATE TABLE IF NOT EXISTS agent_workspaces (
+  agent_group_id TEXT PRIMARY KEY REFERENCES agent_groups(id),
+  workspace_id   TEXT NOT NULL REFERENCES workspaces(id)
+);
+
 CREATE TABLE IF NOT EXISTS connectors (
   id             TEXT PRIMARY KEY,
   kind           TEXT NOT NULL UNIQUE,

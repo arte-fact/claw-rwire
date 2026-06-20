@@ -1,8 +1,10 @@
+pub mod agent_prompts;
 pub mod agent_tools;
 pub mod agents;
 pub mod chat;
 pub mod endpoints;
 pub mod resolution;
+pub mod workspaces;
 
 use std::path::Path;
 use std::time::Duration;
@@ -81,6 +83,8 @@ mod tests {
         let tables = table_names(&conn);
         for expected in [
             "agent_groups",
+            "agent_prompts",
+            "agent_workspaces",
             "channel_cursors",
             "connectors",
             "endpoints",
@@ -88,6 +92,7 @@ mod tests {
             "messaging_groups",
             "sessions",
             "web_messages",
+            "workspaces",
         ] {
             assert!(tables.contains(&expected.to_owned()), "missing {expected}");
         }

@@ -7,15 +7,21 @@ use std::path::PathBuf;
 
 use rwire::{ChangeSet, SharedServerState};
 
-use crate::db::agents;
+use crate::db::{agents, workspaces};
 use crate::state::{App, FileEntry, FileKind, OpenFile};
 use crate::workspace::ops::{self, EntryKind};
 use crate::workspace::{self, WorkspaceError};
 
-/// Resolve an agent id to its (scaffolded) workspace dir + display name.
+/// Resolve an agent id to its (scaffolded) workspace dir + display name. The workspace is
+/// the one the agent is assigned to (shared agents resolve to the same dir); an unmapped
+/// agent falls back to its legacy `folder`.
 fn resolve(conn: &rusqlite::Connection, agent_id: &str) -> Option<(PathBuf, String)> {
     let agent = agents::get(conn, agent_id).ok().flatten()?;
-    let dir = workspace::dir_for(&super::data_dir(), &agent.folder);
+    let workspace_id = workspaces::for_agent(conn, agent_id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| agent.folder.clone());
+    let dir = workspace::dir_for(&super::data_dir(), &workspace_id);
     // Ensure the workspace exists (+ a starter AGENT.md) so a never-run agent isn't empty.
     let _ = workspace::scaffold(&dir, &agent.name);
     Some((dir, agent.name))

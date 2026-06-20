@@ -5,18 +5,22 @@
 use rusqlite::Connection;
 
 use super::endpoints::{self, Endpoint};
-use super::{agent_tools, agents};
+use super::{agent_prompts, agent_tools, agents, workspaces};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedInference {
     pub base_url: String,
     pub model: String,
     pub api_key: Option<String>,
-    /// The agent's display name — used to seed a fresh `AGENT.md` persona.
+    /// The agent's display name — used to seed a fresh workspace brief.
     pub agent_name: String,
-    /// The agent's workspace folder name — the worker resolves
-    /// `<data>/workspaces/<folder>` from this for the coder tools + `AGENT.md`.
-    pub folder: String,
+    /// The id of the agent's workspace (dir name under `<data>/workspaces/`), or `None`
+    /// for a pure chat agent with no workspace. The worker resolves the dir for the coder
+    /// tools + the `AGENT.md` project brief from this.
+    pub workspace: Option<String>,
+    /// The agent's identity prompt ("who am I"), or `None` if unset. Composed between the
+    /// base prompt and the workspace brief.
+    pub agent_prompt: Option<String>,
     /// The agent's enabled tool names, or `None` if it has never been configured (the
     /// run then applies its default selection). Gates which tools the model is offered.
     pub tools: Option<Vec<String>>,
@@ -85,12 +89,15 @@ pub fn resolve_for_chat(
         })?;
     let api_key = api_key_for(&endpoint, env)?;
     let tools = agent_tools::selection(conn, &agent.id).map_err(db)?;
+    let workspace = workspaces::for_agent(conn, &agent.id).map_err(db)?;
+    let agent_prompt = agent_prompts::get(conn, &agent.id).map_err(db)?;
     Ok(ResolvedInference {
         base_url: endpoint.base_url,
         model,
         api_key,
         agent_name: agent.name,
-        folder: agent.folder,
+        workspace,
+        agent_prompt,
         tools,
     })
 }
@@ -131,6 +138,22 @@ mod tests {
         assert_eq!(inf.base_url, "http://localhost:8000/v1");
         assert_eq!(inf.model, "gemma");
         assert_eq!(inf.api_key.as_deref(), Some("sk"));
+        // No workspace assigned and no identity prompt set → both resolve to None.
+        assert_eq!(inf.workspace, None);
+        assert_eq!(inf.agent_prompt, None);
+    }
+
+    #[test]
+    fn resolves_the_agents_workspace_and_identity_prompt() {
+        use crate::db::{agent_prompts, agents, workspaces};
+        let conn = seeded();
+        let agent = agents::first(&conn).expect("agent").expect("some");
+        workspaces::create(&conn, "ws-1", "Project").expect("ws");
+        workspaces::assign(&conn, &agent.id, "ws-1").expect("assign");
+        agent_prompts::set(&conn, &agent.id, "You are precise.").expect("prompt");
+        let inf = resolve_for_chat(&conn, "chat-1", no_env).expect("resolve");
+        assert_eq!(inf.workspace.as_deref(), Some("ws-1"));
+        assert_eq!(inf.agent_prompt.as_deref(), Some("You are precise."));
     }
 
     #[test]

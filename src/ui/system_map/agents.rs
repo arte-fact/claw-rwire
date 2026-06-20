@@ -44,6 +44,7 @@ pub fn form(app: &App, draft: &AgentDraft) -> ElementBuilder {
     let endpoint = endpoint_select(app, draft.endpoint.as_deref());
     let model = model_field(app, draft);
     let tools = tools_field(app, draft);
+    let workspace = workspace_field(app, draft);
     let prompt = prompt_field(draft);
 
     let mut actions = vec![submit(if draft.id.is_some() { "Save" } else { "Add" })];
@@ -52,7 +53,42 @@ pub fn form(app: &App, draft: &AgentDraft) -> ElementBuilder {
     }
     actions.push(action("Cancel", super::close()).data("act", "cancel"));
 
-    drawer_form(save(), [name, endpoint, model, tools, prompt], actions)
+    drawer_form(
+        save(),
+        [name, endpoint, model, tools, workspace, prompt],
+        actions,
+    )
+}
+
+/// The workspace picker: assign the agent to a shared workspace, or leave it on its own.
+/// "Own workspace" (value `""`) mints/keeps a workspace named after the agent; selecting
+/// another agent's workspace shares that project — same files + the same `AGENT.md` brief.
+fn workspace_field(app: &App, draft: &AgentDraft) -> ElementBuilder {
+    let selected = draft.workspace.as_deref();
+    let own = el(El::Option).attr("value", "").text("— own workspace —");
+    let mut options = vec![if selected.is_none() {
+        own.bool_attr(At::Selected)
+    } else {
+        own
+    }];
+    for workspace in &app.workspaces {
+        let option = el(El::Option)
+            .attr("value", &workspace.id)
+            .text(&workspace.name);
+        options.push(if selected == Some(workspace.id.as_str()) {
+            option.bool_attr(At::Selected)
+        } else {
+            option
+        });
+    }
+    labeled(
+        "Workspace",
+        el(El::Select)
+            .attr("name", "workspace")
+            .on(Ev::Change, workspace_changed())
+            .st(select_st())
+            .append(options),
+    )
 }
 
 /// The per-tool picker: toggle-chips grouped by source (Web / Coder), built from the
@@ -131,16 +167,19 @@ fn tool_chip(name: &str, on: bool) -> ElementBuilder {
         .append([el(El::Span).text(mark), el(El::Span).text(name)])
 }
 
-/// The agent's system prompt, persisted as `AGENT.md` in its workspace.
+/// The agent's identity prompt (its persona), stored in `agent_prompts` — operator-owned
+/// and distinct per agent. The shared project context lives in the workspace's `AGENT.md`,
+/// edited in the Files view.
 fn prompt_field(draft: &AgentDraft) -> ElementBuilder {
     labeled(
-        "System prompt (AGENT.md)",
+        "System prompt",
         el(El::Textarea)
             .attr("name", "prompt")
             .attr("rows", "6")
             .at_str(
                 At::Placeholder,
-                "Persona + instructions — saved as AGENT.md in the agent's workspace.",
+                "Who this agent is — persona + instructions. Shared project context lives \
+                 in the workspace's AGENT.md.",
             )
             .on(Ev::Change, prompt_changed())
             .st(select_st())
@@ -231,6 +270,7 @@ fn open_edit(app: &mut App, ctx: &EventContext) {
         model: agent.model.clone().unwrap_or_default(),
         prompt: String::new(),
         tools: Vec::new(),
+        workspace: None,
     };
     let id = agent.id.clone();
     let endpoint = draft.endpoint.clone();
@@ -273,6 +313,14 @@ fn model_changed(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
+fn workspace_changed(app: &mut App, ctx: &EventContext) {
+    let workspace = ctx.text().map(str::to_owned).filter(|v| !v.is_empty());
+    if let Some(Editing::Agent(draft)) = app.editing.as_mut() {
+        draft.workspace = workspace;
+    }
+}
+
+#[handler]
 fn tool_toggled(app: &mut App, ctx: &EventContext) {
     let Some(tool) = ctx.data("tool").map(str::to_owned) else {
         return;
@@ -295,9 +343,13 @@ fn prompt_changed(app: &mut App, ctx: &EventContext) {
 
 #[handler]
 fn save(app: &mut App, ctx: &EventContext) {
-    // Tools live in the draft (the chips are controlled), not the form fields.
-    let (id, tools) = match app.editing.as_ref() {
-        Some(Editing::Agent(draft)) => (draft.id.clone(), draft.tools.clone()),
+    // Tools + workspace live in the draft (controlled), not the plain form fields.
+    let (id, tools, workspace) = match app.editing.as_ref() {
+        Some(Editing::Agent(draft)) => (
+            draft.id.clone(),
+            draft.tools.clone(),
+            draft.workspace.clone(),
+        ),
         _ => return,
     };
     let name = ctx.field("name").unwrap_or_default().trim().to_owned();
@@ -322,6 +374,7 @@ fn save(app: &mut App, ctx: &EventContext) {
         model,
         prompt,
         tools,
+        workspace,
     });
 }
 

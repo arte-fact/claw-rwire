@@ -6,9 +6,8 @@
 use rwire::{ChangeSet, SharedServerState};
 
 use crate::agent;
-use crate::db::{agent_tools, agents, endpoints, resolution};
-use crate::state::{AgentView, App, Editing, EndpointView, ToolCatalogEntry};
-use crate::workspace;
+use crate::db::{agent_prompts, agent_tools, agents, endpoints, resolution, workspaces};
+use crate::state::{AgentView, App, Editing, EndpointView, ToolCatalogEntry, WorkspaceView};
 
 /// Load the registry into the shared read-models. Called at boot and after each edit.
 pub fn project_registry(conn: &rusqlite::Connection, shared: &SharedServerState) {
@@ -33,16 +32,26 @@ pub fn project_registry(conn: &rusqlite::Connection, shared: &SharedServerState)
         })
         .collect();
     let web_agent = agents::web_agent(conn).unwrap_or_default();
+    let workspace_views: Vec<WorkspaceView> = workspaces::list(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|workspace| WorkspaceView {
+            id: workspace.id,
+            name: workspace.name,
+        })
+        .collect();
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
             App::FIELD_ENDPOINTS,
             App::FIELD_AGENTS,
             App::FIELD_WEB_AGENT,
+            App::FIELD_WORKSPACES,
         ]),
         |app| {
             app.endpoints = endpoint_views;
             app.agents = agent_views;
             app.web_agent = web_agent;
+            app.workspaces = workspace_views;
         },
     );
 }
@@ -89,6 +98,7 @@ pub fn upsert_agent(
     model: Option<String>,
     prompt: String,
     tools: Vec<String>,
+    workspace: Option<String>,
 ) {
     let endpoint = endpoint.filter(|value| !value.trim().is_empty());
     let model = model.filter(|value| !value.trim().is_empty());
@@ -123,43 +133,41 @@ pub fn upsert_agent(
     if let Err(err) = agent_tools::set_tools(conn, &id, &catalog) {
         return surface_error(shared, format!("save agent tools: {err}"));
     }
-    write_agent_prompt(conn, &id, name, &prompt);
+    // The identity prompt is operator-owned config (not a workspace file); a blank one
+    // clears it so the run falls back to the base prompt + the workspace brief.
+    if let Err(err) = agent_prompts::set(conn, &id, &prompt) {
+        return surface_error(shared, format!("save agent prompt: {err}"));
+    }
+    // Assign the chosen workspace, or mint the agent its own (id = agent id) when none was
+    // picked, so a fresh agent is immediately usable. `create` is idempotent, so sharing
+    // an existing workspace never renames it.
+    let workspace_id = workspace
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| id.clone());
+    if let Err(err) = workspaces::create(conn, &workspace_id, name) {
+        return surface_error(shared, format!("save workspace: {err}"));
+    }
+    if let Err(err) = workspaces::assign(conn, &id, &workspace_id) {
+        return surface_error(shared, format!("assign workspace: {err}"));
+    }
     project_registry(conn, shared);
 }
 
-/// Persist the agent's `AGENT.md` from the drawer. An empty prompt seeds the starter
-/// persona instead, so a new (or cleared) agent still has a usable system prompt.
-/// Best-effort — a filesystem failure logs but doesn't block the registry save.
-fn write_agent_prompt(conn: &rusqlite::Connection, id: &str, name: &str, prompt: &str) {
-    let Ok(Some(agent)) = agents::get(conn, id) else {
-        return;
-    };
-    let body = if prompt.trim().is_empty() {
-        workspace::starter_agent_md(name)
-    } else {
-        prompt.to_owned()
-    };
-    let dir = workspace::dir_for(&super::data_dir(), &agent.folder);
-    if let Err(err) = workspace::write_agent_md(&dir, &body) {
-        super::log_line(format!(
-            "admin: writing AGENT.md for '{name}' failed: {err}"
-        ));
-    }
-}
-
-/// Read an agent's `AGENT.md` into the open draft (mirrors `discover_models`). Called
-/// when the drawer opens an existing agent, so the System-prompt textarea is prefilled.
+/// Read an agent's identity prompt + workspace assignment into the open draft (mirrors
+/// `discover_models`). Called when the drawer opens an existing agent, so the System-prompt
+/// textarea and the workspace picker are prefilled.
 pub fn load_agent_prompt(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
-    let Ok(Some(agent)) = agents::get(conn, id) else {
-        return;
-    };
-    let dir = workspace::dir_for(&super::data_dir(), &agent.folder);
-    let prompt = workspace::read_agent_md(&dir).unwrap_or_default();
+    let prompt = agent_prompts::get(conn, id)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let workspace = workspaces::for_agent(conn, id).ok().flatten();
     shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_EDITING]), |app| {
         if let Some(Editing::Agent(draft)) = app.editing.as_mut()
             && draft.id.as_deref() == Some(id)
         {
             draft.prompt = prompt;
+            draft.workspace = workspace;
         }
     });
 }
