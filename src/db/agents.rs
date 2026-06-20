@@ -16,6 +16,8 @@ pub struct AgentGroup {
     pub name: String,
     pub endpoint: Option<String>,
     pub model: Option<String>,
+    /// The agent's workspace folder name (`NOT NULL UNIQUE`; always set, = id by default).
+    pub folder: String,
 }
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<AgentGroup> {
@@ -24,10 +26,11 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<AgentGroup> {
         name: row.get(1)?,
         endpoint: row.get(2)?,
         model: row.get(3)?,
+        folder: row.get(4)?,
     })
 }
 
-const SELECT: &str = "SELECT id, name, endpoint, model FROM agent_groups";
+const SELECT: &str = "SELECT id, name, endpoint, model, folder FROM agent_groups";
 
 /// The first agent group (any), if one exists — respects an agent inherited from a
 /// shared rust-claw central.db.
@@ -82,7 +85,7 @@ pub fn link(conn: &Connection, chat_id: &str, agent_group_id: &str) -> rusqlite:
 /// The agent group bound to a chat (lowest `priority` wins), if any.
 pub fn agent_for_chat(conn: &Connection, chat_id: &str) -> rusqlite::Result<Option<AgentGroup>> {
     conn.query_row(
-        "SELECT a.id, a.name, a.endpoint, a.model
+        "SELECT a.id, a.name, a.endpoint, a.model, a.folder
            FROM messaging_group_agents m
            JOIN agent_groups a ON a.id = m.agent_group_id
           WHERE m.messaging_group_id = ?1
@@ -213,6 +216,7 @@ mod tests {
                 name: "Writer".to_owned(),
                 endpoint: Some("e1".to_owned()),
                 model: Some("m1".to_owned()),
+                folder: "ag-1".to_owned(),
             })
         );
         update(&conn, "ag-1", "Editor", Some("e1"), Some("m2")).expect("update");
@@ -222,6 +226,14 @@ mod tests {
         assert_eq!(list(&conn).expect("list").len(), 1);
         delete(&conn, "ag-1").expect("delete");
         assert!(list(&conn).expect("list").is_empty());
+    }
+
+    #[test]
+    fn create_sets_folder_to_id() {
+        let conn = open_in_memory().expect("db");
+        endpoints::upsert(&conn, "e", "http://e/v1", None, None).expect("e");
+        create(&conn, "ag-1", "A", Some("e"), Some("m")).expect("create");
+        assert_eq!(get(&conn, "ag-1").unwrap().unwrap().folder, "ag-1");
     }
 
     #[test]

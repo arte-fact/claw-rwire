@@ -152,6 +152,29 @@ CREATE TABLE IF NOT EXISTS web_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_web_messages_group ON web_messages(messaging_group_id, id);
 
+-- Sidecar for tool turns: a `web_messages` row with kind='tool' carries the model-facing
+-- note in `body` and ordering; the structured payload for the UI card lives here. Additive
+-- (claw-rwire-only) — rust-claw never reads it, so it doesn't break the shared format.
+CREATE TABLE IF NOT EXISTS web_message_tools (
+  web_message_id INTEGER PRIMARY KEY REFERENCES web_messages(id),
+  name           TEXT NOT NULL,
+  arguments      TEXT NOT NULL,
+  result         TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  created_at     TEXT NOT NULL
+);
+
+-- Per-agent tool selection: one row per (agent, tool) with an enabled flag. Additive
+-- (claw-rwire-only). Absence of any row for an agent means "unconfigured" → the run falls
+-- back to a default set; once the drawer saves, every catalog tool gets a row, so an
+-- explicitly empty selection is distinguishable from never-configured.
+CREATE TABLE IF NOT EXISTS agent_tools (
+  agent_group_id TEXT NOT NULL REFERENCES agent_groups(id),
+  tool_name      TEXT NOT NULL,
+  enabled        INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (agent_group_id, tool_name)
+);
+
 CREATE TABLE IF NOT EXISTS connectors (
   id             TEXT PRIMARY KEY,
   kind           TEXT NOT NULL UNIQUE,

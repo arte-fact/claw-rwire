@@ -8,8 +8,11 @@ mod bridge;
 mod db;
 mod env_file;
 mod id;
+mod mcp;
 mod state;
+mod tools;
 mod ui;
+mod workspace;
 
 use std::error::Error;
 

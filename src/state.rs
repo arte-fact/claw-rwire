@@ -16,18 +16,33 @@ use rwire::State;
 pub enum Tab {
     #[default]
     Chat,
+    Archived,
     System,
+    Files,
     Activity,
     Logs,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Chat, Tab::System, Tab::Activity, Tab::Logs];
+    /// The tabs shown in the nav footer, below the live conversation list. Chat is
+    /// intentionally absent — the conversation list above the nav *is* the chat
+    /// surface, so a separate link would be redundant. (The `Chat` variant still backs
+    /// the `/` and `/chat/:id` routes; it's just not a nav row.) Archived leads the
+    /// footer as it's the closest relative of the conversations above.
+    pub const NAV: [Tab; 5] = [
+        Tab::Archived,
+        Tab::System,
+        Tab::Files,
+        Tab::Activity,
+        Tab::Logs,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Chat => "Chat",
+            Tab::Archived => "Archived",
             Tab::System => "System",
+            Tab::Files => "Files",
             Tab::Activity => "Activity",
             Tab::Logs => "Logs",
         }
@@ -37,9 +52,25 @@ impl Tab {
     pub fn path(self) -> &'static str {
         match self {
             Tab::Chat => "/",
+            Tab::Archived => "/archived",
             Tab::System => "/system",
+            Tab::Files => "/files",
             Tab::Activity => "/activity",
             Tab::Logs => "/logs",
+        }
+    }
+
+    /// The leading icon for this tab's nav row, so the nav rail is iconned uniformly
+    /// (matching New chat, the row actions, and Log out).
+    pub fn icon(self) -> rwire::icons::Icon {
+        use rwire::icons::Icon;
+        match self {
+            Tab::Chat => Icon::MessageSquare,
+            Tab::Archived => Icon::Archive,
+            Tab::System => Icon::Cpu,
+            Tab::Files => Icon::Folder,
+            Tab::Activity => Icon::Activity,
+            Tab::Logs => Icon::FileText,
         }
     }
 }
@@ -96,6 +127,26 @@ pub struct ChatMessage {
     pub time: String,
 }
 
+/// One item in the rendered thread: a chat turn or a tool-call card, interleaved in
+/// the order they happened.
+#[derive(Debug, Clone)]
+pub enum TranscriptItem {
+    Message(ChatMessage),
+    Tool(ToolCardView),
+}
+
+/// A tool invocation rendered as a collapsible card: what ran, with what arguments,
+/// the (full) result behind a disclosure, and whether it succeeded.
+#[derive(Debug, Clone)]
+pub struct ToolCardView {
+    pub name: String,
+    pub arguments: String,
+    pub result: String,
+    pub ok: bool,
+    /// `HH:MM` (UTC).
+    pub time: String,
+}
+
 /// An endpoint row for the System Map. The secret is never projected — only whether
 /// one is set — so the read-model can't leak it to the UI.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -115,6 +166,42 @@ pub struct AgentView {
     pub model: Option<String>,
 }
 
+/// One selectable tool in the agent drawer's tool picker: its source `group`
+/// (`"web"` / `"coder"`) and `name`. Projected once at boot from the connected MCP
+/// server + the built-in coder tools.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolCatalogEntry {
+    pub group: String,
+    pub name: String,
+}
+
+/// What a Files-view entry is. Mirrors `workspace::ops::EntryKind` as a UI-side value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FileKind {
+    Dir,
+    #[default]
+    File,
+    Symlink,
+}
+
+/// One row in the Files view's directory listing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileEntry {
+    pub name: String,
+    pub kind: FileKind,
+    pub size: u64,
+}
+
+/// The file open in the Files view's right pane. `editable` is false for binary/oversized
+/// files, with `note` explaining why; the editor is then replaced by that note.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OpenFile {
+    pub path: String,
+    pub content: String,
+    pub editable: bool,
+    pub note: Option<String>,
+}
+
 /// What the System Map's right drawer is editing, if open. Endpoints/Channel keep the
 /// row *key* (the drawer reads current values from `App`); the agent form is
 /// *controlled* — it carries a live draft so it can re-render (when discovered models
@@ -127,13 +214,17 @@ pub enum Editing {
 }
 
 /// In-progress agent edit. `id == None` is a new agent; the rest mirror the form
-/// fields so a re-render restores them.
+/// fields so a re-render restores them. `prompt` is the agent's `AGENT.md` (its system
+/// prompt) and `tools` its enabled tool names — both loaded from disk/DB when an
+/// existing agent is opened.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentDraft {
     pub id: Option<String>,
     pub name: String,
     pub endpoint: Option<String>,
     pub model: String,
+    pub prompt: String,
+    pub tools: Vec<String>,
 }
 
 /// Process-global projection. Selection (`open_chat`) lives here rather than in
@@ -147,10 +238,17 @@ pub struct App {
     pub pipeline_ready: bool,
     /// Chat threads for the sidebar.
     pub chats: Vec<ChatSummary>,
+    /// Archived threads, shown on the dedicated `/archived` screen. Filled by the
+    /// bridge (`Command::ListArchived`) when that route opens.
+    pub archived: Vec<ChatSummary>,
+    /// The archived chat awaiting a delete confirmation (its row shows a confirm/cancel
+    /// prompt). `None` when no delete is pending. Delete is irreversible, so it's a
+    /// two-step inline confirm rather than a one-click action.
+    pub pending_delete: Option<String>,
     /// The currently open thread id (shared across this operator's tabs).
     pub open_chat: Option<String>,
-    /// Transcript of the open thread.
-    pub messages: Vec<ChatMessage>,
+    /// Transcript of the open thread — chat turns and tool cards, interleaved.
+    pub messages: Vec<TranscriptItem>,
     /// The agent is producing a reply on the open thread.
     pub sending: bool,
     /// A transient error from the last turn (e.g. the endpoint failed). Shown as a
@@ -166,6 +264,27 @@ pub struct App {
     /// Models discovered from the agent draft's selected endpoint (`/v1/models`),
     /// populating the agent form's model dropdown. Empty until an endpoint is chosen.
     pub endpoint_models: Vec<String>,
+    /// Every selectable tool (web + coder), projected once at boot — the source for the
+    /// agent drawer's tool picker.
+    pub tool_catalog: Vec<ToolCatalogEntry>,
+    /// Files view: the agent whose workspace is being browsed.
+    pub files_agent: Option<String>,
+    /// Files view: the current directory, relative to the workspace root (`""` = root).
+    pub files_path: String,
+    /// Files view: entries of `files_path` (dirs first).
+    pub files_entries: Vec<FileEntry>,
+    /// Files view: the file open in the editor pane, if any.
+    pub files_open: Option<OpenFile>,
+    /// Files view: which inline create prompt is open (`"file"` / `"folder"`), if any.
+    pub files_creating: Option<String>,
+    /// Files view: the controlled name input in the inline create prompt.
+    pub files_new_name: String,
+    /// Files view: the entry path currently being renamed (its row shows an input).
+    pub files_rename: Option<String>,
+    /// Files view: the entry path awaiting a delete confirm.
+    pub files_pending_delete: Option<String>,
+    /// Files view: a transient error/result banner (jailed path, write failure, …).
+    pub files_error: Option<String>,
     /// Chat ids with an in-flight agent run (drives the sidebar busy dots).
     pub running: Vec<String>,
     /// Recent run-lifecycle events for the Activity board (newest first, capped).

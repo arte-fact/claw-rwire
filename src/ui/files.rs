@@ -1,0 +1,825 @@
+//! The Files view: a framed two-pane workspace manager — a directory browser (breadcrumb
+//! header, inline create prompt, entry rows with hover/active states + rename/delete)
+//! beside a file editor. All filesystem work happens on the bridge (`bridge::files`); this
+//! view sends `Command`s and renders the projected `App.files_*` read-models. Ported from
+//! rust-claw's Files manager, adapted to the Command/renderer model.
+
+use rwire::style::Style;
+use rwire::{El, ElementBuilder, Ev, HandlerSpec, St, el, handler, icons, renderer};
+use rwire_components::Text;
+
+use crate::bridge::{self, Command};
+use crate::state::{App, FileEntry, FileKind};
+use crate::ui::widgets::page_header;
+
+pub fn page() -> ElementBuilder {
+    el(El::Div)
+        .style(Style::new().min_height("0").overflow("auto"))
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg, St::PXl])
+        .append([
+            page_header(
+                "Files",
+                "Browse and edit an agent's workspace.",
+                agent_select(),
+            ),
+            error_banner(),
+            panes(),
+        ])
+}
+
+/// A `<select>` of agents; switching re-lists that agent's workspace root.
+#[renderer]
+fn agent_select(app: &App) -> ElementBuilder {
+    if app.agents.is_empty() {
+        return el(El::Div).style(Style::new().display("none"));
+    }
+    let selected = app.files_agent.as_deref();
+    let options = app.agents.iter().map(|agent| {
+        let option = el(El::Option).attr("value", &agent.id).text(&agent.name);
+        if selected == Some(agent.id.as_str()) {
+            option.bool_attr(rwire::At::Selected)
+        } else {
+            option
+        }
+    });
+    el(El::Select)
+        .attr("name", "agent")
+        .on(Ev::Change, agent_changed())
+        .style(Style::new().set("font", "inherit"))
+        .st([
+            St::PxSm,
+            St::PySm,
+            St::BorderDefault,
+            St::RoundedSm,
+            St::BgSurface,
+            St::TextHigh,
+            St::OutlineNone,
+        ])
+        .append(options)
+}
+
+#[renderer]
+fn error_banner(app: &App) -> ElementBuilder {
+    match &app.files_error {
+        Some(message) => el(El::Div)
+            .st([
+                St::PxMd,
+                St::PySm,
+                St::TextXs,
+                St::TextError,
+                St::BgSurface,
+                St::BorderDefault,
+                St::RoundedSm,
+            ])
+            .append([el(El::Span).text(&format!("⚠ {message}"))]),
+        None => el(El::Div).style(Style::new().display("none")),
+    }
+}
+
+/// Browser (left) + editor (right); stacks on mobile, side-by-side on `md+` with the
+/// editor given the larger share.
+fn panes() -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapLg, St::ItemsStart])
+        .md([St::FlexRow])
+        .append([
+            el(El::Div)
+                .style(Style::new().min_width("0").set("flex", "1 1 0"))
+                .st([St::WFull])
+                .append([browser()]),
+            el(El::Div)
+                .style(Style::new().min_width("0").set("flex", "1.6 1 0"))
+                .st([St::WFull])
+                .append([editor()]),
+        ])
+}
+
+/// A framed panel: header bar + body, used for both panes.
+fn panel(header: ElementBuilder, body: ElementBuilder) -> ElementBuilder {
+    el(El::Div)
+        .st([
+            St::DisplayFlex,
+            St::FlexCol,
+            St::BorderDefault,
+            St::RoundedLg,
+            St::BgSurface,
+            St::OverflowHidden,
+        ])
+        .append([
+            el(El::Div)
+                .st([
+                    St::DisplayFlex,
+                    St::ItemsCenter,
+                    St::JustifyBetween,
+                    St::GapMd,
+                    St::PxMd,
+                    St::PySm,
+                    St::BorderBSubtle,
+                ])
+                .append([header]),
+            body,
+        ])
+}
+
+// ── Browser ────────────────────────────────────────────────────────────────────
+
+#[renderer]
+fn browser(app: &App) -> ElementBuilder {
+    let header = el(El::Div)
+        .style(Style::new().min_width("0"))
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::JustifyBetween,
+            St::GapMd,
+            St::Flex1,
+        ])
+        .append([breadcrumb(&app.files_path), create_actions()]);
+
+    let mut body_children: Vec<ElementBuilder> = Vec::new();
+    if let Some(kind) = &app.files_creating {
+        body_children.push(create_row(kind, &app.files_new_name));
+    }
+    body_children.push(listing_inner(app));
+
+    let body = el(El::Div)
+        .style(Style::new().min_height("0").set("max-height", "26rem"))
+        .st([St::DisplayFlex, St::FlexCol, St::OverflowYAuto, St::PSm])
+        .append(body_children);
+    panel(header, body)
+}
+
+/// Clickable path crumbs: `root / sub / dir`.
+fn breadcrumb(path: &str) -> ElementBuilder {
+    let mut crumbs = vec![crumb("root", "")];
+    let mut prefix = String::new();
+    for segment in path.split('/').filter(|s| !s.is_empty()) {
+        prefix = if prefix.is_empty() {
+            segment.to_owned()
+        } else {
+            format!("{prefix}/{segment}")
+        };
+        crumbs.push(el(El::Span).st([St::TextLow]).text("/"));
+        crumbs.push(crumb(segment, &prefix));
+    }
+    el(El::Div)
+        .style(Style::new().min_width("0"))
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapXs,
+            St::TextXs,
+            St::FontMono,
+            St::TextMuted,
+            St::Truncate,
+        ])
+        .append(crumbs)
+}
+
+fn crumb(label: &str, path: &str) -> ElementBuilder {
+    el(El::Button)
+        .attr("type", "button")
+        .data("path", path)
+        .on(Ev::Click, navigate())
+        .style(
+            Style::new()
+                .set("font", "inherit")
+                .set("border", "none")
+                .set("background", "transparent"),
+        )
+        .st([St::CursorPointer, St::TextMuted, St::FlexShrink0])
+        .hover([St::TextAccent])
+        .text(label)
+}
+
+/// The `+ File` / `+ Folder` icon buttons in the browser header.
+fn create_actions() -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapXs, St::FlexShrink0])
+        .append([
+            ghost_button(icons::Icon::FileText, "File", start_new_file()),
+            ghost_button(icons::Icon::Folder, "Folder", start_new_folder()),
+        ])
+}
+
+fn ghost_button(icon: icons::Icon, label: &str, on_click: HandlerSpec) -> ElementBuilder {
+    el(El::Button)
+        .attr("type", "button")
+        .on(Ev::Click, on_click)
+        .style(
+            Style::new()
+                .set("font", "inherit")
+                .set("border", "none")
+                .set("background", "transparent"),
+        )
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapXs,
+            St::PxXs,
+            St::TextXs,
+            St::TextMuted,
+            St::CursorPointer,
+        ])
+        .hover([St::TextAccent])
+        .append([icons::icon_sized(icon, 13), el(El::Span).text(label)])
+}
+
+/// The inline create prompt shown above the listing when `+ File`/`+ Folder` is clicked.
+fn create_row(kind: &str, value: &str) -> ElementBuilder {
+    let label = if kind == "folder" { "folder" } else { "file" };
+    el(El::Form)
+        .on(Ev::Submit, submit_create())
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::PySm,
+            St::PxXs,
+            St::BorderBSubtle,
+        ])
+        .append([
+            el(El::Span)
+                .st([St::TextLow, St::TextXs, St::FlexShrink0])
+                .append([icons::icon_sized(
+                    if kind == "folder" {
+                        icons::Icon::Folder
+                    } else {
+                        icons::Icon::FileText
+                    },
+                    13,
+                )]),
+            el(El::Input)
+                .attr("name", "newname")
+                .attr("value", value)
+                .attr("autocomplete", "off")
+                .at_str(rwire::At::Placeholder, &format!("new {label} name…"))
+                .on(Ev::Change, new_name_changed())
+                .style(Style::new().set("font", "inherit"))
+                .st([
+                    St::Flex1,
+                    St::PxSm,
+                    St::PyXs,
+                    St::BorderDefault,
+                    St::RoundedSm,
+                    St::BgApp,
+                    St::TextHigh,
+                    St::OutlineNone,
+                ])
+                .focus([St::BorderAccent]),
+            pill_button("Create", submit_create(), true),
+            row_action(icons::Icon::Close, cancel_create(), None, false),
+        ])
+}
+
+/// The directory entries (and a `..` row when not at root).
+fn listing_inner(app: &App) -> ElementBuilder {
+    let mut rows: Vec<ElementBuilder> = Vec::new();
+    if !app.files_path.is_empty() {
+        rows.push(up_row(parent_of(&app.files_path)));
+    }
+    if app.files_entries.is_empty() && app.files_creating.is_none() {
+        rows.push(
+            el(El::Div)
+                .st([St::PMd, St::TextXs, St::TextMuted, St::TextCenter])
+                .text("empty folder"),
+        );
+    }
+    let rename = app.files_rename.as_deref();
+    let pending = app.files_pending_delete.as_deref();
+    let open = app.files_open.as_ref().map(|f| f.path.as_str());
+    for entry in &app.files_entries {
+        let path = join(&app.files_path, &entry.name);
+        rows.push(if rename == Some(path.as_str()) {
+            rename_row(&entry.name)
+        } else {
+            entry_row(
+                entry,
+                &path,
+                pending == Some(path.as_str()),
+                open == Some(path.as_str()),
+            )
+        });
+    }
+    el(El::Div).st([St::DisplayFlex, St::FlexCol]).append(rows)
+}
+
+/// The `..` parent row.
+fn up_row(parent: String) -> ElementBuilder {
+    el(El::Button)
+        .attr("type", "button")
+        .data("path", &parent)
+        .on(Ev::Click, navigate())
+        .style(
+            Style::new()
+                .set("font", "inherit")
+                .set("border", "none")
+                .set("background", "transparent")
+                .set("text-align", "left"),
+        )
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::PyXs,
+            St::PxSm,
+            St::RoundedSm,
+            St::TextSm,
+            St::TextMuted,
+            St::CursorPointer,
+        ])
+        .hover([St::TextHigh, St::BgSubtle])
+        .append([
+            icons::icon_sized(icons::Icon::ArrowUp, 14),
+            el(El::Span).text(".."),
+        ])
+}
+
+/// One entry: a folder (descend) or file (open) on the left, rename/delete on the right.
+/// `active` is the open file (highlighted); `pending_delete` swaps to a `delete?` confirm.
+fn entry_row(entry: &FileEntry, path: &str, pending_delete: bool, active: bool) -> ElementBuilder {
+    let (icon, icon_color, handler, suffix) = match entry.kind {
+        FileKind::Dir => (
+            icons::Icon::Folder,
+            St::TextAccent,
+            navigate(),
+            "/".to_owned(),
+        ),
+        FileKind::File => (
+            icons::Icon::FileText,
+            St::TextLow,
+            open_file(),
+            String::new(),
+        ),
+        FileKind::Symlink => (
+            icons::Icon::FileText,
+            St::TextLow,
+            open_file(),
+            " →".to_owned(),
+        ),
+    };
+    let name_color = if active {
+        St::TextAccent
+    } else {
+        St::TextDefault
+    };
+    let open = el(El::Button)
+        .attr("type", "button")
+        .data("path", path)
+        .on(Ev::Click, handler)
+        .style(
+            Style::new()
+                .set("font", "inherit")
+                .set("border", "none")
+                .set("background", "transparent")
+                .set("text-align", "left")
+                .min_width("0"),
+        )
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::Flex1,
+            St::TextSm,
+            name_color,
+            St::CursorPointer,
+            St::Truncate,
+        ])
+        .append([
+            el(El::Span)
+                .st([icon_color])
+                .append([icons::icon_sized(icon, 14)]),
+            el(El::Span)
+                .st([St::Truncate])
+                .text(&format!("{}{suffix}", entry.name)),
+            el(El::Span)
+                .st([St::TextLow, St::TextXs, St::FlexShrink0])
+                .text(&size_label(entry)),
+        ]);
+
+    let actions = if pending_delete {
+        vec![
+            el(El::Span).st([St::TextXs, St::TextError]).text("delete?"),
+            row_action(icons::Icon::Trash, confirm_delete(), Some(path), true),
+            row_action(icons::Icon::Close, cancel_delete(), None, false),
+        ]
+    } else {
+        vec![
+            row_action(icons::Icon::FileText, start_rename(), Some(path), false),
+            row_action(icons::Icon::Trash, ask_delete(), Some(path), false),
+        ]
+    };
+    let mut row = el(El::Div)
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::PyXs,
+            St::PxSm,
+            St::RoundedSm,
+        ])
+        .hover([St::BgSubtle]);
+    if active {
+        row = row.st([St::BgSubtle]);
+    }
+    row.append([open].into_iter().chain(actions))
+}
+
+/// The inline rename editor for one row: an (uncontrolled) input + confirm/cancel.
+fn rename_row(current: &str) -> ElementBuilder {
+    el(El::Form)
+        .on(Ev::Submit, submit_rename())
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::PyXs,
+            St::PxSm,
+        ])
+        .append([
+            el(El::Input)
+                .attr("name", "to")
+                .attr("value", current)
+                .attr("autocomplete", "off")
+                .style(Style::new().set("font", "inherit"))
+                .st([
+                    St::Flex1,
+                    St::PxSm,
+                    St::PyXs,
+                    St::BorderDefault,
+                    St::RoundedSm,
+                    St::BgApp,
+                    St::TextHigh,
+                    St::OutlineNone,
+                ])
+                .focus([St::BorderAccent]),
+            pill_button("Rename", submit_rename(), false),
+            row_action(icons::Icon::Close, cancel_rename(), None, false),
+        ])
+}
+
+/// A subtle pill button (used for inline confirms). `submit_handler` is unused here — the
+/// button is a form submit — but kept so callers read declaratively.
+fn pill_button(label: &str, _submit_handler: HandlerSpec, accent: bool) -> ElementBuilder {
+    let (bg, fg) = if accent {
+        (St::BgAccent, St::TextOnAccent)
+    } else {
+        (St::BgApp, St::TextHigh)
+    };
+    el(El::Button)
+        .attr("type", "submit")
+        .style(Style::new().set("font", "inherit").set("border", "none"))
+        .st([
+            St::FlexShrink0,
+            St::PxMd,
+            St::PyXs,
+            St::RoundedSm,
+            bg,
+            fg,
+            St::TextXs,
+            St::CursorPointer,
+        ])
+        .text(label)
+}
+
+fn row_action(
+    icon: icons::Icon,
+    on_click: HandlerSpec,
+    path: Option<&str>,
+    danger: bool,
+) -> ElementBuilder {
+    let color = if danger { St::TextError } else { St::TextLow };
+    let button = el(El::Button)
+        .attr("type", "button")
+        .on(Ev::Click, on_click)
+        .style(
+            Style::new()
+                .set("font", "inherit")
+                .set("border", "none")
+                .set("background", "transparent"),
+        )
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::PxXs,
+            St::FlexShrink0,
+            St::CursorPointer,
+            color,
+        ])
+        .hover([St::TextHigh])
+        .append([icons::icon_sized(icon, 14)]);
+    match path {
+        Some(p) => button.data("path", p),
+        None => button,
+    }
+}
+
+// ── Editor ─────────────────────────────────────────────────────────────────────
+
+#[renderer]
+fn editor(app: &App) -> ElementBuilder {
+    let Some(open) = &app.files_open else {
+        return panel(
+            el(El::Span)
+                .st([St::TextXs, St::TextMuted, St::FontMono])
+                .text("editor"),
+            placeholder("Select a file to view or edit it."),
+        );
+    };
+
+    let filename = el(El::Span)
+        .style(Style::new().min_width("0"))
+        .st([St::TextSm, St::FontMono, St::TextHigh, St::Truncate])
+        .text(&open.path);
+
+    if !open.editable {
+        let header = header_row([filename, el(El::Span).style(Style::new().display("none"))]);
+        return panel(
+            header,
+            placeholder(open.note.as_deref().unwrap_or("Not editable.")),
+        );
+    }
+
+    // The editor panel IS a form, so the header's Save (a submit button) reads the body's
+    // textarea. Keyed by path so switching files yields a fresh, re-seeded textarea.
+    let field_id = format!("editor-{}", open.path);
+    let lines = open.content.lines().count().max(1);
+    let chars = open.content.chars().count();
+    el(El::Form)
+        .on(Ev::Submit, save_file())
+        .st([
+            St::DisplayFlex,
+            St::FlexCol,
+            St::BorderDefault,
+            St::RoundedLg,
+            St::BgSurface,
+            St::OverflowHidden,
+        ])
+        .append([
+            el(El::Div)
+                .st([
+                    St::DisplayFlex,
+                    St::ItemsCenter,
+                    St::JustifyBetween,
+                    St::GapMd,
+                    St::PxMd,
+                    St::PySm,
+                    St::BorderBSubtle,
+                ])
+                .append([header_row([filename, save_button()])]),
+            el(El::Textarea)
+                .id(&field_id)
+                .attr("name", "content")
+                .attr("spellcheck", "false")
+                .st([
+                    St::WFull,
+                    St::PMd,
+                    St::BgApp,
+                    St::TextDefault,
+                    St::FontMono,
+                    St::TextXs,
+                ])
+                .style(
+                    Style::new()
+                        .set("outline", "none")
+                        .set("border", "none")
+                        .set("resize", "vertical")
+                        .set("min-height", "24rem")
+                        .set("white-space", "pre"),
+                )
+                .text(&open.content),
+            el(El::Div)
+                .st([
+                    St::PxMd,
+                    St::PyXs,
+                    St::BorderTSubtle,
+                    St::TextLow,
+                    St::TextXs,
+                    St::FontMono,
+                ])
+                .text(&format!("{lines} lines · {chars} chars")),
+        ])
+}
+
+/// A centered placeholder body for the editor panel (no file / not editable).
+fn placeholder(text: &str) -> ElementBuilder {
+    el(El::Div)
+        .style(Style::new().set("min-height", "26rem"))
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::JustifyCenter,
+            St::PMd,
+            St::TextSm,
+            St::TextMuted,
+        ])
+        .append([Text::body(text.to_owned()).muted().build()])
+}
+
+/// A spaced filename + action header row (used inside the panel's header bar / form).
+fn header_row(children: [ElementBuilder; 2]) -> ElementBuilder {
+    el(El::Div)
+        .style(Style::new().min_width("0"))
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::JustifyBetween,
+            St::GapMd,
+            St::Flex1,
+        ])
+        .append(children)
+}
+
+fn save_button() -> ElementBuilder {
+    el(El::Button)
+        .attr("type", "submit")
+        .style(Style::new().set("font", "inherit").set("border", "none"))
+        .st([
+            St::FlexShrink0,
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapXs,
+            St::PxMd,
+            St::PyXs,
+            St::RoundedMd,
+            St::BgAccent,
+            St::TextOnAccent,
+            St::CursorPointer,
+        ])
+        .hover([St::BgAccentHover])
+        .append([
+            icons::icon_sized(icons::Icon::Check, 14),
+            el(El::Span).text("Save"),
+        ])
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+fn join(dir: &str, name: &str) -> String {
+    if dir.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+fn parent_of(path: &str) -> String {
+    path.rsplit_once('/')
+        .map_or(String::new(), |(p, _)| p.to_owned())
+}
+
+fn size_label(entry: &FileEntry) -> String {
+    if entry.kind == FileKind::Dir {
+        return String::new();
+    }
+    let size = entry.size;
+    if size >= 1 << 20 {
+        format!("{}M", size >> 20)
+    } else if size >= 1 << 10 {
+        format!("{}K", size >> 10)
+    } else {
+        format!("{size}B")
+    }
+}
+
+// ── Handlers ────────────────────────────────────────────────────────────────────
+
+#[handler]
+fn agent_changed(app: &mut App, ctx: &EventContext) {
+    let _ = app; // side-effect only: the bridge re-projects files_agent
+    if let Some(agent) = ctx.text().map(str::to_owned).filter(|v| !v.is_empty()) {
+        bridge::send(Command::ListDir {
+            agent,
+            path: String::new(),
+        });
+    }
+}
+
+/// Navigate into the directory named by the clicked element's `data-path`.
+#[handler]
+fn navigate(app: &mut App, ctx: &EventContext) {
+    if let (Some(agent), Some(path)) = (app.files_agent.clone(), ctx.data("path")) {
+        bridge::send(Command::ListDir {
+            agent,
+            path: path.to_owned(),
+        });
+    }
+}
+
+#[handler]
+fn open_file(app: &mut App, ctx: &EventContext) {
+    if let (Some(agent), Some(path)) = (app.files_agent.clone(), ctx.data("path")) {
+        bridge::send(Command::OpenFile {
+            agent,
+            path: path.to_owned(),
+        });
+    }
+}
+
+#[handler]
+fn start_new_file(app: &mut App) {
+    app.files_creating = Some("file".to_owned());
+    app.files_new_name.clear();
+}
+
+#[handler]
+fn start_new_folder(app: &mut App) {
+    app.files_creating = Some("folder".to_owned());
+    app.files_new_name.clear();
+}
+
+#[handler]
+fn cancel_create(app: &mut App) {
+    app.files_creating = None;
+    app.files_new_name.clear();
+}
+
+#[handler]
+fn new_name_changed(app: &mut App, ctx: &EventContext) {
+    app.files_new_name = ctx.text().unwrap_or_default().to_owned();
+}
+
+#[handler]
+fn submit_create(app: &mut App, ctx: &EventContext) {
+    let Some(agent) = app.files_agent.clone() else {
+        return;
+    };
+    // The name is controlled in `files_new_name`, but a fast submit may beat the change
+    // event — fall back to the form field.
+    let name = ctx
+        .field("newname")
+        .map(str::to_owned)
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| app.files_new_name.clone());
+    let name = name.trim().to_owned();
+    if name.is_empty() {
+        return;
+    }
+    let path = join(&app.files_path, &name);
+    match app.files_creating.as_deref() {
+        Some("folder") => bridge::send(Command::NewFolder { agent, path }),
+        _ => bridge::send(Command::WriteFile {
+            agent,
+            path,
+            content: String::new(),
+        }),
+    }
+}
+
+#[handler]
+fn start_rename(app: &mut App, ctx: &EventContext) {
+    if let Some(path) = ctx.data("path") {
+        app.files_rename = Some(path.to_owned());
+    }
+}
+
+#[handler]
+fn cancel_rename(app: &mut App) {
+    app.files_rename = None;
+}
+
+#[handler]
+fn submit_rename(app: &mut App, ctx: &EventContext) {
+    let (Some(agent), Some(from)) = (app.files_agent.clone(), app.files_rename.take()) else {
+        return;
+    };
+    let name = ctx.field("to").unwrap_or_default().trim().to_owned();
+    if name.is_empty() {
+        return;
+    }
+    let to = join(&app.files_path, &name);
+    bridge::send(Command::RenameEntry { agent, from, to });
+}
+
+#[handler]
+fn ask_delete(app: &mut App, ctx: &EventContext) {
+    if let Some(path) = ctx.data("path") {
+        app.files_pending_delete = Some(path.to_owned());
+    }
+}
+
+#[handler]
+fn cancel_delete(app: &mut App) {
+    app.files_pending_delete = None;
+}
+
+#[handler]
+fn confirm_delete(app: &mut App) {
+    if let (Some(agent), Some(path)) = (app.files_agent.clone(), app.files_pending_delete.take()) {
+        bridge::send(Command::DeleteEntry { agent, path });
+    }
+}
+
+#[handler]
+fn save_file(app: &mut App, ctx: &EventContext) {
+    let (Some(agent), Some(open)) = (app.files_agent.clone(), app.files_open.as_ref()) else {
+        return;
+    };
+    let path = open.path.clone();
+    let content = ctx.field("content").unwrap_or_default().to_owned();
+    bridge::send(Command::WriteFile {
+        agent,
+        path,
+        content,
+    });
+}

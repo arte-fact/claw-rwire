@@ -4,14 +4,22 @@
 
 use rusqlite::Connection;
 
-use super::agents;
 use super::endpoints::{self, Endpoint};
+use super::{agent_tools, agents};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedInference {
     pub base_url: String,
     pub model: String,
     pub api_key: Option<String>,
+    /// The agent's display name — used to seed a fresh `AGENT.md` persona.
+    pub agent_name: String,
+    /// The agent's workspace folder name — the worker resolves
+    /// `<data>/workspaces/<folder>` from this for the coder tools + `AGENT.md`.
+    pub folder: String,
+    /// The agent's enabled tool names, or `None` if it has never been configured (the
+    /// run then applies its default selection). Gates which tools the model is offered.
+    pub tools: Option<Vec<String>>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -76,10 +84,14 @@ pub fn resolve_for_chat(
             agent: agent.name.clone(),
         })?;
     let api_key = api_key_for(&endpoint, env)?;
+    let tools = agent_tools::selection(conn, &agent.id).map_err(db)?;
     Ok(ResolvedInference {
         base_url: endpoint.base_url,
         model,
         api_key,
+        agent_name: agent.name,
+        folder: agent.folder,
+        tools,
     })
 }
 

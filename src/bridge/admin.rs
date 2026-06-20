@@ -6,8 +6,9 @@
 use rwire::{ChangeSet, SharedServerState};
 
 use crate::agent;
-use crate::db::{agents, endpoints, resolution};
-use crate::state::{AgentView, App, EndpointView};
+use crate::db::{agent_tools, agents, endpoints, resolution};
+use crate::state::{AgentView, App, Editing, EndpointView, ToolCatalogEntry};
+use crate::workspace;
 
 /// Load the registry into the shared read-models. Called at boot and after each edit.
 pub fn project_registry(conn: &rusqlite::Connection, shared: &SharedServerState) {
@@ -78,6 +79,7 @@ pub fn delete_endpoint(conn: &rusqlite::Connection, shared: &SharedServerState, 
     project_registry(conn, shared);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_agent(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
@@ -85,22 +87,115 @@ pub fn upsert_agent(
     name: &str,
     endpoint: Option<String>,
     model: Option<String>,
+    prompt: String,
+    tools: Vec<String>,
 ) {
     let endpoint = endpoint.filter(|value| !value.trim().is_empty());
     let model = model.filter(|value| !value.trim().is_empty());
-    let result = match &id {
-        Some(id) => agents::update(conn, id, name, endpoint.as_deref(), model.as_deref()),
+    // Create or update the row, then persist the tool selection and AGENT.md. `id` is the
+    // existing id on edit, or a freshly minted one on create.
+    let id = match &id {
+        Some(id) => match agents::update(conn, id, name, endpoint.as_deref(), model.as_deref()) {
+            Ok(()) => id.clone(),
+            Err(err) => return surface_error(shared, format!("save agent '{name}': {err}")),
+        },
         None => match crate::id::new_id() {
             Ok(new_id) => {
-                agents::create(conn, &new_id, name, endpoint.as_deref(), model.as_deref())
+                if let Err(err) =
+                    agents::create(conn, &new_id, name, endpoint.as_deref(), model.as_deref())
+                {
+                    return surface_error(shared, format!("save agent '{name}': {err}"));
+                }
+                new_id
             }
             Err(err) => return surface_error(shared, format!("create agent: {err}")),
         },
     };
-    if let Err(err) = result {
-        return surface_error(shared, format!("save agent '{name}': {err}"));
+    // Write a row for every catalog tool (enabled iff selected), so the agent is marked
+    // "configured" and an all-off selection is honoured rather than treated as default.
+    let catalog: Vec<(String, bool)> = super::tool_catalog()
+        .into_iter()
+        .map(|(_, tool)| {
+            let enabled = tools.iter().any(|selected| selected == &tool);
+            (tool, enabled)
+        })
+        .collect();
+    if let Err(err) = agent_tools::set_tools(conn, &id, &catalog) {
+        return surface_error(shared, format!("save agent tools: {err}"));
     }
+    write_agent_prompt(conn, &id, name, &prompt);
     project_registry(conn, shared);
+}
+
+/// Persist the agent's `AGENT.md` from the drawer. An empty prompt seeds the starter
+/// persona instead, so a new (or cleared) agent still has a usable system prompt.
+/// Best-effort — a filesystem failure logs but doesn't block the registry save.
+fn write_agent_prompt(conn: &rusqlite::Connection, id: &str, name: &str, prompt: &str) {
+    let Ok(Some(agent)) = agents::get(conn, id) else {
+        return;
+    };
+    let body = if prompt.trim().is_empty() {
+        workspace::starter_agent_md(name)
+    } else {
+        prompt.to_owned()
+    };
+    let dir = workspace::dir_for(&super::data_dir(), &agent.folder);
+    if let Err(err) = workspace::write_agent_md(&dir, &body) {
+        super::log_line(format!(
+            "admin: writing AGENT.md for '{name}' failed: {err}"
+        ));
+    }
+}
+
+/// Read an agent's `AGENT.md` into the open draft (mirrors `discover_models`). Called
+/// when the drawer opens an existing agent, so the System-prompt textarea is prefilled.
+pub fn load_agent_prompt(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+    let Ok(Some(agent)) = agents::get(conn, id) else {
+        return;
+    };
+    let dir = workspace::dir_for(&super::data_dir(), &agent.folder);
+    let prompt = workspace::read_agent_md(&dir).unwrap_or_default();
+    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_EDITING]), |app| {
+        if let Some(Editing::Agent(draft)) = app.editing.as_mut()
+            && draft.id.as_deref() == Some(id)
+        {
+            draft.prompt = prompt;
+        }
+    });
+}
+
+/// Read an agent's enabled tools into the open draft. An unconfigured agent defaults to
+/// all web/MCP tools pre-checked (coder off), matching the run's default selection.
+pub fn load_agent_tools(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+    let tools = match agent_tools::selection(conn, id) {
+        Ok(Some(enabled)) => enabled,
+        Ok(None) => super::tool_catalog()
+            .into_iter()
+            .filter(|(group, _)| group == "web")
+            .map(|(_, name)| name)
+            .collect(),
+        Err(_) => return,
+    };
+    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_EDITING]), |app| {
+        if let Some(Editing::Agent(draft)) = app.editing.as_mut()
+            && draft.id.as_deref() == Some(id)
+        {
+            draft.tools = tools;
+        }
+    });
+}
+
+/// Project the selectable-tool catalog (coder + connected web tools) into `App` once at
+/// boot, so the agent drawer's tool picker has a source to render from.
+pub fn project_tool_catalog(shared: &SharedServerState) {
+    let catalog: Vec<ToolCatalogEntry> = super::tool_catalog()
+        .into_iter()
+        .map(|(group, name)| ToolCatalogEntry { group, name })
+        .collect();
+    shared
+        .update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_TOOL_CATALOG]), |app| {
+            app.tool_catalog = catalog
+        });
 }
 
 pub fn delete_agent(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {

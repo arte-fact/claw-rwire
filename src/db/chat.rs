@@ -4,7 +4,7 @@
 
 use rusqlite::Connection;
 
-use crate::state::{ChatMessage, ChatSummary, MessageRole};
+use crate::state::{ChatMessage, ChatSummary, MessageRole, ToolCardView, TranscriptItem};
 
 const WEB: &str = "web";
 
@@ -45,6 +45,66 @@ pub fn list_chats(conn: &Connection) -> rusqlite::Result<Vec<ChatSummary>> {
     rows.collect()
 }
 
+/// Archived threads (`archived_at` set), most-recently-archived first. The sidebar's
+/// "Archived" section reads this; the active `list_chats` excludes these rows.
+pub fn list_archived_chats(conn: &Connection) -> rusqlite::Result<Vec<ChatSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, COALESCE(NULLIF(name, ''), 'New chat')
+           FROM messaging_groups
+          WHERE channel_type = ?1 AND archived_at IS NOT NULL
+          ORDER BY archived_at DESC, id DESC",
+    )?;
+    let rows = stmt.query_map([WEB], |row| {
+        Ok(ChatSummary {
+            id: row.get(0)?,
+            title: row.get(1)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Hide a thread from the active list by stamping `archived_at`. Idempotent: a
+/// re-archive just refreshes the timestamp.
+pub fn archive_chat(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE messaging_groups
+            SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE id = ?1 AND channel_type = ?2",
+        rusqlite::params![id, WEB],
+    )?;
+    Ok(())
+}
+
+/// Restore an archived thread to the active list by clearing `archived_at`.
+pub fn unarchive_chat(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE messaging_groups SET archived_at = NULL
+          WHERE id = ?1 AND channel_type = ?2",
+        rusqlite::params![id, WEB],
+    )?;
+    Ok(())
+}
+
+/// Permanently delete a thread and everything that hangs off it: its transcript
+/// (`web_messages`) and any agent wiring (`messaging_group_agents`), then the group
+/// row itself. Children are deleted first so no orphans survive even with foreign
+/// keys off (the default). Irreversible — the UI gates this behind a confirm.
+pub fn delete_chat(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM web_messages WHERE messaging_group_id = ?1",
+        [id],
+    )?;
+    conn.execute(
+        "DELETE FROM messaging_group_agents WHERE messaging_group_id = ?1",
+        [id],
+    )?;
+    conn.execute(
+        "DELETE FROM messaging_groups WHERE id = ?1 AND channel_type = ?2",
+        rusqlite::params![id, WEB],
+    )?;
+    Ok(())
+}
+
 pub fn create_chat(conn: &Connection, id: &str, title: &str) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO messaging_groups (id, channel_type, platform_id, name, created_at)
@@ -65,19 +125,63 @@ pub fn title_if_default(conn: &Connection, id: &str, title: &str) -> rusqlite::R
     Ok(())
 }
 
-pub fn load_thread(conn: &Connection, chat_id: &str) -> rusqlite::Result<Vec<ChatMessage>> {
+/// The rendered thread: chat turns and tool cards interleaved by insertion order.
+/// `kind='tool'` rows join their structured payload from `web_message_tools`.
+pub fn load_thread(conn: &Connection, chat_id: &str) -> rusqlite::Result<Vec<TranscriptItem>> {
     let mut stmt = conn.prepare(
-        "SELECT direction, body, substr(created_at, 12, 5)
+        "SELECT w.kind, w.direction, w.body, substr(w.created_at, 12, 5),
+                t.name, t.arguments, t.result, t.status
+           FROM web_messages w
+           LEFT JOIN web_message_tools t ON t.web_message_id = w.id
+          WHERE w.messaging_group_id = ?1 AND w.kind IN ('chat', 'tool')
+          ORDER BY w.id ASC",
+    )?;
+    let rows = stmt.query_map([chat_id], |row| {
+        let kind: String = row.get(0)?;
+        let time: String = row.get(3)?;
+        if kind == "tool" {
+            Ok(TranscriptItem::Tool(ToolCardView {
+                name: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                arguments: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                result: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                ok: row.get::<_, Option<String>>(7)?.as_deref() == Some("ok"),
+                time,
+            }))
+        } else {
+            let direction: String = row.get(1)?;
+            Ok(TranscriptItem::Message(ChatMessage {
+                role: role_from_direction(&direction),
+                text: row.get(2)?,
+                time,
+            }))
+        }
+    })?;
+    rows.collect()
+}
+
+/// The transcript flattened for the model: chat turns plus each tool turn folded in as
+/// a short assistant-authored note (`body`), so a later turn can see what ran without
+/// replaying raw tool-call wire messages. Timestamps are irrelevant here.
+pub fn load_model_turns(conn: &Connection, chat_id: &str) -> rusqlite::Result<Vec<ChatMessage>> {
+    let mut stmt = conn.prepare(
+        "SELECT direction, body, kind
            FROM web_messages
-          WHERE messaging_group_id = ?1 AND kind = 'chat'
+          WHERE messaging_group_id = ?1 AND kind IN ('chat', 'tool')
           ORDER BY id ASC",
     )?;
     let rows = stmt.query_map([chat_id], |row| {
         let direction: String = row.get(0)?;
+        let body: String = row.get(1)?;
+        let kind: String = row.get(2)?;
+        let role = if kind == "tool" {
+            MessageRole::Agent
+        } else {
+            role_from_direction(&direction)
+        };
         Ok(ChatMessage {
-            role: role_from_direction(&direction),
-            text: row.get(1)?,
-            time: row.get(2)?,
+            role,
+            text: body,
+            time: String::new(),
         })
     })?;
     rows.collect()
@@ -95,6 +199,47 @@ pub fn append_message(
         rusqlite::params![chat_id, direction(role), sender(role), body],
     )?;
     Ok(())
+}
+
+/// Persist one tool invocation: a `kind='tool'` row carrying a compact model-facing
+/// note in `body` (capped, for cross-turn replay), plus the structured sidecar the UI
+/// card reads.
+pub fn append_tool(
+    conn: &Connection,
+    chat_id: &str,
+    name: &str,
+    arguments: &str,
+    result: &str,
+    ok: bool,
+) -> rusqlite::Result<()> {
+    let note = format!("[tool:{name}] {}", truncate(result, 2000));
+    conn.execute(
+        "INSERT INTO web_messages (messaging_group_id, direction, sender, body, kind, created_at)
+         VALUES (?1, 'out', 'claw', ?2, 'tool', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        rusqlite::params![chat_id, note],
+    )?;
+    let web_message_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO web_message_tools (web_message_id, name, arguments, result, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        rusqlite::params![
+            web_message_id,
+            name,
+            arguments,
+            result,
+            if ok { "ok" } else { "error" }
+        ],
+    )?;
+    Ok(())
+}
+
+/// Char-aware truncation with an ellipsis — keeps the model-facing tool note bounded.
+fn truncate(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_owned();
+    }
+    let head: String = text.chars().take(max_chars).collect();
+    format!("{head}…")
 }
 
 #[cfg(test)]
@@ -117,8 +262,13 @@ mod tests {
         append_message(&conn, "c1", MessageRole::Agent, "hi back").expect("append");
 
         let thread = load_thread(&conn, "c1").expect("load");
-        let shape: Vec<(MessageRole, &str)> =
-            thread.iter().map(|m| (m.role, m.text.as_str())).collect();
+        let shape: Vec<(MessageRole, &str)> = thread
+            .iter()
+            .filter_map(|item| match item {
+                TranscriptItem::Message(m) => Some((m.role, m.text.as_str())),
+                TranscriptItem::Tool(_) => None,
+            })
+            .collect();
         assert_eq!(
             shape,
             vec![
@@ -127,6 +277,94 @@ mod tests {
             ]
         );
         assert!(load_thread(&conn, "c2").expect("load empty").is_empty());
+    }
+
+    #[test]
+    fn tool_turns_interleave_in_the_thread_and_fold_into_the_model_view() {
+        let conn = db::open_in_memory().expect("open");
+        create_chat(&conn, "c1", "T").expect("create");
+        append_message(&conn, "c1", MessageRole::User, "search rust").expect("user");
+        append_tool(
+            &conn,
+            "c1",
+            "search",
+            r#"{"query":"rust"}"#,
+            "Rust is a language.",
+            true,
+        )
+        .expect("tool");
+        append_message(&conn, "c1", MessageRole::Agent, "Rust is great.").expect("reply");
+
+        let thread = load_thread(&conn, "c1").expect("load");
+        assert_eq!(thread.len(), 3);
+        assert!(matches!(&thread[0], TranscriptItem::Message(m) if m.role == MessageRole::User));
+        match &thread[1] {
+            TranscriptItem::Tool(card) => {
+                assert_eq!(card.name, "search");
+                assert!(card.ok);
+                assert!(card.result.contains("Rust is a language"));
+            }
+            TranscriptItem::Message(_) => panic!("expected a tool card"),
+        }
+        assert!(matches!(&thread[2], TranscriptItem::Message(m) if m.role == MessageRole::Agent));
+
+        // The model view folds the tool into a note between the chat turns.
+        let turns = load_model_turns(&conn, "c1").expect("model");
+        assert_eq!(turns.len(), 3);
+        assert!(turns[1].text.starts_with("[tool:search]"));
+    }
+
+    #[test]
+    fn archive_hides_from_active_and_lists_under_archived_then_restores() {
+        let conn = db::open_in_memory().expect("open");
+        create_chat(&conn, "c1", "Keep").expect("create");
+        create_chat(&conn, "c2", "Stash").expect("create");
+
+        archive_chat(&conn, "c2").expect("archive");
+
+        let active: Vec<String> = list_chats(&conn)
+            .expect("list")
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(active, vec!["c1".to_owned()]);
+        let archived: Vec<String> = list_archived_chats(&conn)
+            .expect("archived")
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(archived, vec!["c2".to_owned()]);
+
+        unarchive_chat(&conn, "c2").expect("restore");
+        assert!(list_archived_chats(&conn).expect("archived").is_empty());
+        assert_eq!(list_chats(&conn).expect("list").len(), 2);
+    }
+
+    #[test]
+    fn delete_removes_the_thread_and_its_messages() {
+        let conn = db::open_in_memory().expect("open");
+        create_chat(&conn, "c1", "Keep").expect("create");
+        create_chat(&conn, "c2", "Doomed").expect("create");
+        append_message(&conn, "c2", MessageRole::User, "trace").expect("append");
+
+        delete_chat(&conn, "c2").expect("delete");
+
+        let active: Vec<String> = list_chats(&conn)
+            .expect("list")
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(active, vec!["c1".to_owned()]);
+        assert!(list_archived_chats(&conn).expect("archived").is_empty());
+        // The transcript is gone, not orphaned.
+        let leftover: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM web_messages WHERE messaging_group_id = ?1",
+                ["c2"],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(leftover, 0);
     }
 
     #[test]

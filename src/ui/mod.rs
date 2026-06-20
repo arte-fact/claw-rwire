@@ -8,7 +8,9 @@
 //! renderer outputs — including the router `outlet()` — only ever sit *inside* them.
 
 mod activity;
+mod archived;
 mod chat;
+mod files;
 mod logs;
 mod system_map;
 mod widgets;
@@ -19,7 +21,6 @@ use rwire::style::Style;
 use rwire::{
     CurrentRoute, El, ElementBuilder, Ev, Router, St, el, handler, icons, outlet, renderer,
 };
-use rwire_components::Text;
 
 use crate::bridge::{self, Command};
 use crate::state::{App, Tab};
@@ -30,7 +31,9 @@ pub fn routes() -> Router {
     Router::new()
         .page("/", |_| view(chat::surface()))
         .page("/chat/:id", |_| view(chat::surface()))
+        .page("/archived", |_| view(archived::page()))
         .page("/system", |_| view(system_map::page()))
+        .page("/files", |_| view(files::page()))
         .page("/activity", |_| view(activity::page()))
         .page("/logs", |_| view(logs::page()))
 }
@@ -50,7 +53,11 @@ pub fn app() -> ElementBuilder {
     // Mono everywhere, small text — the terminal feel of rust-claw. A flex row so the
     // drawer is a static sidebar on desktop and a fixed slide-in overlay on mobile.
     el(El::Div)
-        .style(Style::new().set("height", "100vh"))
+        // `100dvh` (dynamic viewport height), not `100vh`: on mobile the URL bar shrinks
+        // the visible viewport, and `100vh` (the *large* viewport) would push the bottom
+        // — the composer — under the bar. `dvh` tracks the bar auto-hiding, so the
+        // layout always fits the visible area.
+        .style(Style::new().set("height", "100dvh"))
         .st([
             St::BgApp,
             St::FontMono,
@@ -77,7 +84,7 @@ fn nav_drawer(app: &App) -> ElementBuilder {
         .style(
             Style::new()
                 .width(DRAWER_W)
-                .set("height", "100vh")
+                .set("height", "100dvh")
                 .set("top", "0")
                 .set("left", "0")
                 .set("transition", "transform 0.2s ease"),
@@ -93,7 +100,23 @@ fn nav_drawer(app: &App) -> ElementBuilder {
             slide,
         ])
         .md([St::PositionStatic, St::TransformNone])
-        .append([drawer_head(), conversations_label(), drawer_threads()])
+        // Conversation-first: brand, the primary New-chat action, the thread list, then
+        // Archived at the tail of the conversation group; the secondary surfaces
+        // (System/Activity/Logs) and Log out sit below it.
+        .append([
+            drawer_head(),
+            new_chat_bar(),
+            drawer_threads(),
+            nav_footer(),
+            drawer_foot(),
+        ])
+}
+
+/// The primary action, sitting directly above the conversation list it creates into.
+fn new_chat_bar() -> ElementBuilder {
+    el(El::Div)
+        .st([St::PxMd, St::PbSm])
+        .append([chat::new_chat_button()])
 }
 
 /// Dims the page behind the mobile drawer; tap to close. Never shown on `md+`.
@@ -118,21 +141,20 @@ pub fn close_nav(app: &mut App) {
     app.nav_open = false;
 }
 
-fn conversations_label() -> ElementBuilder {
+fn drawer_head() -> ElementBuilder {
+    // The masthead: brand + live status. Nav moved to the footer (below the threads).
     el(El::Div)
-        .style(
-            Style::new()
-                .text_transform("uppercase")
-                .set("letter-spacing", "0.06em"),
-        )
-        .st([St::PyMd, St::PxXs, St::TextXs, St::TextMuted, St::FontMono])
-        .append([el(El::Span).text("Conversations")])
+        .st([St::PxMd, St::PtMd, St::PbSm])
+        .append([brand_row()])
 }
 
-fn drawer_head() -> ElementBuilder {
+/// The secondary surfaces, below the conversation group they support. Chat is omitted
+/// — the conversation list above *is* the chat surface, so a separate link is
+/// redundant. A top border sets it apart from the conversations.
+fn nav_footer() -> ElementBuilder {
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapSm, St::PMd])
-        .append([brand_row(), nav(), chat::new_chat_button()])
+        .st([St::BorderTSubtle, St::PySm])
+        .append([nav()])
 }
 
 fn brand_row() -> ElementBuilder {
@@ -144,7 +166,8 @@ fn brand_row() -> ElementBuilder {
             St::PySm,
         ])
         .append([
-            // Glyph + wordmark; the icon inherits currentColor from the accent text.
+            // Glyph + wordmark, on the shared gutter so "claw" heads the same text
+            // column as every row below it. The icon inherits the accent currentColor.
             el(El::Span)
                 .st([
                     St::DisplayFlex,
@@ -155,7 +178,8 @@ fn brand_row() -> ElementBuilder {
                     St::TextLg,
                 ])
                 .append([
-                    icons::icon_sized(icons::Icon::Terminal, 18),
+                    chat::accent_bar(false),
+                    chat::icon_slot(icons::icon_sized(icons::Icon::Terminal, 16)),
                     el(El::Span).text("claw"),
                 ]),
             status(),
@@ -171,12 +195,43 @@ fn drawer_threads() -> ElementBuilder {
         .append([chat::thread_list()])
 }
 
+/// The drawer footer: a logout affordance pinned to the bottom.
+fn drawer_foot() -> ElementBuilder {
+    el(El::Div)
+        .st([St::BorderTSubtle, St::PMd])
+        .append([logout_link()])
+}
+
+/// A plain `<a href="/logout">` — deliberately *not* `Link::route`. `/logout` is a
+/// server route on rwire's auth gate (`Server::auth`), so a full-page navigation lets
+/// the gate clear the token cookie and redirect to the login page; a client-routed
+/// link would try to resolve it as an in-app route and fail.
+fn logout_link() -> ElementBuilder {
+    el(El::A)
+        .attr("href", "/logout")
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::TextSm,
+            St::TextMuted,
+            St::NoUnderline,
+            St::CursorPointer,
+        ])
+        .hover([St::TextHigh])
+        .append([
+            chat::accent_bar(false),
+            chat::icon_slot(icons::icon_sized(icons::Icon::LogOut, 16)),
+            el(El::Span).text("Log out"),
+        ])
+}
+
 #[renderer]
 fn nav(route: &CurrentRoute) -> ElementBuilder {
     let path = route.path();
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::Gap0])
-        .append(Tab::ALL.map(|tab| nav_row(tab, tab_active(path, tab))))
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
+        .append(Tab::NAV.map(|tab| nav_row(tab, tab_active(path, tab))))
 }
 
 /// The active nav item is derived from the URL: Chat owns both `/` and any
@@ -189,24 +244,11 @@ fn tab_active(path: &str, tab: Tab) -> bool {
 }
 
 fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
-    // Flat: a left accent bar + accent text marks the active item (no filled pill).
-    let bar = el(El::Span)
-        .style(
-            Style::new()
-                .width("2px")
-                .set("flex", "0 0 2px")
-                .set("align-self", "stretch"),
-        )
-        .st([if active { St::BgAccent } else { St::BgApp }]);
-    let label = if active {
-        Text::body(tab.label().to_owned())
-            .build()
-            .st([St::TextAccent])
-    } else {
-        Text::body(tab.label().to_owned())
-            .build()
-            .st([St::TextMuted])
-    };
+    // The shared leading gutter (accent rail + icon slot) so the label lands in the
+    // same column as the conversation rows. The icon + label inherit the row's
+    // `currentColor`, so the single colour token drives both. Active is
+    // `accent rail + TextHigh` — the same treatment the conversation rows use.
+    let color = if active { St::TextHigh } else { St::TextMuted };
     // `Link::route` is rwire's client-routed `<a>`: the client router intercepts the
     // click, pushes history, and re-renders the matched view into the outlet. The
     // extra `close_nav` collapses the mobile drawer once you've picked a destination.
@@ -216,14 +258,19 @@ fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
-            St::PySm,
-            St::PxXs,
+            St::PyXs,
+            St::PxMd,
             St::CursorPointer,
             St::TextSm,
             St::NoUnderline,
+            color,
         ])
         .hover([St::TextHigh])
-        .append([bar, label])
+        .append([
+            chat::accent_bar(active),
+            chat::icon_slot(icons::icon_sized(tab.icon(), 16)),
+            el(El::Span).text(tab.label()),
+        ])
 }
 
 #[renderer]
@@ -329,6 +376,14 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     // Leaving any view closes the System Map drawer (its `editing` is shared state, so
     // it would otherwise re-open when you return to `/system`).
     bridge::send(Command::CloseDrawer);
+    // Opening the Archived screen refreshes its list from the DB.
+    if path == "/archived" {
+        bridge::send(Command::ListArchived);
+    }
+    // Opening the Files screen browses the default agent's workspace root.
+    if path == "/files" {
+        bridge::send(Command::OpenFiles);
+    }
     if let Some(id) = RoutePattern::new("/chat/:id")
         .matches(path)
         .and_then(|params| params.get("id").map(str::to_owned))

@@ -3,6 +3,7 @@
 //! `AgentDraft`) so it can re-render when discovered models arrive without resetting
 //! the operator's input. Picking an endpoint fetches its `/v1/models` into a dropdown.
 
+use rwire::style::Style;
 use rwire::{At, El, ElementBuilder, Ev, St, el, handler, renderer};
 
 use super::{action, badge, card, drawer_form, labeled, row_head, select_st, submit, text_input};
@@ -42,6 +43,8 @@ pub fn form(app: &App, draft: &AgentDraft) -> ElementBuilder {
     );
     let endpoint = endpoint_select(app, draft.endpoint.as_deref());
     let model = model_field(app, draft);
+    let tools = tools_field(app, draft);
+    let prompt = prompt_field(draft);
 
     let mut actions = vec![submit(if draft.id.is_some() { "Save" } else { "Add" })];
     if draft.id.is_some() {
@@ -49,7 +52,107 @@ pub fn form(app: &App, draft: &AgentDraft) -> ElementBuilder {
     }
     actions.push(action("Cancel", super::close()).data("act", "cancel"));
 
-    drawer_form(save(), [name, endpoint, model], actions)
+    drawer_form(save(), [name, endpoint, model, tools, prompt], actions)
+}
+
+/// The per-tool picker: toggle-chips grouped by source (Web / Coder), built from the
+/// projected `app.tool_catalog`. Each chip is on iff its name is in `draft.tools`.
+fn tools_field(app: &App, draft: &AgentDraft) -> ElementBuilder {
+    let mut sections: Vec<ElementBuilder> = Vec::new();
+    for (key, label) in [("web", "Web"), ("coder", "Coder")] {
+        let chips: Vec<ElementBuilder> = app
+            .tool_catalog
+            .iter()
+            .filter(|entry| entry.group == key)
+            .map(|entry| tool_chip(&entry.name, draft.tools.iter().any(|t| t == &entry.name)))
+            .collect();
+        if chips.is_empty() {
+            continue;
+        }
+        sections.push(
+            el(El::Div)
+                .st([St::DisplayFlex, St::FlexCol, St::GapXs])
+                .append([
+                    el(El::Span)
+                        .st([
+                            St::TextXs,
+                            St::TextMuted,
+                            St::TextUppercase,
+                            St::TrackingWide,
+                        ])
+                        .text(label),
+                    el(El::Div)
+                        .style(Style::new().set("flex-wrap", "wrap"))
+                        .st([St::DisplayFlex, St::GapXs])
+                        .append(chips),
+                ]),
+        );
+    }
+    if sections.is_empty() {
+        sections.push(
+            el(El::Div)
+                .st([St::TextXs, St::TextMuted])
+                .text("No tools available"),
+        );
+    }
+    labeled(
+        "Tools",
+        el(El::Div)
+            .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+            .append(sections),
+    )
+}
+
+/// A clickable on/off chip for one tool. The `data-tool` rides the name to the handler.
+fn tool_chip(name: &str, on: bool) -> ElementBuilder {
+    let (bg, fg, mark) = if on {
+        (St::BgAccent, St::TextOnAccent, "✓")
+    } else {
+        (St::BgApp, St::TextMuted, "+")
+    };
+    el(El::Button)
+        .attr("type", "button")
+        .data("tool", name)
+        .on(Ev::Click, tool_toggled())
+        .style(Style::new().set("font", "inherit"))
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapXs,
+            St::PxSm,
+            St::PyXs,
+            St::BorderDefault,
+            St::RoundedSm,
+            St::TextXs,
+            St::CursorPointer,
+            bg,
+            fg,
+        ])
+        .append([el(El::Span).text(mark), el(El::Span).text(name)])
+}
+
+/// The agent's system prompt, persisted as `AGENT.md` in its workspace.
+fn prompt_field(draft: &AgentDraft) -> ElementBuilder {
+    labeled(
+        "System prompt (AGENT.md)",
+        el(El::Textarea)
+            .attr("name", "prompt")
+            .attr("rows", "6")
+            .at_str(
+                At::Placeholder,
+                "Persona + instructions — saved as AGENT.md in the agent's workspace.",
+            )
+            .on(Ev::Change, prompt_changed())
+            .st(select_st())
+            .style(
+                Style::new()
+                    .set("font", "inherit")
+                    .set("resize", "vertical")
+                    .set("min-height", "8rem"),
+            )
+            .focus([St::BorderAccent])
+            .text(&draft.prompt),
+    )
 }
 
 fn endpoint_select(app: &App, selected: Option<&str>) -> ElementBuilder {
@@ -126,10 +229,17 @@ fn open_edit(app: &mut App, ctx: &EventContext) {
         name: agent.name.clone(),
         endpoint: agent.endpoint.clone(),
         model: agent.model.clone().unwrap_or_default(),
+        prompt: String::new(),
+        tools: Vec::new(),
     };
+    let id = agent.id.clone();
     let endpoint = draft.endpoint.clone();
     app.editing = Some(Editing::Agent(draft));
     app.endpoint_models = Vec::new();
+    // The AGENT.md and tool selection live on disk/DB; the bridge reads them back into
+    // the draft (like discovered models do).
+    bridge::send(Command::LoadAgentPrompt { id: id.clone() });
+    bridge::send(Command::LoadAgentTools { id });
     if let Some(endpoint) = endpoint {
         bridge::send(Command::DiscoverModels { endpoint });
     }
@@ -163,9 +273,31 @@ fn model_changed(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
+fn tool_toggled(app: &mut App, ctx: &EventContext) {
+    let Some(tool) = ctx.data("tool").map(str::to_owned) else {
+        return;
+    };
+    if let Some(Editing::Agent(draft)) = app.editing.as_mut() {
+        if let Some(pos) = draft.tools.iter().position(|t| t == &tool) {
+            draft.tools.remove(pos);
+        } else {
+            draft.tools.push(tool);
+        }
+    }
+}
+
+#[handler]
+fn prompt_changed(app: &mut App, ctx: &EventContext) {
+    if let Some(Editing::Agent(draft)) = app.editing.as_mut() {
+        draft.prompt = ctx.text().unwrap_or_default().to_owned();
+    }
+}
+
+#[handler]
 fn save(app: &mut App, ctx: &EventContext) {
-    let id = match app.editing.as_ref() {
-        Some(Editing::Agent(draft)) => draft.id.clone(),
+    // Tools live in the draft (the chips are controlled), not the form fields.
+    let (id, tools) = match app.editing.as_ref() {
+        Some(Editing::Agent(draft)) => (draft.id.clone(), draft.tools.clone()),
         _ => return,
     };
     let name = ctx.field("name").unwrap_or_default().trim().to_owned();
@@ -180,6 +312,7 @@ fn save(app: &mut App, ctx: &EventContext) {
         .field("model")
         .map(str::to_owned)
         .filter(|value| !value.trim().is_empty());
+    let prompt = ctx.field("prompt").unwrap_or_default().to_owned();
     app.error = None;
     app.editing = None;
     bridge::send(Command::UpsertAgent {
@@ -187,6 +320,8 @@ fn save(app: &mut App, ctx: &EventContext) {
         name,
         endpoint,
         model,
+        prompt,
+        tools,
     });
 }
 
