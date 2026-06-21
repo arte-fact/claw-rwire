@@ -16,23 +16,21 @@ use rwire::State;
 pub enum Tab {
     #[default]
     Chat,
+    Dashboard,
     Archived,
     System,
-    Files,
     Activity,
     Logs,
 }
 
 impl Tab {
-    /// The tabs shown in the nav footer, below the live conversation list. Chat is
-    /// intentionally absent — the conversation list above the nav *is* the chat
-    /// surface, so a separate link would be redundant. (The `Chat` variant still backs
-    /// the `/` and `/chat/:id` routes; it's just not a nav row.) Archived leads the
-    /// footer as it's the closest relative of the conversations above.
+    /// The app-level surfaces shown in the nav footer. Chat is intentionally absent — the
+    /// conversation list above the nav *is* the chat surface. Dashboard leads (the
+    /// cross-workspace overview); Files is gone (it's now a per-workspace tab).
     pub const NAV: [Tab; 5] = [
+        Tab::Dashboard,
         Tab::Archived,
         Tab::System,
-        Tab::Files,
         Tab::Activity,
         Tab::Logs,
     ];
@@ -40,9 +38,9 @@ impl Tab {
     pub fn label(self) -> &'static str {
         match self {
             Tab::Chat => "Chat",
+            Tab::Dashboard => "Dashboard",
             Tab::Archived => "Archived",
             Tab::System => "System",
-            Tab::Files => "Files",
             Tab::Activity => "Activity",
             Tab::Logs => "Logs",
         }
@@ -52,9 +50,9 @@ impl Tab {
     pub fn path(self) -> &'static str {
         match self {
             Tab::Chat => "/",
+            Tab::Dashboard => "/dashboard",
             Tab::Archived => "/archived",
             Tab::System => "/system",
-            Tab::Files => "/files",
             Tab::Activity => "/activity",
             Tab::Logs => "/logs",
         }
@@ -66,9 +64,9 @@ impl Tab {
         use rwire::icons::Icon;
         match self {
             Tab::Chat => Icon::MessageSquare,
+            Tab::Dashboard => Icon::Home,
             Tab::Archived => Icon::Archive,
             Tab::System => Icon::Cpu,
-            Tab::Files => Icon::Folder,
             Tab::Activity => Icon::Activity,
             Tab::Logs => Icon::FileText,
         }
@@ -298,8 +296,12 @@ pub struct App {
     /// agent drawer's tool picker.
     pub tool_catalog: Vec<ToolCatalogEntry>,
     /// Workspaces (shareable agent project dirs), projected with the registry — the source
-    /// for the agent drawer's workspace picker.
+    /// for the sidebar tree + the workspace dashboards/Team.
     pub workspaces: Vec<WorkspaceView>,
+    /// The id of the workspace the current `/w/:wid…` route points at, or `None` off any
+    /// workspace route. Set by `on_route`; the sidebar highlights it and the workspace
+    /// header/dashboard/Team renderers look its `WorkspaceView` up in `workspaces`.
+    pub active_workspace: Option<String>,
     /// Files view: the id of the workspace being browsed.
     pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).

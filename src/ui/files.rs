@@ -10,55 +10,16 @@ use rwire_components::Text;
 
 use crate::bridge::{self, Command};
 use crate::state::{App, FileEntry, FileKind};
-use crate::ui::widgets::{accent_submit, action_icon, icon_button, page_header, submit};
+use crate::ui::widgets::{accent_submit, action_icon, icon_button, submit};
 
-pub fn page() -> ElementBuilder {
+/// The Files section of a workspace view: the error banner + the two-pane browser/editor,
+/// scoped to the workspace named in the route (the bridge sets `App.files_*` when the
+/// `/w/:wid/files` route fires `ListDir`). No workspace selector — the workspace is the
+/// route's, and a header is provided by the workspace shell.
+pub fn section() -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().min_height("0").overflow("auto"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
-        .md([St::PXl])
-        .append([
-            page_header(
-                "Files",
-                "Browse and edit a workspace (shared by the agents assigned to it).",
-                workspace_select(),
-            ),
-            error_banner(),
-            panes(),
-        ])
-}
-
-/// A `<select>` of workspaces; switching re-lists that workspace's root.
-#[renderer]
-fn workspace_select(app: &App) -> ElementBuilder {
-    if app.workspaces.is_empty() {
-        return el(El::Div).style(Style::new().display("none"));
-    }
-    let selected = app.files_workspace.as_deref();
-    let options = app.workspaces.iter().map(|workspace| {
-        let option = el(El::Option)
-            .attr("value", &workspace.id)
-            .text(&workspace.name);
-        if selected == Some(workspace.id.as_str()) {
-            option.bool_attr(rwire::At::Selected)
-        } else {
-            option
-        }
-    });
-    el(El::Select)
-        .attr("name", "workspace")
-        .on(Ev::Change, workspace_changed())
-        .style(Style::new().set("font", "inherit"))
-        .st([
-            St::PxSm,
-            St::PySm,
-            St::BorderDefault,
-            St::RoundedSm,
-            St::BgSurface,
-            St::TextHigh,
-            St::OutlineNone,
-        ])
-        .append(options)
+        .st([St::DisplayFlex, St::FlexCol, St::GapLg])
+        .append([error_banner(), panes()])
 }
 
 #[renderer]
@@ -602,17 +563,6 @@ fn size_label(entry: &FileEntry) -> String {
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────────────
-
-#[handler]
-fn workspace_changed(app: &mut App, ctx: &EventContext) {
-    let _ = app; // side-effect only: the bridge re-projects files_workspace
-    if let Some(workspace) = ctx.text().map(str::to_owned).filter(|v| !v.is_empty()) {
-        bridge::send(Command::ListDir {
-            workspace,
-            path: String::new(),
-        });
-    }
-}
 
 /// Navigate into the directory named by the clicked element's `data-path`.
 #[handler]

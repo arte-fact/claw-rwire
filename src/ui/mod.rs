@@ -10,10 +10,12 @@
 mod activity;
 mod archived;
 mod chat;
+mod dashboard;
 mod files;
 mod logs;
 mod system_map;
 mod widgets;
+mod workspace;
 
 use rwire::router::Link;
 use rwire::router::RoutePattern;
@@ -24,18 +26,45 @@ use rwire::{
 
 use crate::bridge::{self, Command};
 use crate::state::{App, Tab};
+use workspace::WsTab;
 
 /// The app's routes: each path renders its view into the shell's [`outlet`]. `/` and
-/// `/chat/:id` share the chat surface (the `:id` is opened by [`on_route`]).
+/// `/chat/:id` are the global concierge chat; `/w/:wid…` are the per-workspace views
+/// (the `:wid` + active section are opened by [`on_route`]).
 pub fn routes() -> Router {
     Router::new()
         .page("/", |_| view(chat::surface()))
         .page("/chat/:id", |_| view(chat::surface()))
+        .page("/dashboard", |_| view(dashboard::page()))
+        .page("/w/:wid", |p| {
+            view(workspace::shell(
+                wid(p),
+                WsTab::Dashboard,
+                workspace::dashboard(),
+            ))
+        })
+        .page("/w/:wid/files", |p| {
+            view(workspace::shell(
+                wid(p),
+                WsTab::Files,
+                workspace::files_section(),
+            ))
+        })
+        .page("/w/:wid/tasks", |p| {
+            view(workspace::shell(wid(p), WsTab::Tasks, workspace::tasks()))
+        })
+        .page("/w/:wid/team", |p| {
+            view(workspace::shell(wid(p), WsTab::Team, workspace::team()))
+        })
         .page("/archived", |_| view(archived::page()))
         .page("/system", |_| view(system_map::page()))
-        .page("/files", |_| view(files::page()))
         .page("/activity", |_| view(activity::page()))
         .page("/logs", |_| view(logs::page()))
+}
+
+/// The `:wid` route param (empty if absent — the workspace renderers then show a fallback).
+fn wid(params: &rwire::router::RouteParams) -> &str {
+    params.get("wid").unwrap_or("")
 }
 
 /// Wrap a route view so it fills the positioned main area (the outlet between them is
@@ -107,8 +136,90 @@ fn nav_drawer(app: &App) -> ElementBuilder {
             drawer_head(),
             new_chat_bar(),
             drawer_threads(),
+            workspaces_nav(),
             nav_footer(),
             drawer_foot(),
+        ])
+}
+
+/// The Workspaces group: a labelled list of workspace links (each → its dashboard),
+/// highlighting the one the current route is in, plus a create affordance. Sits between
+/// the conversation list and the app-level nav footer.
+#[renderer]
+fn workspaces_nav(app: &App) -> ElementBuilder {
+    let active = app.active_workspace.as_deref();
+    let mut rows: Vec<ElementBuilder> = vec![
+        el(El::Div)
+            .st([
+                St::PxMd,
+                St::PbXs,
+                St::TextXs,
+                St::TextMuted,
+                St::TextUppercase,
+                St::TrackingWide,
+            ])
+            .text("Workspaces"),
+    ];
+    for workspace in &app.workspaces {
+        rows.push(workspace_row(
+            &workspace.id,
+            &workspace.name,
+            active == Some(workspace.id.as_str()),
+        ));
+    }
+    // Workspaces are created in System → Workspaces for now (management moves here later).
+    rows.push(
+        Link::route("/system")
+            .on(Ev::Click, close_nav())
+            .st([
+                St::DisplayFlex,
+                St::ItemsCenter,
+                St::GapSm,
+                St::PyXs,
+                St::PxMd,
+                St::TextSm,
+                St::TextMuted,
+                St::NoUnderline,
+                St::CursorPointer,
+            ])
+            .hover([St::TextHigh])
+            .append([
+                chat::accent_bar(false),
+                chat::icon_slot(icons::icon_sized(icons::Icon::Plus, 16)),
+                el(El::Span).text("New workspace"),
+            ]),
+    );
+    el(El::Div)
+        .st([
+            St::BorderTSubtle,
+            St::PySm,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapXs,
+        ])
+        .append(rows)
+}
+
+fn workspace_row(id: &str, name: &str, active: bool) -> ElementBuilder {
+    let color = if active { St::TextHigh } else { St::TextMuted };
+    Link::route(&format!("/w/{id}"))
+        .on(Ev::Click, close_nav())
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::PyXs,
+            St::PxMd,
+            St::CursorPointer,
+            St::TextSm,
+            St::NoUnderline,
+            color,
+        ])
+        .hover([St::TextHigh])
+        .append([
+            chat::accent_bar(active),
+            chat::icon_slot(icons::icon_sized(icons::Icon::Folder, 16)),
+            el(El::Span).text(name),
         ])
 }
 
@@ -369,10 +480,16 @@ fn fill() -> Style {
 /// broad mutation here would re-render shared renderers and fight the router's swap.
 #[handler]
 pub fn on_route(app: &mut App, ctx: &EventContext) {
-    let _ = app; // side-effect only: no `App` writes, so this emits no re-render
+    let _ = app; // side-effect only: effects go through the bridge, not direct `App` writes
     let Some(path) = ctx.text() else {
         return;
     };
+    // Track the workspace the route is in, so the sidebar highlights it and the workspace
+    // header/dashboard/Team renderers can resolve their `WorkspaceView`. Projected via the
+    // bridge (a direct `App` write here doesn't reliably broadcast from the route hook).
+    bridge::send(Command::SetActiveWorkspace {
+        id: workspace_of(path),
+    });
     // Leaving any view closes the System Map drawer (its `editing` is shared state, so
     // it would otherwise re-open when you return to `/system`).
     bridge::send(Command::CloseDrawer);
@@ -380,9 +497,15 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     if path == "/archived" {
         bridge::send(Command::ListArchived);
     }
-    // Opening the Files screen browses the default agent's workspace root.
-    if path == "/files" {
-        bridge::send(Command::OpenFiles);
+    // Entering a workspace's Files tab lists that workspace's root.
+    if let Some(wid) = RoutePattern::new("/w/:wid/files")
+        .matches(path)
+        .and_then(|params| params.get("wid").map(str::to_owned))
+    {
+        bridge::send(Command::ListDir {
+            workspace: wid,
+            path: String::new(),
+        });
     }
     if let Some(id) = RoutePattern::new("/chat/:id")
         .matches(path)
@@ -390,4 +513,16 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     {
         bridge::send(Command::OpenChat(id));
     }
+}
+
+/// The workspace id a path is within (any `/w/:wid…` route), else `None`.
+fn workspace_of(path: &str) -> Option<String> {
+    for pattern in ["/w/:wid", "/w/:wid/files", "/w/:wid/tasks", "/w/:wid/team"] {
+        if let Some(params) = RoutePattern::new(pattern).matches(path)
+            && let Some(wid) = params.get("wid")
+        {
+            return Some(wid.to_owned());
+        }
+    }
+    None
 }

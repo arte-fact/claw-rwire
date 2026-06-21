@@ -108,10 +108,13 @@ pub enum Command {
     /// Close the System Map drawer (sent on navigation so it doesn't persist across
     /// route changes — `editing` is shared state).
     CloseDrawer,
+    /// Set the workspace the current route is in (`/w/:wid…`), or `None` off any workspace
+    /// route — projected into `App.active_workspace` for the sidebar + workspace views.
+    SetActiveWorkspace {
+        id: Option<String>,
+    },
     // ── Files view (browse + edit a workspace) ──
-    /// `/files` opened — browse the first workspace's root.
-    OpenFiles,
-    /// List a directory in a workspace.
+    /// List a directory in a workspace (the `/w/:wid/files` tab + breadcrumb navigation).
     ListDir {
         workspace: String,
         path: String,
@@ -422,7 +425,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::DeleteWorkspace { id } => admin::delete_workspace(conn, shared, &id),
         Command::DiscoverModels { endpoint } => admin::discover_models(conn, shared, &endpoint),
         Command::CloseDrawer => close_drawer(shared),
-        Command::OpenFiles => files::open_files(conn, shared),
+        Command::SetActiveWorkspace { id } => set_active_workspace(shared, id),
         Command::ListDir { workspace, path } => files::list_dir(conn, shared, &workspace, &path),
         Command::OpenFile { workspace, path } => files::open_file(conn, shared, &workspace, &path),
         Command::WriteFile {
@@ -450,6 +453,16 @@ fn close_drawer(shared: &SharedServerState) {
     shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_EDITING]), |app| {
         app.editing = None;
     });
+}
+
+/// Project the route's workspace into `App.active_workspace` (the sidebar highlight + the
+/// workspace header/dashboard/Team source). Routed through the bridge so the change
+/// broadcasts like every other projection.
+fn set_active_workspace(shared: &SharedServerState, id: Option<String>) {
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_ACTIVE_WORKSPACE]),
+        move |app| app.active_workspace = id,
+    );
 }
 
 fn new_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {

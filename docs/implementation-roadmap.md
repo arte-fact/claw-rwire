@@ -53,18 +53,27 @@
 > The big UI rework. See the IA doc. Chat is **global (concierge) at the root**; workspaces
 > are work containers (`Files / Tasks / Team`) — **no per-workspace Chats** in v1.
 
-- [ ] `App.active_workspace` + scoped routes (`/`, `/chat/:cid`, `/dashboard`, `/w/:wid/...`)
-- [ ] Nav **tree** sidebar: **Chat** (global) + **Dashboard** + workspaces → Files / Tasks /
-      Team; `+ New workspace`. Replaces the flat chat list
-- [ ] **Global chat** (`/`) — the concierge thread list (landing)
-- [ ] **Global dashboard** (`/dashboard`) — per-workspace task-lane status
-- [ ] **Workspace dashboard** (`/w/:wid`) — owner + team, queue summary, **brief** editor
-- [ ] Files section — scoped (drop the selector)
-- [ ] Team section — owner + members (multi-select); move the agent-drawer workspace picker here
-- [ ] System Map → infra only (Agents / Endpoints / Channels); fold the Workspaces tier into
-      the tree + New-workspace + Team; workspace settings → the workspace dashboard
-- [ ] Mobile: the tree in the slide-in nav drawer
-- [ ] `cargo fmt --check` · `clippy -D warnings` · `cargo test` green + e2e screenshots
+**B-1 — navigation shell (done):**
+- [x] `App.active_workspace` (projected via `Command::SetActiveWorkspace` from `on_route`)
+      + scoped routes (`/`, `/chat/:id`, `/dashboard`, `/w/:wid[/files|/tasks|/team]`)
+- [x] Sidebar **Workspaces** group (links → each workspace, active highlighted) + Dashboard
+      in the footer nav; `+ New workspace` (→ System for now)
+- [x] **Global dashboard** (`/dashboard`) — per-workspace cards (owner, team, idle status)
+- [x] **Workspace view** (`/w/:wid…`) — header (name · owner · team) + tab row (Overview /
+      Files / Tasks / Team)
+- [x] Files section — scoped to the route's workspace (selector dropped)
+- [x] Workspace **Overview** (team roster + brief pointer); **Team** read-only; **Tasks**
+      placeholder
+- [x] `fmt` · `clippy -D` · `cargo test` (79) green + e2e screenshots
+
+**B-2 — management relocation + chat-at-root (todo):**
+- [ ] Move workspace create/owner/members/delete into the workspace context (editable Team
+      section + New-workspace drawer in shell); shrink System Map to infra (Agents /
+      Endpoints / Channels), drop its Workspaces tier
+- [ ] Chat at the **root** of the tree (relabel concierge); global chat thread list placement
+- [ ] **Global chat** landing polish; **Workspace dashboard** brief editor inline
+- [ ] Mobile: confirm the tree in the slide-in nav drawer
+- [ ] `cargo fmt --check` · `clippy -D warnings` · `cargo test` green + e2e
 
 ---
 

@@ -42,23 +42,6 @@ fn to_entries(entries: Vec<ops::Entry>) -> Vec<FileEntry> {
         .collect()
 }
 
-/// `/files` opened: browse the first workspace's root.
-pub fn open_files(conn: &rusqlite::Connection, shared: &SharedServerState) {
-    match workspaces::list(conn)
-        .ok()
-        .and_then(|list| list.into_iter().next())
-    {
-        Some(workspace) => list_dir(conn, shared, &workspace.id, ""),
-        None => project_dir(
-            shared,
-            "",
-            "",
-            Vec::new(),
-            Some("No workspaces configured.".into()),
-        ),
-    }
-}
-
 /// List `path` in `workspace` and show it (clearing any open file).
 pub fn list_dir(
     conn: &rusqlite::Connection,
