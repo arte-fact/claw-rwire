@@ -89,7 +89,8 @@ pub fn resolve_for_chat(
         })?;
     let api_key = api_key_for(&endpoint, env)?;
     let tools = agent_tools::selection(conn, &agent.id).map_err(db)?;
-    let workspace = workspaces::for_agent(conn, &agent.id).map_err(db)?;
+    // A plain chat turn runs in the agent's own workspace (its home) — the one it owns.
+    let workspace = workspaces::owned_by(conn, &agent.id).map_err(db)?;
     let agent_prompt = agent_prompts::get(conn, &agent.id).map_err(db)?;
     Ok(ResolvedInference {
         base_url: endpoint.base_url,
@@ -149,7 +150,7 @@ mod tests {
         let conn = seeded();
         let agent = agents::first(&conn).expect("agent").expect("some");
         workspaces::create(&conn, "ws-1", "Project").expect("ws");
-        workspaces::assign(&conn, &agent.id, "ws-1").expect("assign");
+        workspaces::set_owner(&conn, "ws-1", &agent.id).expect("own");
         agent_prompts::set(&conn, &agent.id, "You are precise.").expect("prompt");
         let inf = resolve_for_chat(&conn, "chat-1", no_env).expect("resolve");
         assert_eq!(inf.workspace.as_deref(), Some("ws-1"));

@@ -37,11 +37,14 @@ pub fn project_registry(conn: &rusqlite::Connection, shared: &SharedServerState)
         .unwrap_or_default()
         .into_iter()
         .map(|workspace| {
-            let agents = workspaces::agents_in(conn, &workspace.id).unwrap_or_default();
+            let members = workspaces::members_of(conn, &workspace.id).unwrap_or_default();
+            let member_names = workspaces::agents_in(conn, &workspace.id).unwrap_or_default();
             WorkspaceView {
                 id: workspace.id,
                 name: workspace.name,
-                agents,
+                owner: workspace.owner,
+                members,
+                member_names,
             }
         })
         .collect();
@@ -103,7 +106,6 @@ pub fn upsert_agent(
     model: Option<String>,
     prompt: String,
     tools: Vec<String>,
-    workspace: Option<String>,
 ) {
     let endpoint = endpoint.filter(|value| !value.trim().is_empty());
     let model = model.filter(|value| !value.trim().is_empty());
@@ -139,49 +141,76 @@ pub fn upsert_agent(
         return surface_error(shared, format!("save agent tools: {err}"));
     }
     // The identity prompt is operator-owned config (not a workspace file); a blank one
-    // clears it so the run falls back to the base prompt + the workspace brief.
+    // clears it so the run falls back to the base prompt + the workspace brief. Workspace
+    // ownership + membership are managed on the Workspaces tier, not here.
     if let Err(err) = agent_prompts::set(conn, &id, &prompt) {
         return surface_error(shared, format!("save agent prompt: {err}"));
-    }
-    // Assign the chosen workspace, or detach the agent (no workspace) when none was picked.
-    // Workspaces are created explicitly in the Workspaces tier, so a picked id exists.
-    match workspace.filter(|value| !value.trim().is_empty()) {
-        Some(workspace_id) => {
-            if let Err(err) = workspaces::assign(conn, &id, &workspace_id) {
-                return surface_error(shared, format!("assign workspace: {err}"));
-            }
-        }
-        None => {
-            if let Err(err) = workspaces::unassign(conn, &id) {
-                return surface_error(shared, format!("detach workspace: {err}"));
-            }
-        }
     }
     project_registry(conn, shared);
 }
 
-/// Create a workspace (minting an id) or rename an existing one, then re-project.
+/// Create a workspace (minting an id) or update an existing one — name, owner, and members.
+/// The owner is always also a member; saving replaces the membership set with `members`
+/// (plus the owner), so the Workspaces-tier drawer is the single source of truth for the team.
 pub fn upsert_workspace(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
     id: Option<String>,
     name: &str,
+    owner: Option<String>,
+    members: Vec<String>,
 ) {
     let name = name.trim();
     if name.is_empty() {
         return surface_error(shared, "workspace name can't be empty".to_owned());
     }
-    let result = match &id {
-        Some(id) => workspaces::rename(conn, id, name),
+    let owner = owner.filter(|value| !value.trim().is_empty());
+    let workspace_id = match &id {
+        Some(id) => {
+            if let Err(err) = workspaces::rename(conn, id, name) {
+                return surface_error(shared, format!("save workspace: {err}"));
+            }
+            id.clone()
+        }
         None => match crate::id::new_id() {
-            Ok(new_id) => workspaces::create(conn, &new_id, name),
+            Ok(new_id) => {
+                if let Err(err) = workspaces::create(conn, &new_id, name) {
+                    return surface_error(shared, format!("create workspace: {err}"));
+                }
+                new_id
+            }
             Err(err) => return surface_error(shared, format!("create workspace: {err}")),
         },
     };
-    if let Err(err) = result {
-        return surface_error(shared, format!("save workspace: {err}"));
+    if let Err(err) = set_team(conn, &workspace_id, owner.as_deref(), &members) {
+        return surface_error(shared, format!("save workspace team: {err}"));
     }
     project_registry(conn, shared);
+}
+
+/// Replace a workspace's owner + membership. The owner (if any) is always a member; any
+/// agent not in the new set is removed from the team.
+fn set_team(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    owner: Option<&str>,
+    members: &[String],
+) -> rusqlite::Result<()> {
+    if let Some(owner) = owner {
+        workspaces::set_owner(conn, workspace_id, owner)?; // also adds owner as a member
+    }
+    for member in members {
+        workspaces::add_member(conn, member, workspace_id)?;
+    }
+    // Drop anyone no longer on the team (never the owner — it's kept as a member above).
+    let keep: std::collections::HashSet<&str> =
+        members.iter().map(String::as_str).chain(owner).collect();
+    for existing in workspaces::members_of(conn, workspace_id)? {
+        if !keep.contains(existing.as_str()) {
+            workspaces::remove_member(conn, &existing, workspace_id)?;
+        }
+    }
+    Ok(())
 }
 
 /// Delete a workspace and its directory. Refused while agents are still assigned (they'd
@@ -215,21 +244,19 @@ pub fn delete_workspace(conn: &rusqlite::Connection, shared: &SharedServerState,
     project_registry(conn, shared);
 }
 
-/// Read an agent's identity prompt + workspace assignment into the open draft (mirrors
-/// `discover_models`). Called when the drawer opens an existing agent, so the System-prompt
-/// textarea and the workspace picker are prefilled.
+/// Read an agent's identity prompt into the open draft (mirrors `discover_models`). Called
+/// when the drawer opens an existing agent, so the System-prompt textarea is prefilled.
+/// (Workspace ownership/membership lives on the Workspaces tier, not the agent draft.)
 pub fn load_agent_prompt(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
     let prompt = agent_prompts::get(conn, id)
         .ok()
         .flatten()
         .unwrap_or_default();
-    let workspace = workspaces::for_agent(conn, id).ok().flatten();
     shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_EDITING]), |app| {
         if let Some(Editing::Agent(draft)) = app.editing.as_mut()
             && draft.id.as_deref() == Some(id)
         {
             draft.prompt = prompt;
-            draft.workspace = workspace;
         }
     });
 }

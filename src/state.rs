@@ -166,14 +166,17 @@ pub struct AgentView {
     pub model: Option<String>,
 }
 
-/// A workspace row for the System Map's Workspaces tier + the agent drawer's picker. A
-/// workspace is a shareable directory under `<data>/workspaces/<id>`; `agents` are the
-/// names of the agents that share it.
+/// A workspace row for the System Map's Workspaces tier. A workspace is a shareable
+/// directory under `<data>/workspaces/<id>` with an **owner** (its domain lead) and a team
+/// of **members**. `owner` is the owning agent id; `members` the member agent ids;
+/// `member_names` the members' display names (for the card summary).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkspaceView {
     pub id: String,
     pub name: String,
-    pub agents: Vec<String>,
+    pub owner: Option<String>,
+    pub members: Vec<String>,
+    pub member_names: Vec<String>,
 }
 
 /// One selectable tool in the agent drawer's tool picker: its source `group`
@@ -225,20 +228,25 @@ pub enum Editing {
 }
 
 /// In-progress workspace edit. `id == None` is a new workspace (the bridge mints the id);
-/// editing only changes the display name (the directory id is immutable). `confirm_delete`
-/// arms the drawer's two-step delete confirm (deletion removes the directory on disk).
+/// editing changes the display name, the **owner** (its domain lead / home agent), and the
+/// **members** (the team). `confirm_delete` arms the drawer's two-step delete confirm
+/// (deletion removes the directory on disk).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkspaceDraft {
     pub id: Option<String>,
     pub name: String,
+    /// The owning agent id (its home), or `None` for unowned.
+    pub owner: Option<String>,
+    /// The member agent ids (the team). The owner is always among them.
+    pub members: Vec<String>,
     pub confirm_delete: bool,
 }
 
 /// In-progress agent edit. `id == None` is a new agent; the rest mirror the form
 /// fields so a re-render restores them. `prompt` is the agent's identity prompt (its
-/// persona, stored in `agent_prompts`), `tools` its enabled tool names, and `workspace`
-/// the id of the workspace it's assigned to (`None` = mint/keep its own) — all loaded from
-/// the DB when an existing agent is opened.
+/// persona, stored in `agent_prompts`) and `tools` its enabled tool names — both loaded
+/// from the DB when an existing agent is opened. Workspace ownership + membership are
+/// managed on the workspace side (the Workspaces tier), not here.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentDraft {
     pub id: Option<String>,
@@ -247,7 +255,6 @@ pub struct AgentDraft {
     pub model: String,
     pub prompt: String,
     pub tools: Vec<String>,
-    pub workspace: Option<String>,
 }
 
 /// Process-global projection. Selection (`open_chat`) lives here rather than in

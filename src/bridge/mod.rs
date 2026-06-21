@@ -72,8 +72,6 @@ pub enum Command {
         prompt: String,
         /// The enabled tool names ticked in the drawer's tool picker.
         tools: Vec<String>,
-        /// The workspace the agent is assigned to, or `None` to mint/keep its own.
-        workspace: Option<String>,
     },
     DeleteAgent {
         id: String,
@@ -90,11 +88,13 @@ pub enum Command {
     SetWebAgent {
         id: String,
     },
-    /// Create a workspace (`id == None`) or rename an existing one (the System Map's
-    /// Workspaces tier).
+    /// Create a workspace (`id == None`) or update an existing one (the System Map's
+    /// Workspaces tier): name, **owner** (its domain lead), and **members** (the team).
     UpsertWorkspace {
         id: Option<String>,
         name: String,
+        owner: Option<String>,
+        members: Vec<String>,
     },
     /// Delete a workspace + its directory (refused while agents are still assigned).
     DeleteWorkspace {
@@ -340,18 +340,18 @@ fn seed_provider(conn: &rusqlite::Connection) {
     }
 }
 
-/// Give every agent a first-class workspace + assignment (idempotent). An agent that
-/// predates the workspace model — or one inherited from a shared rust-claw central.db —
-/// is mapped to a workspace whose id is its legacy `folder`, so its existing directory and
-/// `AGENT.md` (now the workspace's project brief) carry over untouched. The per-agent
-/// identity prompt starts empty (the run falls back to base + brief until the operator
-/// sets one). Agents already assigned are left alone.
+/// Give every agent a workspace it **owns** (its home), idempotent. An agent that predates
+/// the workspace model — or one inherited from a shared rust-claw central.db — gets a
+/// workspace whose id is its legacy `folder`, so its existing directory and `AGENT.md` (now
+/// the workspace's project brief) carry over untouched. `set_owner` also makes it a member.
+/// The per-agent identity prompt starts empty (the run falls back to base + brief until the
+/// operator sets one). Agents that already own a workspace are left alone.
 fn migrate_workspaces(conn: &rusqlite::Connection) {
     let Ok(agents) = agents::list(conn) else {
         return;
     };
     for agent in agents {
-        if workspaces::for_agent(conn, &agent.id)
+        if workspaces::owned_by(conn, &agent.id)
             .ok()
             .flatten()
             .is_some()
@@ -359,7 +359,7 @@ fn migrate_workspaces(conn: &rusqlite::Connection) {
             continue;
         }
         let _ = workspaces::create(conn, &agent.folder, &agent.name);
-        let _ = workspaces::assign(conn, &agent.id, &agent.folder);
+        let _ = workspaces::set_owner(conn, &agent.folder, &agent.id);
     }
 }
 
@@ -408,15 +408,17 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             model,
             prompt,
             tools,
-            workspace,
-        } => admin::upsert_agent(
-            conn, shared, id, &name, endpoint, model, prompt, tools, workspace,
-        ),
+        } => admin::upsert_agent(conn, shared, id, &name, endpoint, model, prompt, tools),
         Command::DeleteAgent { id } => admin::delete_agent(conn, shared, &id),
         Command::LoadAgentPrompt { id } => admin::load_agent_prompt(conn, shared, &id),
         Command::LoadAgentTools { id } => admin::load_agent_tools(conn, shared, &id),
         Command::SetWebAgent { id } => admin::set_web_agent(conn, shared, &id),
-        Command::UpsertWorkspace { id, name } => admin::upsert_workspace(conn, shared, id, &name),
+        Command::UpsertWorkspace {
+            id,
+            name,
+            owner,
+            members,
+        } => admin::upsert_workspace(conn, shared, id, &name, owner, members),
         Command::DeleteWorkspace { id } => admin::delete_workspace(conn, shared, &id),
         Command::DiscoverModels { endpoint } => admin::discover_models(conn, shared, &endpoint),
         Command::CloseDrawer => close_drawer(shared),

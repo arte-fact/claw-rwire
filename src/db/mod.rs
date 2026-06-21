@@ -33,6 +33,7 @@ pub fn open(path: &Path) -> Result<Connection, DbError> {
     let conn = Connection::open(path).map_err(DbError::Open)?;
     configure(&conn)?;
     apply_schema(&conn)?;
+    migrate(&conn)?;
     Ok(conn)
 }
 
@@ -57,11 +58,65 @@ fn configure(conn: &Connection) -> Result<(), DbError> {
 pub fn open_in_memory() -> Result<Connection, DbError> {
     let conn = Connection::open_in_memory().map_err(DbError::Open)?;
     apply_schema(&conn)?;
+    migrate(&conn)?;
     Ok(conn)
 }
 
 fn apply_schema(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(SCHEMA).map_err(DbError::Schema)
+}
+
+/// In-place migrations for claw-rwire-only tables whose shape changed after a DB was first
+/// created (`CREATE TABLE IF NOT EXISTS` can't alter an existing table). Each step is
+/// idempotent, so this runs safely on every open. rust-claw never reads these tables.
+fn migrate(conn: &Connection) -> Result<(), DbError> {
+    add_workspace_owner_column(conn).map_err(DbError::Schema)?;
+    widen_agent_workspaces_to_m_n(conn).map_err(DbError::Schema)?;
+    Ok(())
+}
+
+/// Add `workspaces.owner_agent_id` to a DB created before it existed. A fresh DB already has
+/// it from the schema, so the ALTER fails with "duplicate column" — which we treat as success.
+fn add_workspace_owner_column(conn: &Connection) -> rusqlite::Result<()> {
+    match conn.execute("ALTER TABLE workspaces ADD COLUMN owner_agent_id TEXT", []) {
+        Ok(_) => conn.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_owner
+               ON workspaces(owner_agent_id) WHERE owner_agent_id IS NOT NULL",
+        ),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Rebuild `agent_workspaces` from its old single-column PK (`agent_group_id`, one workspace
+/// per agent) to the composite PK (M:N membership). Detected by whether `workspace_id` is
+/// part of the primary key; a fresh DB already has the composite PK, so this is a no-op.
+fn widen_agent_workspaces_to_m_n(conn: &Connection) -> rusqlite::Result<()> {
+    let workspace_in_pk: bool = conn
+        .prepare(
+            "SELECT pk FROM pragma_table_info('agent_workspaces') WHERE name = 'workspace_id'",
+        )?
+        .query_row([], |row| row.get::<_, i64>(0))
+        .map(|pk| pk > 0)
+        .unwrap_or(false);
+    if workspace_in_pk {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "CREATE TABLE agent_workspaces_new (
+           agent_group_id TEXT NOT NULL REFERENCES agent_groups(id),
+           workspace_id   TEXT NOT NULL REFERENCES workspaces(id),
+           PRIMARY KEY (agent_group_id, workspace_id)
+         );
+         INSERT OR IGNORE INTO agent_workspaces_new (agent_group_id, workspace_id)
+           SELECT agent_group_id, workspace_id FROM agent_workspaces;
+         DROP TABLE agent_workspaces;
+         ALTER TABLE agent_workspaces_new RENAME TO agent_workspaces;",
+    )
+}
+
+fn is_duplicate_column(err: &rusqlite::Error) -> bool {
+    err.to_string().contains("duplicate column name")
 }
 
 #[cfg(test)]
@@ -126,5 +181,67 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .expect("journal_mode");
         assert_eq!(mode, "wal");
+    }
+
+    /// `pk` position of a column in `table`'s primary key (0 = not part of the PK).
+    fn pk_of(conn: &Connection, table: &str, column: &str) -> i64 {
+        conn.query_row(
+            &format!("SELECT pk FROM pragma_table_info('{table}') WHERE name = ?1"),
+            [column],
+            |row| row.get(0),
+        )
+        .expect("table_info")
+    }
+
+    #[test]
+    fn migrate_upgrades_an_old_shape_db_in_place() {
+        // Start from the full current schema (so agent_groups etc. exist), then *downgrade*
+        // the two tables to their pre-Phase-A shape — workspaces without an owner column and
+        // agent_workspaces with the old single-column PK — to simulate an existing dev DB.
+        let conn = Connection::open_in_memory().expect("db");
+        apply_schema(&conn).expect("schema");
+        conn.execute_batch(
+            "DROP TABLE agent_workspaces;
+             DROP TABLE workspaces;
+             CREATE TABLE workspaces (
+               id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL
+             );
+             CREATE TABLE agent_workspaces (
+               agent_group_id TEXT PRIMARY KEY,
+               workspace_id   TEXT NOT NULL
+             );
+             INSERT INTO agent_groups (id, name, folder, created_at)
+               VALUES ('ag-a', 'A', 'ag-a', 'now');
+             INSERT INTO workspaces (id, name, created_at) VALUES ('ws-1', 'One', 'now');
+             INSERT INTO agent_workspaces (agent_group_id, workspace_id) VALUES ('ag-a', 'ws-1');",
+        )
+        .expect("seed old shape");
+        assert_eq!(
+            pk_of(&conn, "agent_workspaces", "workspace_id"),
+            0,
+            "old PK"
+        );
+
+        migrate(&conn).expect("migrate");
+
+        // The owner column now exists, and agent_workspaces has the composite PK with its
+        // one membership row carried over.
+        assert!(pk_of(&conn, "workspaces", "owner_agent_id") >= 0); // column resolves
+        assert!(
+            pk_of(&conn, "agent_workspaces", "workspace_id") > 0,
+            "composite PK"
+        );
+        let kept: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM agent_workspaces WHERE agent_group_id='ag-a' AND workspace_id='ws-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(kept, 1, "membership row carried over");
+
+        // Idempotent: a second migrate is a no-op.
+        migrate(&conn).expect("migrate again");
+        assert!(pk_of(&conn, "agent_workspaces", "workspace_id") > 0);
     }
 }

@@ -43,8 +43,14 @@ pub fn form(app: &App, draft: &AgentDraft) -> ElementBuilder {
     );
     let endpoint = endpoint_select(app, draft.endpoint.as_deref());
     let model = model_field(app, draft);
-    let tools = tools_field(app, draft);
-    let workspace = workspace_field(app, draft);
+    let web_tools = tools_field(app, draft, "web", "Web tools", "No web tools available");
+    let workspace_tools = tools_field(
+        app,
+        draft,
+        "workspace",
+        "Workspace tools",
+        "No workspace tools available",
+    );
     let prompt = prompt_field(draft);
 
     let mut actions = vec![submit(if draft.id.is_some() { "Save" } else { "Add" })];
@@ -55,68 +61,29 @@ pub fn form(app: &App, draft: &AgentDraft) -> ElementBuilder {
 
     drawer_form(
         save(),
-        [name, endpoint, model, tools, workspace, prompt],
+        [name, endpoint, model, web_tools, workspace_tools, prompt],
         actions,
     )
 }
 
-/// The workspace section: assign the agent to a workspace (created in the Workspaces tier)
-/// or leave it with none, then — when one is assigned — the **workspace tools** (bash/read/
-/// write/edit) that operate on it. Assigning a workspace another agent already uses shares
-/// that project (same files + the same `AGENT.md` brief). The tools are grouped here, not
-/// with the web tools, because they do nothing without a workspace.
-fn workspace_field(app: &App, draft: &AgentDraft) -> ElementBuilder {
-    let selected = draft.workspace.as_deref();
-    let none = el(El::Option).attr("value", "").text("— no workspace —");
-    let mut options = vec![if selected.is_none() {
-        none.bool_attr(At::Selected)
-    } else {
-        none
-    }];
-    for workspace in &app.workspaces {
-        let option = el(El::Option)
-            .attr("value", &workspace.id)
-            .text(&workspace.name);
-        options.push(if selected == Some(workspace.id.as_str()) {
-            option.bool_attr(At::Selected)
-        } else {
-            option
-        });
-    }
-    let picker = labeled(
-        "Workspace",
-        el(El::Select)
-            .attr("name", "workspace")
-            .on(Ev::Change, workspace_changed())
-            .st(select_st())
-            .append(options),
-    );
-    let mut children = vec![picker];
-    // Workspace tools only matter when a workspace is assigned (they're gated on one at
-    // run time), so they appear only once one is picked.
-    if draft.workspace.is_some() {
-        let chips = tool_chips(app, draft, "workspace");
-        if !chips.is_empty() {
-            children.push(labeled("Workspace tools", chip_wrap(chips)));
-        }
-    }
-    el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapMd])
-        .append(children)
-}
-
-/// The web-tool picker: toggle-chips for the connected MCP server's tools (workspace tools
-/// live in the Workspace section). Each chip is on iff its name is in `draft.tools`.
-fn tools_field(app: &App, draft: &AgentDraft) -> ElementBuilder {
-    let chips = tool_chips(app, draft, "web");
+/// A tool picker for one `group`: toggle-chips, each on iff its name is in `draft.tools`.
+/// Workspace tools are a per-agent capability — they fire only when the agent operates in a
+/// workspace (owned, or a task's), which is gated at run time; membership is managed on the
+/// Workspaces tier, so the chips show here unconditionally.
+fn tools_field(
+    app: &App,
+    draft: &AgentDraft,
+    group: &str,
+    label: &str,
+    empty: &str,
+) -> ElementBuilder {
+    let chips = tool_chips(app, draft, group);
     let body = if chips.is_empty() {
-        el(El::Div)
-            .st([St::TextXs, St::TextMuted])
-            .text("No web tools available")
+        el(El::Div).st([St::TextXs, St::TextMuted]).text(empty)
     } else {
         chip_wrap(chips)
     };
-    labeled("Web tools", body)
+    labeled(label, body)
 }
 
 /// The chips for one tool `group`, each on iff selected in `draft.tools`.
@@ -267,7 +234,6 @@ fn open_edit(app: &mut App, ctx: &EventContext) {
         model: agent.model.clone().unwrap_or_default(),
         prompt: String::new(),
         tools: Vec::new(),
-        workspace: None,
     };
     let id = agent.id.clone();
     let endpoint = draft.endpoint.clone();
@@ -310,14 +276,6 @@ fn model_changed(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn workspace_changed(app: &mut App, ctx: &EventContext) {
-    let workspace = ctx.text().map(str::to_owned).filter(|v| !v.is_empty());
-    if let Some(Editing::Agent(draft)) = app.editing.as_mut() {
-        draft.workspace = workspace;
-    }
-}
-
-#[handler]
 fn tool_toggled(app: &mut App, ctx: &EventContext) {
     let Some(tool) = ctx.data("tool").map(str::to_owned) else {
         return;
@@ -340,13 +298,9 @@ fn prompt_changed(app: &mut App, ctx: &EventContext) {
 
 #[handler]
 fn save(app: &mut App, ctx: &EventContext) {
-    // Tools + workspace live in the draft (controlled), not the plain form fields.
-    let (id, tools, workspace) = match app.editing.as_ref() {
-        Some(Editing::Agent(draft)) => (
-            draft.id.clone(),
-            draft.tools.clone(),
-            draft.workspace.clone(),
-        ),
+    // Tools live in the draft (the chips are controlled), not the plain form fields.
+    let (id, tools) = match app.editing.as_ref() {
+        Some(Editing::Agent(draft)) => (draft.id.clone(), draft.tools.clone()),
         _ => return,
     };
     let name = ctx.field("name").unwrap_or_default().trim().to_owned();
@@ -371,7 +325,6 @@ fn save(app: &mut App, ctx: &EventContext) {
         model,
         prompt,
         tools,
-        workspace,
     });
 }
 

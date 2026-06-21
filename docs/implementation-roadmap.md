@@ -26,23 +26,25 @@
 
 ---
 
-## ☐ Phase A — foundation: workspace owner + M:N membership
+## ✅ Phase A — foundation: workspace owner + M:N membership
 
 > Splits agent↔workspace into **owns (home, ≤1)** + **member-of (teams, M:N)**, and adds a
 > workspace **owner**. Chat **stays global** (the concierge = today's `web_agent`, re-roled),
 > so there's **no chat↔workspace mapping and no `web_agent` dissolution** — that's the
 > simplification from choosing global-only chat. See the model doc's *Revision* section.
 
-- [ ] Schema: `workspaces.owner_agent_id` (NOT NULL, **UNIQUE**) — ADD COLUMN + backfill
-      (owner = the agent that owned the migrated folder)
-- [ ] Schema: `agent_workspaces` PK → `(agent_group_id, workspace_id)` (M:N) — table rebuild
-- [ ] Queries: `owned_by` / `member_of` / `members_of` / `set_owner` / `add_member` /
-      `remove_member`
-- [ ] Resolution: `for_agent` → `owned_by` (home) + `member_of` (teams); a task run resolves
-      the **task's** workspace (chat resolution stays single-agent = the concierge)
-- [ ] Concierge role: keep the single front agent; (re-)label `web_agent` as the concierge
-- [ ] Interim Team management (set owner + members) — fold into the workspace tier for now
-- [ ] `cargo fmt --check` · `clippy -D warnings` · `cargo test` green
+- [x] Schema: `workspaces.owner_agent_id` (partial-**UNIQUE** index) — column + ALTER migration
+      + boot backfill (owner = the agent that owned the migrated folder)
+- [x] Schema: `agent_workspaces` PK → `(agent_group_id, workspace_id)` (M:N) — table-rebuild
+      migration (idempotent, detects the old single-column PK)
+- [x] Queries: `owned_by` / `members_of` / `set_owner` / `add_member` / `remove_member`
+      (`member_of` deferred to Phase C, where the executor needs it)
+- [x] Resolution: a chat turn resolves the agent's **owned** workspace (`owned_by`)
+- [x] Concierge role: single front agent kept (no `web_agent` dissolution). *Visible relabel*
+      to "Concierge" deferred to Phase B (where Chat moves to the root)
+- [x] Team management folded into the Workspaces tier: owner picker + members multi-select;
+      the agent-drawer workspace picker removed (workspace tools shown unconditionally)
+- [x] `cargo fmt --check` · `clippy -D warnings` · `cargo test` green (79) + e2e verified
 
 ---
 

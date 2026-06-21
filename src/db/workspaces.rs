@@ -1,8 +1,7 @@
-//! First-class workspaces (the `workspaces` table) and the agent→workspace mapping
-//! (`agent_workspaces`). A workspace is a named directory under `<data>/workspaces/<id>`
-//! that one or more agents share; an agent may have none. claw resolves an agent's
-//! workspace through this mapping rather than the legacy `agent_groups.folder` column,
-//! which lets distinct agents collaborate on one shared project.
+//! First-class workspaces (the `workspaces` table), each with an **owner** agent (its domain
+//! lead + home), plus **membership** (`agent_workspaces`, M:N) — the team whose tasks an agent
+//! can be assigned and whose files it may touch. An agent owns at most one workspace; it can
+//! be a member of several. The owner is implicitly a member of its own.
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -10,14 +9,18 @@ use rusqlite::{Connection, OptionalExtension, params};
 pub struct Workspace {
     pub id: String,
     pub name: String,
+    pub owner: Option<String>,
 }
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Workspace> {
     Ok(Workspace {
         id: row.get(0)?,
         name: row.get(1)?,
+        owner: row.get(2)?,
     })
 }
+
+const SELECT: &str = "SELECT id, name, owner_agent_id FROM workspaces";
 
 /// Create a workspace (idempotent on id — a re-create never renames an existing one). The
 /// `id` is the directory name under `<data>/workspaces/`.
@@ -39,28 +42,89 @@ pub fn rename(conn: &Connection, id: &str, name: &str) -> rusqlite::Result<()> {
 }
 
 pub fn get(conn: &Connection, id: &str) -> rusqlite::Result<Option<Workspace>> {
-    conn.query_row(
-        "SELECT id, name FROM workspaces WHERE id = ?1",
-        params![id],
-        from_row,
-    )
-    .optional()
+    conn.query_row(&format!("{SELECT} WHERE id = ?1"), params![id], from_row)
+        .optional()
 }
 
 /// Delete a workspace row. The caller is responsible for checking no agents are still
-/// assigned (FK enforcement is off) and for removing the directory on disk.
+/// members (FK enforcement is off) and for removing the directory on disk.
 pub fn delete(conn: &Connection, id: &str) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
     Ok(())
 }
 
 pub fn list(conn: &Connection) -> rusqlite::Result<Vec<Workspace>> {
-    let mut stmt = conn.prepare("SELECT id, name FROM workspaces ORDER BY created_at ASC")?;
+    let mut stmt = conn.prepare(&format!("{SELECT} ORDER BY created_at ASC"))?;
     let rows = stmt.query_map([], from_row)?;
     rows.collect()
 }
 
-/// The names of the agents assigned to `workspace_id` (those that share it), sorted.
+// ── Owner (the workspace's domain lead / home agent) ────────────────────────────
+
+/// Set the workspace's owner, also making the owner a member (the owner is implicitly a
+/// member of its own workspace). An agent owns at most one workspace — the partial unique
+/// index enforces it — so `set_owner` first clears any other workspace this agent owns.
+pub fn set_owner(conn: &Connection, workspace_id: &str, agent_id: &str) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE workspaces SET owner_agent_id = NULL WHERE owner_agent_id = ?1",
+        params![agent_id],
+    )?;
+    tx.execute(
+        "UPDATE workspaces SET owner_agent_id = ?2 WHERE id = ?1",
+        params![workspace_id, agent_id],
+    )?;
+    tx.execute(
+        "INSERT OR IGNORE INTO agent_workspaces (agent_group_id, workspace_id) VALUES (?1, ?2)",
+        params![agent_id, workspace_id],
+    )?;
+    tx.commit()
+}
+
+/// The id of the workspace `agent_id` owns (its home), if any.
+pub fn owned_by(conn: &Connection, agent_id: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT id FROM workspaces WHERE owner_agent_id = ?1",
+        params![agent_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+// ── Membership (the team; M:N) ──────────────────────────────────────────────────
+
+/// Add `agent_id` to `workspace_id`'s team (idempotent).
+pub fn add_member(conn: &Connection, agent_id: &str, workspace_id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO agent_workspaces (agent_group_id, workspace_id) VALUES (?1, ?2)",
+        params![agent_id, workspace_id],
+    )?;
+    Ok(())
+}
+
+/// Remove `agent_id` from `workspace_id`'s team. (Callers should not remove the owner.)
+pub fn remove_member(
+    conn: &Connection,
+    agent_id: &str,
+    workspace_id: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM agent_workspaces WHERE agent_group_id = ?1 AND workspace_id = ?2",
+        params![agent_id, workspace_id],
+    )?;
+    Ok(())
+}
+
+/// The agent ids on `workspace_id`'s team.
+pub fn members_of(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT agent_group_id FROM agent_workspaces WHERE workspace_id = ?1 ORDER BY agent_group_id",
+    )?;
+    let rows = stmt.query_map(params![workspace_id], |row| row.get(0))?;
+    rows.collect()
+}
+
+/// The names of the agents on `workspace_id`'s team, sorted — for display.
 pub fn agents_in(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT a.name FROM agent_workspaces w
@@ -70,36 +134,6 @@ pub fn agents_in(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Vec<
     )?;
     let rows = stmt.query_map(params![workspace_id], |row| row.get(0))?;
     rows.collect()
-}
-
-/// Assign `agent_id` to `workspace_id`, replacing any prior assignment. Multiple agents
-/// may point at one workspace (sharing).
-pub fn assign(conn: &Connection, agent_id: &str, workspace_id: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO agent_workspaces (agent_group_id, workspace_id) VALUES (?1, ?2)
-         ON CONFLICT(agent_group_id) DO UPDATE SET workspace_id = excluded.workspace_id",
-        params![agent_id, workspace_id],
-    )?;
-    Ok(())
-}
-
-/// Drop an agent's workspace assignment (it becomes a pure chat agent with no workspace).
-pub fn unassign(conn: &Connection, agent_id: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "DELETE FROM agent_workspaces WHERE agent_group_id = ?1",
-        params![agent_id],
-    )?;
-    Ok(())
-}
-
-/// The id of the workspace an agent works in, if any.
-pub fn for_agent(conn: &Connection, agent_id: &str) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT workspace_id FROM agent_workspaces WHERE agent_group_id = ?1",
-        params![agent_id],
-        |row| row.get(0),
-    )
-    .optional()
 }
 
 #[cfg(test)]
@@ -129,42 +163,80 @@ mod tests {
     }
 
     #[test]
-    fn assign_maps_an_agent_and_replaces_on_reassign() {
+    fn membership_is_many_to_many() {
         let conn = seeded();
         create(&conn, "ws-1", "One").expect("ws1");
         create(&conn, "ws-2", "Two").expect("ws2");
-        assert_eq!(for_agent(&conn, "ag-a").expect("none yet"), None);
-        assign(&conn, "ag-a", "ws-1").expect("assign");
+        assert!(members_of(&conn, "ws-1").expect("none yet").is_empty());
+        // One agent on several workspaces; one workspace with several agents.
+        add_member(&conn, "ag-a", "ws-1").expect("a1");
+        add_member(&conn, "ag-a", "ws-2").expect("a2");
+        add_member(&conn, "ag-b", "ws-1").expect("b1");
+        add_member(&conn, "ag-a", "ws-1").expect("idempotent");
         assert_eq!(
-            for_agent(&conn, "ag-a").expect("some"),
-            Some("ws-1".to_owned())
+            members_of(&conn, "ws-1").expect("ws1"),
+            vec!["ag-a".to_owned(), "ag-b".to_owned()]
         );
-        // Re-assigning replaces, never duplicates (PK on agent_group_id).
-        assign(&conn, "ag-a", "ws-2").expect("reassign");
         assert_eq!(
-            for_agent(&conn, "ag-a").expect("some"),
-            Some("ws-2".to_owned())
+            members_of(&conn, "ws-2").expect("ws2"),
+            vec!["ag-a".to_owned()]
+        );
+        assert_eq!(
+            agents_in(&conn, "ws-1").expect("names"),
+            vec!["Coder".to_owned(), "Writer".to_owned()]
         );
     }
 
     #[test]
-    fn two_agents_can_share_one_workspace() {
+    fn remove_member_drops_one_membership() {
         let conn = seeded();
-        create(&conn, "ws-shared", "Shared").expect("ws");
-        assign(&conn, "ag-a", "ws-shared").expect("a");
-        assign(&conn, "ag-b", "ws-shared").expect("b");
+        create(&conn, "ws-1", "One").expect("ws");
+        add_member(&conn, "ag-a", "ws-1").expect("add");
+        remove_member(&conn, "ag-a", "ws-1").expect("remove");
+        assert!(members_of(&conn, "ws-1").expect("empty").is_empty());
+        assert!(agents_in(&conn, "ws-1").expect("empty").is_empty());
+    }
+
+    #[test]
+    fn owner_is_unique_per_agent_and_implies_membership() {
+        let conn = seeded();
+        create(&conn, "ws-1", "One").expect("ws1");
+        create(&conn, "ws-2", "Two").expect("ws2");
+        assert_eq!(owned_by(&conn, "ag-a").expect("none"), None);
+
+        set_owner(&conn, "ws-1", "ag-a").expect("own ws1");
         assert_eq!(
-            for_agent(&conn, "ag-a").expect("a"),
-            Some("ws-shared".to_owned())
+            owned_by(&conn, "ag-a").expect("some"),
+            Some("ws-1".to_owned())
+        );
+        // Owning implies membership.
+        assert_eq!(
+            members_of(&conn, "ws-1").expect("member"),
+            vec!["ag-a".to_owned()]
         );
         assert_eq!(
-            for_agent(&conn, "ag-b").expect("b"),
-            Some("ws-shared".to_owned())
+            get(&conn, "ws-1").expect("ws").unwrap().owner.as_deref(),
+            Some("ag-a")
         );
+
+        // An agent owns at most one workspace: owning ws-2 releases ws-1.
+        set_owner(&conn, "ws-2", "ag-a").expect("own ws2");
         assert_eq!(
-            agents_in(&conn, "ws-shared").expect("agents_in"),
-            vec!["Coder".to_owned(), "Writer".to_owned()]
+            owned_by(&conn, "ag-a").expect("some"),
+            Some("ws-2".to_owned())
         );
+        assert_eq!(get(&conn, "ws-1").expect("ws").unwrap().owner, None);
+    }
+
+    #[test]
+    fn two_agents_own_different_workspaces() {
+        let conn = seeded();
+        create(&conn, "ws-1", "One").expect("ws1");
+        create(&conn, "ws-2", "Two").expect("ws2");
+        set_owner(&conn, "ws-1", "ag-a").expect("a");
+        set_owner(&conn, "ws-2", "ag-b").expect("b");
+        assert_eq!(owned_by(&conn, "ag-a").expect("a"), Some("ws-1".to_owned()));
+        assert_eq!(owned_by(&conn, "ag-b").expect("b"), Some("ws-2".to_owned()));
     }
 
     #[test]
@@ -182,15 +254,5 @@ mod tests {
         delete(&conn, "ws-1").expect("delete");
         assert_eq!(get(&conn, "ws-1").expect("get"), None);
         assert!(list(&conn).expect("list").is_empty());
-    }
-
-    #[test]
-    fn unassign_clears_the_mapping() {
-        let conn = seeded();
-        create(&conn, "ws-1", "One").expect("ws");
-        assign(&conn, "ag-a", "ws-1").expect("assign");
-        unassign(&conn, "ag-a").expect("unassign");
-        assert_eq!(for_agent(&conn, "ag-a").expect("none"), None);
-        assert!(agents_in(&conn, "ws-1").expect("empty").is_empty());
     }
 }

@@ -184,21 +184,28 @@ CREATE TABLE IF NOT EXISTS agent_prompts (
   updated_at     TEXT NOT NULL
 );
 
--- First-class, shareable workspaces: a named directory under <data>/workspaces/<id> that
--- one or more agents work in (their coder tools + the AGENT.md project brief). Additive
--- (claw-rwire-only); claw resolves an agent's workspace through agent_workspaces rather
--- than the legacy agent_groups.folder column.
+-- First-class, shareable workspaces: a named directory under <data>/workspaces/<id> that a
+-- team of agents works in (their workspace tools + the AGENT.md project brief). Each has an
+-- owner agent (its domain lead + default task assignee); an agent owns at most one workspace
+-- (its home). `owner_agent_id` is nullable in the column definition so it can be added to an
+-- existing DB via ALTER (see db::migrate), but the app always sets it; the partial unique
+-- index enforces the one-home-per-agent rule. Additive (claw-rwire-only).
 CREATE TABLE IF NOT EXISTS workspaces (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  owner_agent_id TEXT REFERENCES agent_groups(id),
+  created_at     TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_owner
+  ON workspaces(owner_agent_id) WHERE owner_agent_id IS NOT NULL;
 
--- Which workspace an agent works in (N agents -> 1 workspace; an agent may have none).
--- Additive (claw-rwire-only).
+-- Workspace membership (M:N): which workspaces an agent is a member of — the teams whose
+-- tasks it can be assigned and whose files it may touch. An agent may be a member of several
+-- workspaces; the owner is implicitly a member of its own. Additive (claw-rwire-only).
 CREATE TABLE IF NOT EXISTS agent_workspaces (
-  agent_group_id TEXT PRIMARY KEY REFERENCES agent_groups(id),
-  workspace_id   TEXT NOT NULL REFERENCES workspaces(id)
+  agent_group_id TEXT NOT NULL REFERENCES agent_groups(id),
+  workspace_id   TEXT NOT NULL REFERENCES workspaces(id),
+  PRIMARY KEY (agent_group_id, workspace_id)
 );
 
 CREATE TABLE IF NOT EXISTS connectors (

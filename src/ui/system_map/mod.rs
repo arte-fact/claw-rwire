@@ -142,7 +142,7 @@ fn drawer(app: &App) -> ElementBuilder {
             } else {
                 "New workspace"
             },
-            workspaces::form(draft),
+            workspaces::form(app, draft),
         ),
         Some(Editing::Channel) => ("Web channel", channel_form(app)),
         None => ("", el(El::Div)),
