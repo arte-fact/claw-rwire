@@ -142,75 +142,96 @@ pub fn upsert_agent(
     }
     // The identity prompt is operator-owned config (not a workspace file); a blank one
     // clears it so the run falls back to the base prompt + the workspace brief. Workspace
-    // ownership + membership are managed on the Workspaces tier, not here.
+    // ownership + membership are managed on the workspace's Team tab, not here.
     if let Err(err) = agent_prompts::set(conn, &id, &prompt) {
         return surface_error(shared, format!("save agent prompt: {err}"));
     }
     project_registry(conn, shared);
 }
 
-/// Create a workspace (minting an id) or update an existing one — name, owner, and members.
-/// The owner is always also a member; saving replaces the membership set with `members`
-/// (plus the owner), so the Workspaces-tier drawer is the single source of truth for the team.
-pub fn upsert_workspace(
+/// Create a new workspace (the dashboard's create affordance), minting an id.
+pub fn create_workspace(conn: &rusqlite::Connection, shared: &SharedServerState, name: &str) {
+    let name = name.trim();
+    if name.is_empty() {
+        return surface_error(shared, "workspace name can't be empty".to_owned());
+    }
+    match crate::id::new_id() {
+        Ok(id) => {
+            if let Err(err) = workspaces::create(conn, &id, name) {
+                return surface_error(shared, format!("create workspace: {err}"));
+            }
+        }
+        Err(err) => return surface_error(shared, format!("create workspace: {err}")),
+    }
+    project_registry(conn, shared);
+}
+
+/// Rename a workspace (its Team tab).
+pub fn rename_workspace(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
-    id: Option<String>,
+    id: &str,
     name: &str,
-    owner: Option<String>,
-    members: Vec<String>,
 ) {
     let name = name.trim();
     if name.is_empty() {
         return surface_error(shared, "workspace name can't be empty".to_owned());
     }
-    let owner = owner.filter(|value| !value.trim().is_empty());
-    let workspace_id = match &id {
-        Some(id) => {
-            if let Err(err) = workspaces::rename(conn, id, name) {
-                return surface_error(shared, format!("save workspace: {err}"));
-            }
-            id.clone()
-        }
-        None => match crate::id::new_id() {
-            Ok(new_id) => {
-                if let Err(err) = workspaces::create(conn, &new_id, name) {
-                    return surface_error(shared, format!("create workspace: {err}"));
-                }
-                new_id
-            }
-            Err(err) => return surface_error(shared, format!("create workspace: {err}")),
-        },
-    };
-    if let Err(err) = set_team(conn, &workspace_id, owner.as_deref(), &members) {
-        return surface_error(shared, format!("save workspace team: {err}"));
+    if let Err(err) = workspaces::rename(conn, id, name) {
+        return surface_error(shared, format!("rename workspace: {err}"));
     }
     project_registry(conn, shared);
 }
 
-/// Replace a workspace's owner + membership. The owner (if any) is always a member; any
-/// agent not in the new set is removed from the team.
-fn set_team(
+/// Set (or clear) a workspace's owner. Setting also makes the owner a member.
+pub fn set_workspace_owner(
     conn: &rusqlite::Connection,
-    workspace_id: &str,
-    owner: Option<&str>,
-    members: &[String],
-) -> rusqlite::Result<()> {
-    if let Some(owner) = owner {
-        workspaces::set_owner(conn, workspace_id, owner)?; // also adds owner as a member
+    shared: &SharedServerState,
+    id: &str,
+    owner: Option<String>,
+) {
+    let result = match owner.filter(|value| !value.trim().is_empty()) {
+        Some(owner) => workspaces::set_owner(conn, id, &owner),
+        None => workspaces::clear_owner(conn, id),
+    };
+    if let Err(err) = result {
+        return surface_error(shared, format!("set workspace owner: {err}"));
     }
-    for member in members {
-        workspaces::add_member(conn, member, workspace_id)?;
+    project_registry(conn, shared);
+}
+
+/// Add a member to a workspace's team.
+pub fn add_member(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str, agent: &str) {
+    if let Err(err) = workspaces::add_member(conn, agent, id) {
+        return surface_error(shared, format!("add member: {err}"));
     }
-    // Drop anyone no longer on the team (never the owner — it's kept as a member above).
-    let keep: std::collections::HashSet<&str> =
-        members.iter().map(String::as_str).chain(owner).collect();
-    for existing in workspaces::members_of(conn, workspace_id)? {
-        if !keep.contains(existing.as_str()) {
-            workspaces::remove_member(conn, &existing, workspace_id)?;
-        }
+    project_registry(conn, shared);
+}
+
+/// Remove a member from a workspace's team. The owner can't be removed (it's the home
+/// agent); clear or change the owner first.
+pub fn remove_member(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    id: &str,
+    agent: &str,
+) {
+    if workspaces::get(conn, id)
+        .ok()
+        .flatten()
+        .and_then(|w| w.owner)
+        .as_deref()
+        == Some(agent)
+    {
+        return surface_error(
+            shared,
+            "the owner is always a member — change the owner first".to_owned(),
+        );
     }
-    Ok(())
+    if let Err(err) = workspaces::remove_member(conn, agent, id) {
+        return surface_error(shared, format!("remove member: {err}"));
+    }
+    project_registry(conn, shared);
 }
 
 /// Delete a workspace and its directory. Refused while agents are still assigned (they'd

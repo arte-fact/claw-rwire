@@ -81,6 +81,16 @@ pub fn set_owner(conn: &Connection, workspace_id: &str, agent_id: &str) -> rusql
     tx.commit()
 }
 
+/// Clear a workspace's owner (it becomes unowned). Membership is left intact — the
+/// ex-owner stays on the team unless removed separately.
+pub fn clear_owner(conn: &Connection, workspace_id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE workspaces SET owner_agent_id = NULL WHERE id = ?1",
+        params![workspace_id],
+    )?;
+    Ok(())
+}
+
 /// The id of the workspace `agent_id` owns (its home), if any.
 pub fn owned_by(conn: &Connection, agent_id: &str) -> rusqlite::Result<Option<String>> {
     conn.query_row(
@@ -226,6 +236,21 @@ mod tests {
             Some("ws-2".to_owned())
         );
         assert_eq!(get(&conn, "ws-1").expect("ws").unwrap().owner, None);
+    }
+
+    #[test]
+    fn clear_owner_unsets_the_owner_keeping_membership() {
+        let conn = seeded();
+        create(&conn, "ws-1", "One").expect("ws");
+        set_owner(&conn, "ws-1", "ag-a").expect("own");
+        clear_owner(&conn, "ws-1").expect("clear");
+        assert_eq!(get(&conn, "ws-1").expect("get").unwrap().owner, None);
+        assert_eq!(owned_by(&conn, "ag-a").expect("none"), None);
+        // The ex-owner stays on the team.
+        assert_eq!(
+            members_of(&conn, "ws-1").expect("member"),
+            vec!["ag-a".to_owned()]
+        );
     }
 
     #[test]

@@ -4,11 +4,12 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, St, el, renderer};
+use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
 use rwire_components::Text;
 
+use crate::bridge::{self, Command};
 use crate::state::{App, WorkspaceView};
-use crate::ui::widgets::page_header;
+use crate::ui::widgets::{page_header, submit};
 
 pub fn page() -> ElementBuilder {
     el(El::Div)
@@ -19,10 +20,46 @@ pub fn page() -> ElementBuilder {
             page_header(
                 "Dashboard",
                 "Every workspace at a glance — owners, teams, and what's running.",
-                el(El::Div).style(Style::new().display("none")),
+                create_form(),
             ),
             grid(),
         ])
+}
+
+/// The inline create affordance in the header: a name input + Create, posting a new
+/// workspace. It then appears in the grid to be opened + configured (owner/members) in its
+/// Team tab.
+fn create_form() -> ElementBuilder {
+    el(El::Form)
+        .on(Ev::Submit, create())
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+        .append([
+            el(El::Input)
+                .attr("name", "name")
+                .attr("placeholder", "New workspace…")
+                .attr("autocomplete", "off")
+                .style(Style::new().set("font", "inherit"))
+                .st([
+                    St::PxSm,
+                    St::PySm,
+                    St::BorderDefault,
+                    St::RoundedSm,
+                    St::BgApp,
+                    St::TextHigh,
+                    St::OutlineNone,
+                ])
+                .focus([St::BorderAccent]),
+            submit("Create"),
+        ])
+}
+
+#[handler]
+fn create(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    let name = ctx.field("name").unwrap_or_default().trim().to_owned();
+    if !name.is_empty() {
+        bridge::send(Command::CreateWorkspace { name });
+    }
 }
 
 #[renderer]

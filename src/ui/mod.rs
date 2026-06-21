@@ -167,9 +167,9 @@ fn workspaces_nav(app: &App) -> ElementBuilder {
             active == Some(workspace.id.as_str()),
         ));
     }
-    // Workspaces are created in System → Workspaces for now (management moves here later).
+    // Create lives on the dashboard; per-workspace settings on its Team tab.
     rows.push(
-        Link::route("/system")
+        Link::route("/dashboard")
             .on(Ev::Click, close_nav())
             .st([
                 St::DisplayFlex,

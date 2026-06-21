@@ -88,15 +88,31 @@ pub enum Command {
     SetWebAgent {
         id: String,
     },
-    /// Create a workspace (`id == None`) or update an existing one (the System Map's
-    /// Workspaces tier): name, **owner** (its domain lead), and **members** (the team).
-    UpsertWorkspace {
-        id: Option<String>,
+    // ── Workspace management (the workspace Team tab + the dashboard's create) ──
+    /// Create a new workspace named `name` (the dashboard's create affordance).
+    CreateWorkspace {
         name: String,
-        owner: Option<String>,
-        members: Vec<String>,
     },
-    /// Delete a workspace + its directory (refused while agents are still assigned).
+    /// Rename a workspace (its Team tab).
+    RenameWorkspace {
+        id: String,
+        name: String,
+    },
+    /// Set (or clear, with `None`) a workspace's owner — its domain lead / home agent.
+    SetWorkspaceOwner {
+        id: String,
+        owner: Option<String>,
+    },
+    /// Add / remove a member (the team) of a workspace.
+    AddMember {
+        id: String,
+        agent: String,
+    },
+    RemoveMember {
+        id: String,
+        agent: String,
+    },
+    /// Delete a workspace + its directory (refused while members are still assigned).
     DeleteWorkspace {
         id: String,
     },
@@ -416,12 +432,13 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadAgentPrompt { id } => admin::load_agent_prompt(conn, shared, &id),
         Command::LoadAgentTools { id } => admin::load_agent_tools(conn, shared, &id),
         Command::SetWebAgent { id } => admin::set_web_agent(conn, shared, &id),
-        Command::UpsertWorkspace {
-            id,
-            name,
-            owner,
-            members,
-        } => admin::upsert_workspace(conn, shared, id, &name, owner, members),
+        Command::CreateWorkspace { name } => admin::create_workspace(conn, shared, &name),
+        Command::RenameWorkspace { id, name } => admin::rename_workspace(conn, shared, &id, &name),
+        Command::SetWorkspaceOwner { id, owner } => {
+            admin::set_workspace_owner(conn, shared, &id, owner)
+        }
+        Command::AddMember { id, agent } => admin::add_member(conn, shared, &id, &agent),
+        Command::RemoveMember { id, agent } => admin::remove_member(conn, shared, &id, &agent),
         Command::DeleteWorkspace { id } => admin::delete_workspace(conn, shared, &id),
         Command::DiscoverModels { endpoint } => admin::discover_models(conn, shared, &endpoint),
         Command::CloseDrawer => close_drawer(shared),
@@ -460,8 +477,14 @@ fn close_drawer(shared: &SharedServerState) {
 /// broadcasts like every other projection.
 fn set_active_workspace(shared: &SharedServerState, id: Option<String>) {
     shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_ACTIVE_WORKSPACE]),
-        move |app| app.active_workspace = id,
+        ChangeSet::from_fields(&[
+            App::FIELD_ACTIVE_WORKSPACE,
+            App::FIELD_WORKSPACE_DELETE_ARMED,
+        ]),
+        move |app| {
+            app.active_workspace = id;
+            app.workspace_delete_armed = false; // a fresh view never opens mid-confirm
+        },
     );
 }
 

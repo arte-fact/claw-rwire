@@ -8,7 +8,6 @@
 
 mod agents;
 mod endpoints;
-mod workspaces;
 
 use rwire::style::Style;
 use rwire::{At, El, ElementBuilder, Ev, HandlerSpec, St, el, handler, renderer};
@@ -24,7 +23,7 @@ pub fn page() -> ElementBuilder {
         .md([St::PXl])
         .append([
             Text::heading1("System").build(),
-            Text::body("Channels route to agents; agents call endpoints.")
+            Text::body("Infrastructure: the channel's concierge, agents, and endpoints.")
                 .muted()
                 .build(),
             error_banner(),
@@ -60,7 +59,6 @@ fn board() -> ElementBuilder {
         .append([
             column("Channels", channels()),
             column("Agents", agents::column()),
-            column("Workspaces", workspaces::column()),
             column("Endpoints", endpoints::column()),
         ])
 }
@@ -100,7 +98,7 @@ fn channels(app: &App) -> ElementBuilder {
             ]),
         el(El::Div)
             .st([St::TextXs, St::TextMuted])
-            .text(&format!("Operator chat → {routes_to}")),
+            .text(&format!("Concierge → {routes_to}")),
     ])
 }
 
@@ -136,14 +134,6 @@ fn drawer(app: &App) -> ElementBuilder {
             },
             agents::form(app, draft),
         ),
-        Some(Editing::Workspace(draft)) => (
-            if draft.id.is_some() {
-                "Edit workspace"
-            } else {
-                "New workspace"
-            },
-            workspaces::form(app, draft),
-        ),
         Some(Editing::Channel) => ("Web channel", channel_form(app)),
         None => ("", el(El::Div)),
     };
@@ -168,7 +158,7 @@ fn channel_form(app: &App) -> ElementBuilder {
     drawer_form(
         route_web(),
         [labeled(
-            "Agent",
+            "Concierge",
             el(El::Select)
                 .attr("name", "agent")
                 .st(select_st())

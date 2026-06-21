@@ -221,23 +221,7 @@ pub struct OpenFile {
 pub enum Editing {
     Endpoint(Option<String>),
     Agent(AgentDraft),
-    Workspace(WorkspaceDraft),
     Channel,
-}
-
-/// In-progress workspace edit. `id == None` is a new workspace (the bridge mints the id);
-/// editing changes the display name, the **owner** (its domain lead / home agent), and the
-/// **members** (the team). `confirm_delete` arms the drawer's two-step delete confirm
-/// (deletion removes the directory on disk).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct WorkspaceDraft {
-    pub id: Option<String>,
-    pub name: String,
-    /// The owning agent id (its home), or `None` for unowned.
-    pub owner: Option<String>,
-    /// The member agent ids (the team). The owner is always among them.
-    pub members: Vec<String>,
-    pub confirm_delete: bool,
 }
 
 /// In-progress agent edit. `id == None` is a new agent; the rest mirror the form
@@ -302,6 +286,9 @@ pub struct App {
     /// workspace route. Set by `on_route`; the sidebar highlights it and the workspace
     /// header/dashboard/Team renderers look its `WorkspaceView` up in `workspaces`.
     pub active_workspace: Option<String>,
+    /// The Team tab's delete confirm is armed (deletion removes the workspace directory, so
+    /// it's a two-step action). Cleared on navigation.
+    pub workspace_delete_armed: bool,
     /// Files view: the id of the workspace being browsed.
     pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).

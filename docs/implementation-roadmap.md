@@ -66,14 +66,21 @@
       placeholder
 - [x] `fmt` · `clippy -D` · `cargo test` (79) green + e2e screenshots
 
-**B-2 — management relocation + chat-at-root (todo):**
-- [ ] Move workspace create/owner/members/delete into the workspace context (editable Team
-      section + New-workspace drawer in shell); shrink System Map to infra (Agents /
-      Endpoints / Channels), drop its Workspaces tier
-- [ ] Chat at the **root** of the tree (relabel concierge); global chat thread list placement
-- [ ] **Global chat** landing polish; **Workspace dashboard** brief editor inline
+**B-2 — management relocation + System Map shrink (done):**
+- [x] Workspace management moved into the workspace context: an **editable Team tab**
+      (rename / owner / members / delete) with **immediate-apply** controls (granular
+      `CreateWorkspace`/`RenameWorkspace`/`SetWorkspaceOwner`/`AddMember`/`RemoveMember`
+      commands), replacing `UpsertWorkspace` + the `WorkspaceDraft` drawer
+- [x] **New workspace** create on the global dashboard; sidebar "New workspace" → `/dashboard`
+- [x] System Map shrunk to infra: Channels / Agents / Endpoints; **Workspaces tier removed**
+      (module + `Editing::Workspace` + `WorkspaceDraft` deleted)
+- [x] Concierge relabel (System Map channel: "Concierge → …", drawer label "Concierge")
+- [x] `cargo fmt --check` · `clippy -D` · `cargo test` (80) green + e2e verified
+
+**B-3 — polish (deferred):**
+- [ ] Explicit "Chat" node at the tree root; global-chat landing polish
+- [ ] Workspace dashboard inline brief (`AGENT.md`) editor
 - [ ] Mobile: confirm the tree in the slide-in nav drawer
-- [ ] `cargo fmt --check` · `clippy -D warnings` · `cargo test` green + e2e
 
 ---
 

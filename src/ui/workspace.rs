@@ -6,10 +6,11 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, St, el, renderer};
+use rwire::{At, El, ElementBuilder, Ev, St, el, handler, renderer};
 use rwire_components::Text;
 
-use crate::state::App;
+use crate::bridge::{self, Command};
+use crate::state::{App, WorkspaceView};
 use crate::ui::files;
 
 /// The sections of a workspace, in tab order.
@@ -187,8 +188,8 @@ pub fn tasks() -> ElementBuilder {
         ])
 }
 
-/// The Team section — owner + members. For now read-only; managed in the System Map's
-/// Workspaces tier (a later increment moves management here).
+/// The Team section — the workspace's name, **owner**, and **members**, all editable inline
+/// (immediate-apply: each change fires a command and re-projects). Plus a guarded delete.
 #[renderer]
 pub fn team(app: &App) -> ElementBuilder {
     let Some(workspace) = app
@@ -200,36 +201,194 @@ pub fn team(app: &App) -> ElementBuilder {
             .st([St::TextSm, St::TextMuted])
             .text("Select a workspace.");
     };
-    let owner_name = workspace
-        .owner
-        .as_ref()
-        .and_then(|id| app.agents.iter().find(|a| &a.id == id))
-        .map(|a| a.name.as_str())
-        .unwrap_or("—");
-    let members = if workspace.member_names.is_empty() {
-        "No members yet.".to_owned()
-    } else {
-        workspace.member_names.join(", ")
-    };
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
         .append([
-            card(
-                "Owner",
-                el(El::Div).st([St::TextSm, St::TextHigh]).text(owner_name),
-            ),
-            card(
-                "Members",
-                el(El::Div).st([St::TextSm, St::TextHigh]).text(&members),
-            ),
-            el(El::Div).st([St::TextXs, St::TextMuted]).append([
-                el(El::Span).text("Manage the owner + members in "),
-                Link::route("/system")
-                    .st([St::TextAccent, St::NoUnderline, St::CursorPointer])
-                    .append([el(El::Span).text("System → Workspaces")]),
-                el(El::Span).text("."),
-            ]),
+            card("Name", name_field(&workspace.name)),
+            card("Owner", owner_field(app, workspace.owner.as_deref())),
+            card("Members", members_field(app, workspace)),
+            card("Danger zone", delete_block(app.workspace_delete_armed)),
         ])
+}
+
+fn field_st() -> [St; 8] {
+    [
+        St::WFull,
+        St::PxSm,
+        St::PySm,
+        St::BorderDefault,
+        St::RoundedSm,
+        St::BgApp,
+        St::TextHigh,
+        St::OutlineNone,
+    ]
+}
+
+fn name_field(name: &str) -> ElementBuilder {
+    el(El::Input)
+        .attr("name", "wsname")
+        .attr("value", name)
+        .attr("autocomplete", "off")
+        .on(Ev::Change, rename())
+        .style(Style::new().set("font", "inherit"))
+        .st(field_st())
+        .focus([St::BorderAccent])
+}
+
+fn owner_field(app: &App, owner: Option<&str>) -> ElementBuilder {
+    let none = el(El::Option).attr("value", "").text("— no owner —");
+    let mut options = vec![if owner.is_none() {
+        none.bool_attr(At::Selected)
+    } else {
+        none
+    }];
+    for agent in &app.agents {
+        let option = el(El::Option).attr("value", &agent.id).text(&agent.name);
+        options.push(if owner == Some(agent.id.as_str()) {
+            option.bool_attr(At::Selected)
+        } else {
+            option
+        });
+    }
+    el(El::Select)
+        .attr("name", "owner")
+        .on(Ev::Change, set_owner())
+        .st(field_st())
+        .append(options)
+}
+
+/// One toggle-chip per agent: on = a member (the owner's chip is on + can't be toggled off).
+fn members_field(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
+    if app.agents.is_empty() {
+        return el(El::Div)
+            .st([St::TextSm, St::TextMuted])
+            .text("No agents to add.");
+    }
+    let chips: Vec<ElementBuilder> = app
+        .agents
+        .iter()
+        .map(|agent| {
+            let is_owner = workspace.owner.as_deref() == Some(agent.id.as_str());
+            let on = is_owner || workspace.members.iter().any(|m| m == &agent.id);
+            member_chip(&agent.id, &agent.name, on, is_owner)
+        })
+        .collect();
+    el(El::Div)
+        .style(Style::new().set("flex-wrap", "wrap"))
+        .st([St::DisplayFlex, St::GapXs])
+        .append(chips)
+}
+
+fn member_chip(id: &str, name: &str, on: bool, is_owner: bool) -> ElementBuilder {
+    let (bg, fg, mark) = if on {
+        (St::BgAccent, St::TextOnAccent, "✓")
+    } else {
+        (St::BgApp, St::TextMuted, "+")
+    };
+    let label = if is_owner {
+        format!("{name} (owner)")
+    } else {
+        name.to_owned()
+    };
+    el(El::Button)
+        .attr("type", "button")
+        .data("agent", id)
+        .data("on", if on { "1" } else { "0" })
+        .on(Ev::Click, toggle_member())
+        .style(Style::new().set("font", "inherit"))
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapXs,
+            St::PxSm,
+            St::PyXs,
+            St::BorderDefault,
+            St::RoundedSm,
+            St::TextXs,
+            St::CursorPointer,
+            bg,
+            fg,
+        ])
+        .append([el(El::Span).text(mark), el(El::Span).text(&label)])
+}
+
+fn delete_block(armed: bool) -> ElementBuilder {
+    if armed {
+        el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+            .append([
+                el(El::Span)
+                    .st([St::TextXs, St::TextError])
+                    .text("Delete this workspace and its files?"),
+                crate::ui::widgets::action_icon(
+                    rwire::icons::Icon::Trash,
+                    "Delete",
+                    confirm_delete(),
+                    true,
+                ),
+                crate::ui::widgets::action("Cancel", cancel_delete()),
+            ])
+    } else {
+        crate::ui::widgets::action_icon(
+            rwire::icons::Icon::Trash,
+            "Delete workspace",
+            arm_delete(),
+            true,
+        )
+    }
+}
+
+// ── Team handlers (immediate-apply over the active workspace) ───────────────────
+
+#[handler]
+fn rename(app: &mut App, ctx: &EventContext) {
+    let (Some(id), Some(name)) = (app.active_workspace.clone(), ctx.text()) else {
+        return;
+    };
+    let name = name.trim().to_owned();
+    if !name.is_empty() {
+        bridge::send(Command::RenameWorkspace { id, name });
+    }
+}
+
+#[handler]
+fn set_owner(app: &mut App, ctx: &EventContext) {
+    let Some(id) = app.active_workspace.clone() else {
+        return;
+    };
+    let owner = ctx.text().map(str::to_owned).filter(|v| !v.is_empty());
+    bridge::send(Command::SetWorkspaceOwner { id, owner });
+}
+
+#[handler]
+fn toggle_member(app: &mut App, ctx: &EventContext) {
+    let (Some(id), Some(agent)) = (app.active_workspace.clone(), ctx.data("agent")) else {
+        return;
+    };
+    let agent = agent.to_owned();
+    if ctx.data("on") == Some("1") {
+        bridge::send(Command::RemoveMember { id, agent });
+    } else {
+        bridge::send(Command::AddMember { id, agent });
+    }
+}
+
+#[handler]
+fn arm_delete(app: &mut App) {
+    app.workspace_delete_armed = true;
+}
+
+#[handler]
+fn cancel_delete(app: &mut App) {
+    app.workspace_delete_armed = false;
+}
+
+#[handler]
+fn confirm_delete(app: &mut App) {
+    app.workspace_delete_armed = false;
+    if let Some(id) = app.active_workspace.clone() {
+        bridge::send(Command::DeleteWorkspace { id });
+    }
 }
 
 /// A titled card block (label + body), reusing the dashboard surface styling.
