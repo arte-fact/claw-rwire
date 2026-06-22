@@ -264,6 +264,52 @@ pub(super) fn last_producer_output(conn: &rusqlite::Connection, task_id: &str) -
         .unwrap_or_default()
 }
 
+/// The text to store for a finished turn: the model's reply, or — when it ended on tool calls
+/// with no closing prose — a short summary of what the tools did (files written, else the calls
+/// it ran), so a task that did real work never shows a blank result.
+fn effective_output(turn: &agent::TurnResult) -> String {
+    if let Some(reply) = &turn.reply
+        && !reply.trim().is_empty()
+    {
+        return reply.clone();
+    }
+    summarize_invocations(&turn.invocations)
+}
+
+fn summarize_invocations(invocations: &[agent::ToolInvocation]) -> String {
+    if invocations.is_empty() {
+        return String::new();
+    }
+    // Prefer the concrete artifacts: the files written/edited.
+    let mut files: Vec<String> = Vec::new();
+    for inv in invocations
+        .iter()
+        .filter(|i| i.name == "write" || i.name == "edit")
+    {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&inv.arguments)
+            && let Some(path) = value.get("path").and_then(serde_json::Value::as_str)
+            && !files.iter().any(|f| f == path)
+        {
+            files.push(path.to_owned());
+        }
+    }
+    if !files.is_empty() {
+        return format!("Done — wrote {}.", files.join(", "));
+    }
+    // Otherwise name the tools it ran (deduped, in order).
+    let mut names: Vec<&str> = Vec::new();
+    for inv in invocations {
+        if !names.contains(&inv.name.as_str()) {
+            names.push(&inv.name);
+        }
+    }
+    format!(
+        "Done — ran {} tool call(s): {}.",
+        invocations.len(),
+        names.join(", ")
+    )
+}
+
 fn role_str(role: RunRole) -> &'static str {
     match role {
         RunRole::Stage => "stage",
@@ -329,7 +375,9 @@ pub fn finished(
     let steps = pipeline::steps_for(conn, &task.workspace_id).unwrap_or_default();
     let step = steps.get(task.step_position.max(0) as usize).cloned();
     let (ok, output, invocations) = match result {
-        Ok(turn) => (true, turn.reply.unwrap_or_default(), turn.invocations),
+        // A model that ends on tool calls often returns no final text — don't store a blank
+        // result; synthesize one from what the tools did so the task shows what happened.
+        Ok(turn) => (true, effective_output(&turn), turn.invocations),
         Err(err) => (false, err, Vec::new()),
     };
     let verdict = if matches!(role, RunRole::Validator) && ok {
@@ -605,6 +653,40 @@ mod tests {
         assert_eq!(next_action(1, 2, true), Next::Done); // last step → done
         assert_eq!(next_action(0, 1, true), Next::Done); // single (default) stage → done
         assert_eq!(next_action(0, 3, false), Next::Fail); // failure ends regardless of position
+    }
+
+    #[test]
+    fn effective_output_summarizes_silent_tool_turns() {
+        let inv = |name: &str, args: &str| agent::ToolInvocation {
+            name: name.to_owned(),
+            arguments: args.to_owned(),
+            result: "ok".to_owned(),
+            ok: true,
+        };
+        // Empty reply + a write → name the file (the dominant real case).
+        let wrote = agent::TurnResult {
+            invocations: vec![inv("write", r#"{"path":"docs/x.md","content":"…"}"#)],
+            reply: None,
+            prompt_tokens: None,
+        };
+        assert_eq!(effective_output(&wrote), "Done — wrote docs/x.md.");
+        // Empty reply + non-file tools → name the calls.
+        let ran = agent::TurnResult {
+            invocations: vec![inv("bash", "{}"), inv("read", "{}"), inv("bash", "{}")],
+            reply: Some("   ".to_owned()),
+            prompt_tokens: None,
+        };
+        assert_eq!(
+            effective_output(&ran),
+            "Done — ran 3 tool call(s): bash, read."
+        );
+        // A real reply always wins; nothing-at-all stays empty.
+        let spoke = agent::TurnResult {
+            reply: Some("all set".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(effective_output(&spoke), "all set");
+        assert!(effective_output(&agent::TurnResult::default()).is_empty());
     }
 
     #[test]

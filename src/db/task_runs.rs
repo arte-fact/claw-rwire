@@ -55,11 +55,13 @@ pub fn append(conn: &Connection, run: &NewRun) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// A task's runs in order (oldest first) — the chain.
+/// A task's runs in order (oldest first) — the chain. Ordered by `created_at`, not `id`: the id
+/// is a random token, so ordering by it scrambles the chain *and* makes "the latest producer
+/// output" (the task's result) pick a wrong, often empty, run.
 pub fn list_for_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Vec<TaskRun>> {
     let mut stmt = conn.prepare(
         "SELECT id, position, role, agent_id, output, verdict, feedback, iteration, ok
-           FROM task_runs WHERE task_id = ?1 ORDER BY id ASC",
+           FROM task_runs WHERE task_id = ?1 ORDER BY created_at ASC, id ASC",
     )?;
     let rows = stmt.query_map(params![task_id], |row| {
         Ok(TaskRun {
