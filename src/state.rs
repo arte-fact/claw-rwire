@@ -207,6 +207,10 @@ pub struct TaskView {
     pub next_run: Option<String>,
     /// A short snippet of the last run's result/error, shown on terminal cards.
     pub result: Option<String>,
+    /// The current pipeline step (the kanban column the card lives in, Phase F).
+    pub step_position: i64,
+    /// The iteration within a loop step (shown on the card when > 0).
+    pub iteration: i64,
 }
 
 /// One workspace's lane at a glance, for the global dashboard's all-lanes view: the title of
@@ -216,6 +220,8 @@ pub struct LaneSummary {
     pub workspace_id: String,
     pub running: Option<String>,
     pub queued: usize,
+    /// Tasks parked at a human gate in this workspace — the "needs you" count.
+    pub awaiting: usize,
 }
 
 /// Which kind of run the Prompts inspector previews — picks the role-preamble layer.
@@ -434,6 +440,10 @@ pub struct App {
     pub workspace_brief: String,
     /// The active workspace's task lane (projected when its Tasks tab opens).
     pub tasks: Vec<TaskView>,
+    /// The active workspace's pipeline step names — the kanban column headers (Phase F).
+    pub pipeline_columns: Vec<String>,
+    /// Tasks tab view: `true` = the flat list (mobile-friendly), `false` = the kanban board.
+    pub tasks_list_view: bool,
     /// The id of the task whose inline edit drawer is open (retitle / reassign / schedule /
     /// blockers), or `None`. Pure UI state, toggled by the card's edit button.
     pub editing_task: Option<String>,

@@ -29,14 +29,27 @@ pub fn tasks(app: &App) -> ElementBuilder {
         .filter(|a| workspace.members.iter().any(|m| m == &a.id))
         .map(|a| (a.id.clone(), a.name.clone()))
         .collect();
-    let editing = app.editing_task.clone();
+    let board = if app.tasks_list_view {
+        list_board(app, &members)
+    } else {
+        kanban_board(app)
+    };
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapLg])
+        .append([
+            card("New task", create_form(app, workspace)),
+            view_toggle(app.tasks_list_view),
+            board,
+        ])
+}
+
+/// The flat list view (the original): cards with the inline edit drawer.
+fn list_board(app: &App, members: &[(String, String)]) -> ElementBuilder {
+    let editing = app.editing_task.as_deref();
     let mut cards: Vec<ElementBuilder> = app
         .tasks
         .iter()
-        .map(|task| {
-            let open = editing.as_deref() == Some(task.id.as_str());
-            task_card(task, &members, open)
-        })
+        .map(|task| task_card(task, members, editing == Some(task.id.as_str())))
         .collect();
     if cards.is_empty() {
         cards.push(
@@ -46,13 +59,172 @@ pub fn tasks(app: &App) -> ElementBuilder {
         );
     }
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapLg])
-        .append([
-            card("New task", create_form(app, workspace)),
-            el(El::Div)
-                .st([St::DisplayFlex, St::FlexCol, St::GapSm])
-                .append(cards),
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append(cards)
+}
+
+/// The kanban board: one column per pipeline step, then Done and Closed. A task sits in its
+/// current step's column (or Done/Closed when terminal) and moves left→right as it advances.
+fn kanban_board(app: &App) -> ElementBuilder {
+    let step_count = app.pipeline_columns.len();
+    let mut columns = app.pipeline_columns.clone();
+    columns.push("Done".to_owned());
+    columns.push("Closed".to_owned());
+    let lanes: Vec<ElementBuilder> = columns
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let cards: Vec<&crate::state::TaskView> = app
+                .tasks
+                .iter()
+                .filter(|task| task_column(task, step_count) == index)
+                .collect();
+            kanban_column(name, &cards)
+        })
+        .collect();
+    el(El::Div)
+        .style(Style::new().set("overflow-x", "auto"))
+        .st([St::DisplayFlex, St::GapMd])
+        .append(lanes)
+}
+
+/// Which column index a task belongs to: its step (0..step_count), Done (step_count), or
+/// Closed (step_count+1).
+fn task_column(task: &crate::state::TaskView, step_count: usize) -> usize {
+    match task.status.as_str() {
+        "done" => step_count,
+        "failed" | "rejected" | "cancelled" => step_count + 1,
+        _ => (task.step_position.max(0) as usize).min(step_count.saturating_sub(1)),
+    }
+}
+
+fn kanban_column(name: &str, tasks: &[&crate::state::TaskView]) -> ElementBuilder {
+    let mut items = vec![
+        el(El::Div)
+            .st([
+                St::TextXs,
+                St::TextMuted,
+                St::TextUppercase,
+                St::TrackingWide,
+                St::PbXs,
+            ])
+            .text(&format!("{name} · {}", tasks.len())),
+    ];
+    for task in tasks {
+        items.push(kanban_card(task));
+    }
+    el(El::Div)
+        .style(
+            Style::new()
+                .set("min-width", "12rem")
+                .set("flex", "1 0 12rem"),
+        )
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append(items)
+}
+
+fn kanban_card(task: &crate::state::TaskView) -> ElementBuilder {
+    let mut rows = vec![
+        el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+            .append([
+                el(El::Span)
+                    .st([St::Flex1, St::TextXs, St::TextHigh, St::FontSemibold])
+                    .text(&task.title),
+                status_badge(&task.status),
+            ]),
+    ];
+    let mut meta = task.agent.as_deref().unwrap_or("owner").to_owned();
+    if task.iteration > 0 {
+        meta.push_str(&format!(" · iter {}", task.iteration + 1));
+    }
+    if task.recurrent {
+        meta.push_str(" · ⟳");
+    }
+    rows.push(el(El::Div).st([St::TextXs, St::TextLow]).text(&meta));
+    // A one-click Approve right on the card for tasks parked at a human gate.
+    if task.status == "awaiting" {
+        rows.push(
+            el(El::Button)
+                .attr("type", "button")
+                .data("task", &task.id)
+                .on(Ev::Click, kanban_approve())
+                .style(Style::new().set("font", "inherit"))
+                .st([
+                    St::TextXs,
+                    St::PxSm,
+                    St::PyXs,
+                    St::RoundedSm,
+                    St::BgAccent,
+                    St::TextOnAccent,
+                    St::BorderAccent,
+                    St::CursorPointer,
+                ])
+                .text("Approve"),
+        );
+    }
+    el(El::Div)
+        .st([
+            St::BgSurface,
+            St::BorderDefault,
+            St::RoundedSm,
+            St::PSm,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapXs,
         ])
+        .append(rows)
+}
+
+/// The Kanban ↔ List view switch (immediate-apply chips).
+fn view_toggle(list: bool) -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapXs])
+        .append([
+            toggle_chip("Board", "kanban", !list),
+            toggle_chip("List", "list", list),
+        ])
+}
+
+fn toggle_chip(label: &str, view: &str, active: bool) -> ElementBuilder {
+    let chip = el(El::Button)
+        .attr("type", "button")
+        .data("view", view)
+        .on(Ev::Click, toggle_view())
+        .style(Style::new().set("font", "inherit"))
+        .st([
+            St::TextXs,
+            St::PxSm,
+            St::PyXs,
+            St::RoundedSm,
+            St::BorderDefault,
+            St::CursorPointer,
+        ])
+        .text(label);
+    if active {
+        chip.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
+    } else {
+        chip.st([St::BgApp, St::TextMuted]).hover([St::TextHigh])
+    }
+}
+
+#[handler]
+fn toggle_view(app: &mut App, ctx: &EventContext) {
+    if let Some(view) = ctx.data("view") {
+        app.tasks_list_view = view == "list";
+    }
+}
+
+#[handler]
+fn kanban_approve(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(id) = ctx.data("task") {
+        bridge::send(Command::ReviewVerdict {
+            task_id: id.to_owned(),
+            decision: "pass".to_owned(),
+            feedback: String::new(),
+        });
+    }
 }
 
 fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {

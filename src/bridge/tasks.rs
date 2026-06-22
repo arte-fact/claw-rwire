@@ -29,7 +29,19 @@ pub fn lane_views(conn: &rusqlite::Connection, workspace: &str) -> Vec<TaskView>
             next_run: task.next_run.map(|ts| short_time(&ts)),
             result: task.result.map(|text| snippet(&text)),
             blockers: tasks::blockers_of(conn, &task.id).unwrap_or_default(),
+            step_position: task.step_position,
+            iteration: task.iteration,
         })
+        .collect()
+}
+
+/// The workspace's pipeline step names — the kanban column headers (the default single Execute
+/// stage when none configured).
+fn columns_for(conn: &rusqlite::Connection, workspace: &str) -> Vec<String> {
+    crate::db::pipeline::steps_for(conn, workspace)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|step| step.name)
         .collect()
 }
 
@@ -51,9 +63,14 @@ fn snippet(text: &str) -> String {
 /// the active workspace). Background updates use [`project_if_active`].
 pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
     let views = lane_views(conn, workspace);
-    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_TASKS]), move |app| {
-        app.tasks = views
-    });
+    let columns = columns_for(conn, workspace);
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_TASKS, App::FIELD_PIPELINE_COLUMNS]),
+        move |app| {
+            app.tasks = views;
+            app.pipeline_columns = columns;
+        },
+    );
 }
 
 /// Re-project a lane into `App.tasks`, but only when the operator is actually viewing that
@@ -61,12 +78,17 @@ pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: 
 /// lane on screen.
 pub fn project_if_active(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
     let views = lane_views(conn, workspace);
+    let columns = columns_for(conn, workspace);
     let workspace = workspace.to_owned();
-    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_TASKS]), move |app| {
-        if app.active_workspace.as_deref() == Some(workspace.as_str()) {
-            app.tasks = views;
-        }
-    });
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_TASKS, App::FIELD_PIPELINE_COLUMNS]),
+        move |app| {
+            if app.active_workspace.as_deref() == Some(workspace.as_str()) {
+                app.tasks = views;
+                app.pipeline_columns = columns;
+            }
+        },
+    );
 }
 
 /// Project every workspace's lane summary (running task + queued count) into
@@ -81,15 +103,20 @@ pub fn project_dashboard(conn: &rusqlite::Connection, shared: &SharedServerState
                 .ok()
                 .flatten()
                 .map(|task| task.title);
-            let queued = tasks::list_for_workspace(conn, &ws.id)
-                .unwrap_or_default()
+            let lane = tasks::list_for_workspace(conn, &ws.id).unwrap_or_default();
+            let queued = lane
                 .iter()
                 .filter(|task| task.status == TaskStatus::Pending)
+                .count();
+            let awaiting = lane
+                .iter()
+                .filter(|task| task.status == TaskStatus::Awaiting)
                 .count();
             LaneSummary {
                 workspace_id: ws.id,
                 running,
                 queued,
+                awaiting,
             }
         })
         .collect();

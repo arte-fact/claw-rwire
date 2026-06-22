@@ -79,14 +79,14 @@ fn grid(app: &App) -> ElementBuilder {
         app.dashboard_lanes
             .iter()
             .find(|l| l.workspace_id == id)
-            .map_or((None, 0), |l| (l.running.clone(), l.queued))
+            .map_or((None, 0, 0), |l| (l.running.clone(), l.queued, l.awaiting))
     };
     let cards: Vec<ElementBuilder> = app
         .workspaces
         .iter()
         .map(|w| {
-            let (running, queued) = lane(&w.id);
-            card(w, &owner_name(w), running.as_deref(), queued)
+            let (running, queued, awaiting) = lane(&w.id);
+            card(w, &owner_name(w), running.as_deref(), queued, awaiting)
         })
         .collect();
     el(El::Div)
@@ -107,6 +107,7 @@ fn card(
     owner: &str,
     running: Option<&str>,
     queued: usize,
+    awaiting: usize,
 ) -> ElementBuilder {
     let team = match workspace.member_names.len() {
         0 => "no members".to_owned(),
@@ -125,6 +126,23 @@ fn card(
         None if queued > 0 => (format!("{queued} queued"), St::TextMuted),
         None => ("idle".to_owned(), St::TextLow),
     };
+    let mut rows = vec![
+        Text::body(workspace.name.clone())
+            .build()
+            .st([St::TextHigh, St::FontSemibold]),
+        el(El::Div)
+            .st([St::TextXs, St::TextMuted])
+            .text(&format!("owner {owner} · {team}")),
+        el(El::Div).st([St::TextXs, lane_style]).text(&lane_text),
+    ];
+    // The "needs you" line — tasks parked at a human gate in this workspace.
+    if awaiting > 0 {
+        rows.push(
+            el(El::Div)
+                .st([St::TextXs, St::TextAccent, St::FontSemibold])
+                .text(&format!("● needs you: {awaiting}")),
+        );
+    }
     Link::route(&format!("/w/{}", workspace.id))
         .style(Style::new().set("font", "inherit"))
         .st([
@@ -139,13 +157,5 @@ fn card(
             St::CursorPointer,
         ])
         .hover([St::BorderAccent])
-        .append([
-            Text::body(workspace.name.clone())
-                .build()
-                .st([St::TextHigh, St::FontSemibold]),
-            el(El::Div)
-                .st([St::TextXs, St::TextMuted])
-                .text(&format!("owner {owner} · {team}")),
-            el(El::Div).st([St::TextXs, lane_style]).text(&lane_text),
-        ])
+        .append(rows)
 }
