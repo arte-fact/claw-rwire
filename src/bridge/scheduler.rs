@@ -90,6 +90,7 @@ fn launch(conn: &rusqlite::Connection, task: &Task) -> Result<(), String> {
 
     let workspace_dir = workspace::dir_for(&data_dir(), &task.workspace_id);
     let system_prompt = run_system_prompt(
+        agent::EXECUTOR_PROMPT,
         Some(&workspace_dir),
         &inference.agent_name,
         inference.agent_prompt.clone(),
@@ -101,7 +102,9 @@ fn launch(conn: &rusqlite::Connection, task: &Task) -> Result<(), String> {
         time: super::now_hm(),
     };
     let messages = agent::build_messages(&system_prompt, std::slice::from_ref(&spec));
-    let toolbox = build_toolbox(inference.tools.clone(), Some(workspace_dir));
+    // A task is workspace work: default to the workspace file tools when the agent has no
+    // explicit selection (so the owner, often unconfigured, can actually write files).
+    let toolbox = build_toolbox(inference.tools.clone(), Some(workspace_dir), true);
 
     let id = task.id.clone();
     std::thread::spawn(move || {

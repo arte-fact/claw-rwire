@@ -40,6 +40,7 @@ pub fn ask(conn: &rusqlite::Connection, workspace: &str, request: &str, origin_c
 
     let workspace_dir = workspace::dir_for(&data_dir(), workspace);
     let system_prompt = run_system_prompt(
+        agent::OWNER_PLANNER_PROMPT,
         Some(&workspace_dir),
         &inference.agent_name,
         inference.agent_prompt.clone(),

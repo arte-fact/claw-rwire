@@ -773,6 +773,7 @@ fn dispatch_native(
         .as_deref()
         .map(|id| workspace::dir_for(&data_dir(), id));
     let system_prompt = run_system_prompt(
+        agent::CONCIERGE_PROMPT,
         workspace_dir.as_deref(),
         &inference.agent_name,
         inference.agent_prompt.clone(),
@@ -810,7 +811,7 @@ fn dispatch_native(
     // Build the run's toolbox from the agent's tool selection: web MCP tools and/or the
     // workspace coder tools, each filtered to the enabled set. The chat agent is the
     // concierge, so it also gets the `ask` delegation tool over every workspace.
-    let selected = build_toolbox(inference.tools.clone(), workspace_dir);
+    let selected = build_toolbox(inference.tools.clone(), workspace_dir, false);
     let concierge = ConciergeToolbox::new(chat_id, delegates(conn));
     let toolbox: Box<dyn Toolbox> =
         Box::new(CompositeToolbox::new(vec![Box::new(concierge), selected]));
@@ -841,9 +842,11 @@ fn delegates(conn: &rusqlite::Connection) -> Vec<Delegate> {
 }
 
 /// Scaffold a run's workspace dir (best-effort) and compose its layered system prompt:
-/// base + the agent's identity prompt + the workspace's `AGENT.md` brief. Shared by chat
-/// turns and task runs. `None` workspace → just the base + identity layers.
+/// the role `base` (concierge / executor / planner) + the agent's identity prompt + the
+/// workspace's `AGENT.md` brief. Shared by chat turns and task/planning runs. `None`
+/// workspace → just the base + identity layers.
 fn run_system_prompt(
+    base: &str,
     workspace_dir: Option<&Path>,
     agent_name: &str,
     agent_prompt: Option<String>,
@@ -854,21 +857,33 @@ fn run_system_prompt(
         log_line(format!("bridge: workspace scaffold failed: {err}"));
     }
     let brief = workspace_dir.and_then(workspace::read_agent_md);
-    workspace::compose_system_prompt(agent::SYSTEM_PROMPT, agent_prompt, brief)
+    workspace::compose_system_prompt(base, agent_prompt, brief)
 }
 
 /// Assemble the toolbox for a run from the agent's enabled tool set. `selection` is the
-/// configured names, or `None` for an unconfigured agent — which defaults to all web/MCP
-/// tools (coder tools off), preserving the pre-selection behaviour. Each source is wrapped
-/// in a [`FilteredToolbox`] so only enabled tools are advertised and callable.
-fn build_toolbox(selection: Option<Vec<String>>, workspace: Option<PathBuf>) -> Box<dyn Toolbox> {
+/// configured names; `None` means the agent was never configured, so a default applies:
+/// the web/MCP tools, plus — when `workspace_default` is set (a **task executor**, which is
+/// workspace work by definition) — the workspace file tools. Chat (concierge) runs pass
+/// `false`, so an unconfigured concierge stays web-only and delegates rather than writing
+/// files. Each source is wrapped in a [`FilteredToolbox`] so only enabled tools are callable.
+fn build_toolbox(
+    selection: Option<Vec<String>>,
+    workspace: Option<PathBuf>,
+    workspace_default: bool,
+) -> Box<dyn Toolbox> {
     let client = web_mcp();
     let allowed: Vec<String> = match selection {
         Some(names) => names,
-        None => client
-            .as_ref()
-            .map(|c| c.tools().iter().map(|tool| tool.name.clone()).collect())
-            .unwrap_or_default(),
+        None => {
+            let mut names: Vec<String> = client
+                .as_ref()
+                .map(|c| c.tools().iter().map(|tool| tool.name.clone()).collect())
+                .unwrap_or_default();
+            if workspace_default && workspace.is_some() {
+                names.extend(WORKSPACE_TOOLS.iter().map(|tool| (*tool).to_owned()));
+            }
+            names
+        }
     };
     if allowed.is_empty() {
         return Box::new(EmptyToolbox);
