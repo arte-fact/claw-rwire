@@ -28,11 +28,12 @@ pub fn load_inbox(conn: &rusqlite::Connection, shared: &SharedServerState) {
                 .ok()
                 .flatten()
                 .map(|ws| ws.name)
-                .unwrap_or(task.workspace_id);
+                .unwrap_or_else(|| task.workspace_id.clone());
             ReviewItem {
                 output: super::scheduler::last_producer_output(conn, &task.id),
                 task_id: task.id,
                 title: task.title,
+                workspace_id: task.workspace_id,
                 workspace,
                 spec: task.spec,
             }

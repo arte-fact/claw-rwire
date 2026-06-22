@@ -2,6 +2,7 @@
 //! human gate. Each card shows the task + the work produced, with Approve / Request changes /
 //! Reject — the verdict drives the validation loop. Renders from `App.review_inbox`.
 
+use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 
@@ -43,9 +44,23 @@ fn review_card(item: &ReviewItem) -> ElementBuilder {
     let body = el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
+            // Provenance: the workspace (→ its board) and the spec.
             el(El::Div)
-                .st([St::TextXs, St::TextMuted])
-                .text(&format!("{} · {}", item.workspace, item.spec)),
+                .st([
+                    St::DisplayFlex,
+                    St::ItemsCenter,
+                    St::GapSm,
+                    St::TextXs,
+                    St::TextMuted,
+                ])
+                .append([
+                    Link::route(&format!("/w/{}/tasks", item.workspace_id))
+                        .style(Style::new().set("font", "inherit"))
+                        .st([St::TextMuted, St::NoUnderline])
+                        .hover([St::TextAccent])
+                        .text(&item.workspace),
+                    el(El::Span).text(&format!("· {}", item.spec)),
+                ]),
             // The work to review.
             el(El::Div)
                 .style(
@@ -67,12 +82,17 @@ fn review_card(item: &ReviewItem) -> ElementBuilder {
                 } else {
                     &item.output
                 }),
-            // Approve / Reject (clicks), then a Request-changes form with a notes box.
+            // Approve / Reject (clicks) + a link to the full run chain, then a Request-changes form.
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
                     approve_button(&item.task_id),
                     plain("Reject", reject(), &item.task_id),
+                    Link::route(&format!("/w/{}/tasks/{}", item.workspace_id, item.task_id))
+                        .style(Style::new().set("font", "inherit"))
+                        .st([St::TextXs, St::TextMuted, St::NoUnderline])
+                        .hover([St::TextAccent])
+                        .text("View run chain →"),
                 ]),
             el(El::Form)
                 .on(Ev::Submit, request_changes())

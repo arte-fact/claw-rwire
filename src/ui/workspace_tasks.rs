@@ -31,7 +31,7 @@ pub fn tasks(app: &App) -> ElementBuilder {
         .map(|a| (a.id.clone(), a.name.clone()))
         .collect();
     let board = if app.tasks_list_view {
-        list_board(app, &members)
+        list_board(app, &members, &workspace.id)
     } else {
         kanban_board(app, &workspace.id)
     };
@@ -45,12 +45,12 @@ pub fn tasks(app: &App) -> ElementBuilder {
 }
 
 /// The flat list view (the original): cards with the inline edit drawer.
-fn list_board(app: &App, members: &[(String, String)]) -> ElementBuilder {
+fn list_board(app: &App, members: &[(String, String)], wid: &str) -> ElementBuilder {
     let editing = app.editing_task.as_deref();
     let mut cards: Vec<ElementBuilder> = app
         .tasks
         .iter()
-        .map(|task| task_card(task, members, editing == Some(task.id.as_str())))
+        .map(|task| task_card(task, members, editing == Some(task.id.as_str()), wid))
         .collect();
     if cards.is_empty() {
         cards.push(
@@ -301,11 +301,25 @@ fn input_st() -> [St; 8] {
     ]
 }
 
-fn task_card(task: &TaskView, members: &[(String, String)], open: bool) -> ElementBuilder {
+fn task_card(
+    task: &TaskView,
+    members: &[(String, String)],
+    open: bool,
+    wid: &str,
+) -> ElementBuilder {
     let terminal = matches!(task.status.as_str(), "done" | "failed" | "cancelled");
     let mut head: Vec<ElementBuilder> = vec![
-        el(El::Span)
-            .st([St::Flex1, St::TextSm, St::TextHigh, St::FontSemibold])
+        // The title links to the task's detail view (its run chain).
+        Link::route(&format!("/w/{wid}/tasks/{}", task.id))
+            .style(Style::new().set("font", "inherit"))
+            .st([
+                St::Flex1,
+                St::TextSm,
+                St::TextHigh,
+                St::FontSemibold,
+                St::NoUnderline,
+            ])
+            .hover([St::TextAccent])
             .text(&task.title),
         status_badge(&task.status),
     ];

@@ -59,12 +59,23 @@ fn body(app: &App) -> ElementBuilder {
         .append(sections)
 }
 
+/// A small breadcrumb row: back to the board, plus jumps to the workspace + its pipeline.
 fn back_link(workspace_id: &str) -> ElementBuilder {
-    Link::route(&format!("/w/{workspace_id}/tasks"))
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapMd])
+        .append([
+            crumb(&format!("/w/{workspace_id}/tasks"), "← Board"),
+            crumb(&format!("/w/{workspace_id}/workflow"), "Pipeline"),
+            crumb(&format!("/w/{workspace_id}"), "Workspace"),
+        ])
+}
+
+fn crumb(href: &str, label: &str) -> ElementBuilder {
+    Link::route(href)
         .style(Style::new().set("font", "inherit"))
         .st([St::TextXs, St::TextMuted, St::NoUnderline])
-        .hover([St::TextHigh])
-        .text("← Back to the board")
+        .hover([St::TextAccent])
+        .text(label)
 }
 
 fn header(detail: &TaskDetail) -> ElementBuilder {

@@ -318,6 +318,8 @@ pub struct RoleDefaults {
 pub struct ReviewItem {
     pub task_id: String,
     pub title: String,
+    /// The workspace id (for links) and display name.
+    pub workspace_id: String,
     pub workspace: String,
     pub spec: String,
     /// The producer's latest output — the work to review.
