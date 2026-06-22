@@ -5,6 +5,29 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+/// The default identity persona for the **concierge / workspace owner** — the do-everything
+/// generalist that fields chat, plans workspaces, and executes its own tasks. Role-neutral
+/// (the run's role preamble supplies the behaviour), so it reads sensibly in every context.
+#[must_use]
+pub fn default_owner_body(name: &str) -> String {
+    format!(
+        "You are {name}, a capable and careful generalist — part software engineer, part \
+         researcher, part operator. You write clean, idiomatic code, keep changes small and \
+         well-tested, follow the workspace's conventions, and explain briefly what you did."
+    )
+}
+
+/// The default identity persona for a **newly-created agent** (a workspace member / specialist).
+/// Doubles as the routing description the owner's `create_task` enum shows.
+#[must_use]
+pub fn default_member_body(name: &str) -> String {
+    format!(
+        "You are {name}, a capable specialist. Do focused, high-quality work: make small, \
+         well-tested changes, follow the workspace's conventions, and say briefly what you \
+         changed and why."
+    )
+}
+
 /// The agent's identity prompt, or `None` if unset.
 pub fn get(conn: &Connection, agent_id: &str) -> rusqlite::Result<Option<String>> {
     conn.query_row(

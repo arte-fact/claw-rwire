@@ -42,10 +42,19 @@ pub fn dir_for(base: &Path, folder: &str) -> PathBuf {
     base.join("workspaces").join(folder)
 }
 
-/// Ensure the workspace exists and seed a starter `AGENT.md` (the agent's persona) if one
-/// isn't there yet. Idempotent — an existing `AGENT.md` is never overwritten.
+/// The standard top-level folders a workspace is organised into. Created on scaffold so the
+/// layout exists up front; the `AGENT.md` brief documents what each is for, so executors put
+/// new files where they belong (the "docs ended up in skills/" failure).
+pub const STANDARD_DIRS: [&str; 3] = ["projects", "docs", "skills"];
+
+/// Ensure the workspace exists, create the standard folders, and seed a starter `AGENT.md`
+/// (the project brief) if one isn't there yet. Idempotent — an existing `AGENT.md` is never
+/// overwritten and the directory creates are no-ops when they already exist.
 pub fn scaffold(workspace: &Path, agent_name: &str) -> Result<(), WorkspaceError> {
     std::fs::create_dir_all(workspace)?;
+    for dir in STANDARD_DIRS {
+        std::fs::create_dir_all(workspace.join(dir))?;
+    }
     let agent_md = workspace.join("AGENT.md");
     if !agent_md.exists() {
         std::fs::write(&agent_md, starter_agent_md(agent_name))?;
@@ -53,12 +62,19 @@ pub fn scaffold(workspace: &Path, agent_name: &str) -> Result<(), WorkspaceError
     Ok(())
 }
 
-/// The default `AGENT.md` body for a freshly scaffolded workspace.
+/// The default `AGENT.md` body for a freshly scaffolded workspace: a placeholder purpose line
+/// plus the folder conventions, so a delegated task knows where its output should go.
 #[must_use]
 pub fn starter_agent_md(agent_name: &str) -> String {
     format!(
-        "# {agent_name}\n\nYou are {agent_name}, a helpful assistant. Be concise and use \
-         your tools when they help.\n"
+        "# {agent_name} workspace\n\n\
+         Describe what this workspace is for — its goal, the project it owns, and any \
+         standing instructions for the team.\n\n\
+         ## Conventions\n\n\
+         Keep the working tree tidy and put new files where they belong:\n\n\
+         - `projects/` — cloned repositories and code projects\n\
+         - `docs/` — documentation, reports, and write-ups\n\
+         - `skills/` — reusable guides, snippets, and how-tos\n"
     )
 }
 
@@ -113,11 +129,16 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_seeds_agent_md_once_and_read_round_trips() {
+    fn scaffold_seeds_agent_md_and_standard_dirs_once() {
         let ws = dir_for(&tmp(), "ag");
         scaffold(&ws, "Coder").expect("scaffold");
         let first = read_agent_md(&ws).expect("present");
-        assert!(first.contains("You are Coder"));
+        assert!(first.contains("Coder workspace"));
+        assert!(first.contains("## Conventions"));
+        // The standard folder layout exists up front.
+        for dir in STANDARD_DIRS {
+            assert!(ws.join(dir).is_dir(), "missing {dir}/");
+        }
 
         // A second scaffold must not clobber an edited AGENT.md.
         std::fs::write(ws.join("AGENT.md"), "custom prompt").expect("write");

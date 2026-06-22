@@ -109,6 +109,7 @@ pub fn upsert_agent(
 ) {
     let endpoint = endpoint.filter(|value| !value.trim().is_empty());
     let model = model.filter(|value| !value.trim().is_empty());
+    let creating = id.is_none();
     // Create or update the row, then persist the tool selection and AGENT.md. `id` is the
     // existing id on edit, or a freshly minted one on create.
     let id = match &id {
@@ -140,9 +141,15 @@ pub fn upsert_agent(
     if let Err(err) = agent_tools::set_tools(conn, &id, &catalog) {
         return surface_error(shared, format!("save agent tools: {err}"));
     }
-    // The identity prompt is operator-owned config (not a workspace file); a blank one
-    // clears it so the run falls back to the base prompt + the workspace brief. Workspace
-    // ownership + membership are managed on the workspace's Team tab, not here.
+    // The identity prompt is operator-owned config (not a workspace file). On a blank *edit*
+    // it clears (run falls back to base + brief); on a blank *create* we seed a default
+    // specialist persona so a new agent is never personaless (it also feeds task auto-routing).
+    // Workspace ownership + membership are managed on the workspace's Team tab, not here.
+    let prompt = if creating && prompt.trim().is_empty() {
+        agent_prompts::default_member_body(name)
+    } else {
+        prompt
+    };
     if let Err(err) = agent_prompts::set(conn, &id, &prompt) {
         return surface_error(shared, format!("save agent prompt: {err}"));
     }

@@ -384,6 +384,8 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
     seed_provider(conn);
     migrate_workspaces(conn);
     link_chats_to_default_agent(conn);
+    // After the web chat is linked, so `web_agent` resolves the concierge to seed.
+    seed_owner_persona(conn);
     admin::project_registry(conn, shared);
     let chats = chat::list_chats(conn).unwrap_or_default();
     let selected = chats.first().map(|chat| chat.id.clone());
@@ -451,6 +453,33 @@ fn migrate_workspaces(conn: &rusqlite::Connection) {
         let _ = workspaces::create(conn, &agent.folder, &agent.name);
         let _ = workspaces::set_owner(conn, &agent.folder, &agent.id);
     }
+}
+
+/// Give the concierge / workspace owner (the web agent) a default identity persona if it has
+/// none, so it's never a blank agent — the diagnosed failure where the owner had no persona,
+/// so it read as faceless and `create_task` auto-routing had nothing to describe it by.
+/// Idempotent: only fills a missing persona, never overwrites an operator-set one.
+fn seed_owner_persona(conn: &rusqlite::Connection) {
+    let Ok(Some(agent_id)) = agents::web_agent(conn) else {
+        return;
+    };
+    if db::agent_prompts::get(conn, &agent_id)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return;
+    }
+    let name = agents::get(conn, &agent_id)
+        .ok()
+        .flatten()
+        .map(|agent| agent.name)
+        .unwrap_or_else(|| "claw".to_owned());
+    let _ = db::agent_prompts::set(
+        conn,
+        &agent_id,
+        &db::agent_prompts::default_owner_body(&name),
+    );
 }
 
 /// Read a non-empty, trimmed env var.
