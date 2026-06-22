@@ -180,7 +180,7 @@ pub enum TranscriptItem {
 
 /// A tool invocation rendered as a collapsible card: what ran, with what arguments,
 /// the (full) result behind a disclosure, and whether it succeeded.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCardView {
     pub name: String,
     pub arguments: String,
@@ -373,6 +373,8 @@ pub struct RunView {
     pub feedback: Option<String>,
     pub iteration: i64,
     pub ok: bool,
+    /// The run's tool calls (from the persisted transcript) — the full story of what it did.
+    pub tools: Vec<ToolCardView>,
 }
 
 /// A task's detail view: its spec, status, and the full run chain (the audit trail).

@@ -349,6 +349,26 @@ fn summarize_invocations(invocations: &[agent::ToolInvocation]) -> String {
     )
 }
 
+/// Serialize a run's tool calls to JSON for the persisted transcript — so a completed task's
+/// detail can show the full story (what files, what commands), not just the summary text.
+fn transcript_json(invocations: &[agent::ToolInvocation]) -> Option<String> {
+    if invocations.is_empty() {
+        return None;
+    }
+    let array: Vec<serde_json::Value> = invocations
+        .iter()
+        .map(|inv| {
+            serde_json::json!({
+                "name": inv.name,
+                "arguments": inv.arguments,
+                "result": inv.result,
+                "ok": inv.ok,
+            })
+        })
+        .collect();
+    serde_json::to_string(&array).ok()
+}
+
 fn role_str(role: RunRole) -> &'static str {
     match role {
         RunRole::Stage => "stage",
@@ -434,6 +454,7 @@ pub fn finished(
         _ => step_agent(conn, &task, s),
     });
     if let Ok(run_id) = crate::id::new_id() {
+        let transcript = transcript_json(&invocations);
         let _ = task_runs::append(
             conn,
             &task_runs::NewRun {
@@ -447,6 +468,7 @@ pub fn finished(
                 feedback: verdict.as_ref().map(|(_, feedback)| feedback.as_str()),
                 iteration: task.iteration,
                 ok,
+                transcript: transcript.as_deref(),
             },
         );
     }
@@ -660,6 +682,7 @@ pub fn human_verdict(
                 feedback: Some(feedback),
                 iteration: task.iteration,
                 ok: true,
+                transcript: None,
             },
         );
     }
@@ -748,6 +771,7 @@ mod tests {
             feedback: None,
             iteration: 0,
             ok: true,
+            transcript: None,
         }];
         let ctx = step_context("make X", &prior, "Refine");
         assert!(ctx.contains("Task: make X"));

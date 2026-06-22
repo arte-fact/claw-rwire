@@ -17,6 +17,8 @@ pub struct TaskRun {
     pub feedback: Option<String>,
     pub iteration: i64,
     pub ok: bool,
+    /// The run's full tool transcript (JSON array of `{name, arguments, result, ok}`), or `None`.
+    pub transcript: Option<String>,
 }
 
 /// What a run produced, recorded after it finishes.
@@ -31,14 +33,16 @@ pub struct NewRun<'a> {
     pub feedback: Option<&'a str>,
     pub iteration: i64,
     pub ok: bool,
+    pub transcript: Option<&'a str>,
 }
 
 pub fn append(conn: &Connection, run: &NewRun) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO task_runs
            (id, task_id, position, role, agent_id, output, verdict, feedback, iteration, ok,
-            created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+            transcript, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                 strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         params![
             run.id,
             run.task_id,
@@ -50,6 +54,7 @@ pub fn append(conn: &Connection, run: &NewRun) -> rusqlite::Result<()> {
             run.feedback,
             run.iteration,
             i64::from(run.ok),
+            run.transcript,
         ],
     )?;
     Ok(())
@@ -60,7 +65,7 @@ pub fn append(conn: &Connection, run: &NewRun) -> rusqlite::Result<()> {
 /// output" (the task's result) pick a wrong, often empty, run.
 pub fn list_for_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Vec<TaskRun>> {
     let mut stmt = conn.prepare(
-        "SELECT id, position, role, agent_id, output, verdict, feedback, iteration, ok
+        "SELECT id, position, role, agent_id, output, verdict, feedback, iteration, ok, transcript
            FROM task_runs WHERE task_id = ?1 ORDER BY created_at ASC, id ASC",
     )?;
     let rows = stmt.query_map(params![task_id], |row| {
@@ -74,6 +79,7 @@ pub fn list_for_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Vec<T
             feedback: row.get(6)?,
             iteration: row.get(7)?,
             ok: row.get::<_, i64>(8)? != 0,
+            transcript: row.get(9)?,
         })
     })?;
     rows.collect()
@@ -120,6 +126,7 @@ mod tests {
                 feedback: None,
                 iteration: 0,
                 ok: true,
+                transcript: Some(r#"[{"name":"write","arguments":"{}","result":"ok","ok":true}]"#),
             },
         )
         .expect("r1");
@@ -136,6 +143,7 @@ mod tests {
                 feedback: None,
                 iteration: 0,
                 ok: true,
+                transcript: None,
             },
         )
         .expect("r2");
@@ -143,5 +151,7 @@ mod tests {
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].output.as_deref(), Some("did the thing"));
         assert_eq!(runs[1].position, 1);
+        assert!(runs[0].transcript.as_deref().unwrap().contains("write"));
+        assert_eq!(runs[1].transcript, None);
     }
 }

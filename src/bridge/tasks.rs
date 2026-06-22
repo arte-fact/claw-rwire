@@ -45,6 +45,36 @@ fn columns_for(conn: &rusqlite::Connection, workspace: &str) -> Vec<String> {
         .collect()
 }
 
+/// Parse a run's persisted transcript JSON into tool cards for the detail view.
+fn parse_transcript(json: Option<&str>) -> Vec<crate::state::ToolCardView> {
+    let Some(json) = json else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<serde_json::Value>>(json)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|value| {
+            let string = |key: &str| {
+                value
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_owned()
+            };
+            crate::state::ToolCardView {
+                name: string("name"),
+                arguments: string("arguments"),
+                result: string("result"),
+                ok: value
+                    .get("ok")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true),
+                time: String::new(),
+            }
+        })
+        .collect()
+}
+
 /// Build one task's detail (spec + the full run chain). `None` if the task is gone.
 fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::state::TaskDetail> {
     let names = agent_names(conn);
@@ -68,6 +98,7 @@ fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::sta
                 feedback: run.feedback,
                 iteration: run.iteration,
                 ok: run.ok,
+                tools: parse_transcript(run.transcript.as_deref()),
             })
             .collect();
         crate::state::TaskDetail {

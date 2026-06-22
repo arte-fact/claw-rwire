@@ -168,6 +168,10 @@ fn run_card(run: &RunView) -> ElementBuilder {
                 verdict_chip(run),
             ]),
     ];
+    // The tool transcript — the full story of what the run did (files, commands, results).
+    for tool in &run.tools {
+        rows.push(crate::ui::chat::tool_card(tool));
+    }
     let shown = if run.output.trim().is_empty() {
         "(no output)"
     } else {

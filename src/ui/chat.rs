@@ -163,8 +163,9 @@ fn transcript_row(item: &TranscriptItem) -> ElementBuilder {
 }
 
 /// A tool invocation rendered inline: a `🔧 name · args · status` header over a capped,
-/// scrollable result box. Subtle (it's secondary to the conversation).
-fn tool_card(card: &ToolCardView) -> ElementBuilder {
+/// scrollable result box. Subtle (it's secondary to the conversation). Reused by the task
+/// detail's run transcript.
+pub(crate) fn tool_card(card: &ToolCardView) -> ElementBuilder {
     let (status, status_color) = if card.ok {
         ("ok", St::TextAccent)
     } else {

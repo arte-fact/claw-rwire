@@ -79,7 +79,18 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     widen_agent_workspaces_to_m_n(conn).map_err(DbError::Schema)?;
     add_agent_memory_paused_column(conn).map_err(DbError::Schema)?;
     add_task_pipeline_columns(conn).map_err(DbError::Schema)?;
+    add_task_run_transcript_column(conn).map_err(DbError::Schema)?;
     Ok(())
+}
+
+/// Add `task_runs.transcript` (the run's full tool transcript, JSON) to a DB that predates it.
+/// A fresh DB already has it from the schema, so the ALTER fails "duplicate column" — ok.
+fn add_task_run_transcript_column(conn: &Connection) -> rusqlite::Result<()> {
+    match conn.execute("ALTER TABLE task_runs ADD COLUMN transcript TEXT", []) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 /// Add the Phase F pipeline columns to a `tasks` table that predates them. A fresh DB already

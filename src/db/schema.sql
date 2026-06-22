@@ -274,6 +274,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   feedback    TEXT,
   iteration   INTEGER NOT NULL DEFAULT 0,
   ok          INTEGER NOT NULL DEFAULT 1,
+  transcript  TEXT,                         -- the run's tool calls, JSON (F / live transcript)
   created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs ON task_runs(task_id, id);
