@@ -323,6 +323,33 @@ pub struct ReviewItem {
     pub output: String,
 }
 
+/// One run in a task's chain, for the detail view's transcript (Phase F-4).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunView {
+    /// `stage` / `producer` / `validator`.
+    pub role: String,
+    /// The agent's display name, or "you" for a human verdict.
+    pub agent: String,
+    pub output: String,
+    pub verdict: Option<String>,
+    pub feedback: Option<String>,
+    pub iteration: i64,
+    pub ok: bool,
+}
+
+/// A task's detail view: its spec, status, and the full run chain (the audit trail).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TaskDetail {
+    pub id: String,
+    pub workspace_id: String,
+    pub title: String,
+    pub spec: String,
+    pub status: String,
+    /// Whether the task is parked at a human gate (the actions show).
+    pub awaiting: bool,
+    pub runs: Vec<RunView>,
+}
+
 /// One selectable tool in the agent drawer's tool picker: its source `group`
 /// (`"web"` / `"coder"`) and `name`. Projected once at boot from the connected MCP
 /// server + the built-in coder tools.
@@ -459,6 +486,8 @@ pub struct App {
     /// Tasks parked at a human gate (the Review inbox) + the count (for the nav badge).
     pub review_inbox: Vec<ReviewItem>,
     pub review_count: usize,
+    /// The task whose detail view (run chain) is open, or `None`.
+    pub task_detail: Option<TaskDetail>,
     /// Files view: the id of the workspace being browsed.
     pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).

@@ -16,6 +16,7 @@ mod logs;
 mod prompts;
 mod review;
 mod system_map;
+mod task_detail;
 mod widgets;
 mod workspace;
 mod workspace_tasks;
@@ -59,6 +60,9 @@ pub fn routes() -> Router {
                 WsTab::Tasks,
                 workspace_tasks::tasks(),
             ))
+        })
+        .page("/w/:wid/tasks/:tid", |p| {
+            view(workspace::shell(wid(p), WsTab::Tasks, task_detail::page()))
         })
         .page("/w/:wid/team", |p| {
             view(workspace::shell(wid(p), WsTab::Team, workspace::team()))
@@ -582,6 +586,13 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     {
         bridge::send(Command::LoadTasks { workspace: wid });
     }
+    // A task's detail view loads its run chain.
+    if let Some(tid) = RoutePattern::new("/w/:wid/tasks/:tid")
+        .matches(path)
+        .and_then(|params| params.get("tid").map(str::to_owned))
+    {
+        bridge::send(Command::LoadTaskDetail { task_id: tid });
+    }
     if let Some(id) = RoutePattern::new("/chat/:id")
         .matches(path)
         .and_then(|params| params.get("id").map(str::to_owned))
@@ -592,7 +603,13 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
 
 /// The workspace id a path is within (any `/w/:wid…` route), else `None`.
 fn workspace_of(path: &str) -> Option<String> {
-    for pattern in ["/w/:wid", "/w/:wid/files", "/w/:wid/tasks", "/w/:wid/team"] {
+    for pattern in [
+        "/w/:wid",
+        "/w/:wid/files",
+        "/w/:wid/tasks",
+        "/w/:wid/tasks/:tid",
+        "/w/:wid/team",
+    ] {
         if let Some(params) = RoutePattern::new(pattern).matches(path)
             && let Some(wid) = params.get("wid")
         {

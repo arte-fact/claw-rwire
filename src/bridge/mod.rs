@@ -151,6 +151,10 @@ pub enum Command {
     LoadDashboard,
     /// Project the review inbox (tasks parked at a human gate) — the `/review` page opening.
     LoadReview,
+    /// Project one task's detail (spec + run chain) — the detail view opening.
+    LoadTaskDetail {
+        task_id: String,
+    },
     /// A human reviewer's verdict from the inbox/detail view: drives the loop.
     ReviewVerdict {
         task_id: String,
@@ -596,6 +600,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadTasks { workspace } => tasks::load(conn, shared, &workspace),
         Command::LoadDashboard => tasks::project_dashboard(conn, shared),
         Command::LoadReview => review::load_inbox(conn, shared),
+        Command::LoadTaskDetail { task_id } => tasks::load_detail(conn, shared, &task_id),
         Command::ReviewVerdict {
             task_id,
             decision,
@@ -603,6 +608,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         } => {
             scheduler::human_verdict(conn, shared, &task_id, &decision, &feedback);
             review::load_inbox(conn, shared);
+            tasks::load_detail(conn, shared, &task_id);
         }
         Command::LoadPrompt { agent, run } => prompts::load(conn, shared, agent, run),
         Command::LoadSettings => prompts::load_settings(conn, shared),

@@ -3,6 +3,7 @@
 //! form, and the per-card edit drawer — has room to grow. Renders from `App.tasks`, the
 //! active workspace's projected lane.
 
+use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 
@@ -32,7 +33,7 @@ pub fn tasks(app: &App) -> ElementBuilder {
     let board = if app.tasks_list_view {
         list_board(app, &members)
     } else {
-        kanban_board(app)
+        kanban_board(app, &workspace.id)
     };
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
@@ -65,7 +66,7 @@ fn list_board(app: &App, members: &[(String, String)]) -> ElementBuilder {
 
 /// The kanban board: one column per pipeline step, then Done and Closed. A task sits in its
 /// current step's column (or Done/Closed when terminal) and moves left→right as it advances.
-fn kanban_board(app: &App) -> ElementBuilder {
+fn kanban_board(app: &App, wid: &str) -> ElementBuilder {
     let step_count = app.pipeline_columns.len();
     let mut columns = app.pipeline_columns.clone();
     columns.push("Done".to_owned());
@@ -79,7 +80,7 @@ fn kanban_board(app: &App) -> ElementBuilder {
                 .iter()
                 .filter(|task| task_column(task, step_count) == index)
                 .collect();
-            kanban_column(name, &cards)
+            kanban_column(name, &cards, wid)
         })
         .collect();
     el(El::Div)
@@ -98,7 +99,7 @@ fn task_column(task: &crate::state::TaskView, step_count: usize) -> usize {
     }
 }
 
-fn kanban_column(name: &str, tasks: &[&crate::state::TaskView]) -> ElementBuilder {
+fn kanban_column(name: &str, tasks: &[&crate::state::TaskView], wid: &str) -> ElementBuilder {
     let mut items = vec![
         el(El::Div)
             .st([
@@ -111,7 +112,7 @@ fn kanban_column(name: &str, tasks: &[&crate::state::TaskView]) -> ElementBuilde
             .text(&format!("{name} · {}", tasks.len())),
     ];
     for task in tasks {
-        items.push(kanban_card(task));
+        items.push(kanban_card(task, wid));
     }
     el(El::Div)
         .style(
@@ -123,13 +124,21 @@ fn kanban_column(name: &str, tasks: &[&crate::state::TaskView]) -> ElementBuilde
         .append(items)
 }
 
-fn kanban_card(task: &crate::state::TaskView) -> ElementBuilder {
+fn kanban_card(task: &TaskView, wid: &str) -> ElementBuilder {
     let mut rows = vec![
         el(El::Div)
             .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
             .append([
-                el(El::Span)
-                    .st([St::Flex1, St::TextXs, St::TextHigh, St::FontSemibold])
+                Link::route(&format!("/w/{wid}/tasks/{}", task.id))
+                    .style(Style::new().set("font", "inherit"))
+                    .st([
+                        St::Flex1,
+                        St::TextXs,
+                        St::TextHigh,
+                        St::FontSemibold,
+                        St::NoUnderline,
+                    ])
+                    .hover([St::TextAccent])
                     .text(&task.title),
                 status_badge(&task.status),
             ]),

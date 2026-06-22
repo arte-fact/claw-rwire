@@ -45,6 +45,48 @@ fn columns_for(conn: &rusqlite::Connection, workspace: &str) -> Vec<String> {
         .collect()
 }
 
+/// Project one task's detail (spec + the full run chain) into `App.task_detail` — the detail
+/// view's audit trail. `None` if the task is gone.
+pub fn load_detail(conn: &rusqlite::Connection, shared: &SharedServerState, task_id: &str) {
+    let names = agent_names(conn);
+    let detail = tasks::get(conn, task_id).ok().flatten().map(|task| {
+        let runs = crate::db::task_runs::list_for_task(conn, task_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|run| crate::state::RunView {
+                agent: run.agent.as_ref().map_or_else(
+                    || "you".to_owned(),
+                    |id| {
+                        names
+                            .iter()
+                            .find(|(i, _)| i == id)
+                            .map_or_else(|| id.clone(), |(_, n)| n.clone())
+                    },
+                ),
+                role: run.role,
+                output: run.output.unwrap_or_default(),
+                verdict: run.verdict,
+                feedback: run.feedback,
+                iteration: run.iteration,
+                ok: run.ok,
+            })
+            .collect();
+        crate::state::TaskDetail {
+            id: task.id,
+            workspace_id: task.workspace_id,
+            title: task.title,
+            spec: task.spec,
+            awaiting: task.status == tasks::TaskStatus::Awaiting,
+            status: task.status.as_str().to_owned(),
+            runs,
+        }
+    });
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_TASK_DETAIL]),
+        move |app| app.task_detail = detail,
+    );
+}
+
 /// `2026-06-22T08:00:00.000Z` → `06-22 08:00` (drop seconds/millis for the card).
 fn short_time(ts: &str) -> String {
     let date = ts.get(5..10).unwrap_or("");

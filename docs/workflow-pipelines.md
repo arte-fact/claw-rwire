@@ -220,13 +220,18 @@ can't hide.
 - [x] 133 tests + e2e: a human-gate loop parks `awaiting` → shows in the inbox with its output
       → **Approve** → `done`; chain = producer → validator(pass, human).
 
-**F-4 — Kanban + view toggle + task detail view**
-- [ ] Tasks tab gains a persisted **Kanban ↔ List** toggle (List = today's view, mobile default).
-- [ ] Kanban: columns = pipeline steps (+ Done / Closed); loop = one column + iteration/verdict
-      badge; one-click **Approve on the card** (full actions in detail).
-- [ ] Detail route `/w/:wid/tasks/:tid`: spec, the run **chain** as a transcript (audit trail),
-      output, all gate + task actions.
-- [ ] Dashboard "needs you: N" badge. e2e.
+**F-4 — Kanban + view toggle + task detail view** _(done)_
+- [x] Tasks tab gains a **Kanban ↔ List** toggle (`App.tasks_list_view`; board default, list the
+      mobile-friendly fallback).
+- [x] Kanban (`workspace_tasks.rs`): columns = pipeline steps + Done + Closed; a task sits in its
+      `step_position`'s column (terminal → Done/Closed); cards show status + loop iteration + a
+      one-click Approve when parked. Columns from `App.pipeline_columns`; `TaskView` gained
+      `step_position`/`iteration`.
+- [x] Detail route `/w/:wid/tasks/:tid` (`task_detail.rs`): spec + the run chain as a transcript
+      (each run's role/agent/output/verdict/feedback — the audit trail) + the gate actions when
+      parked (`Command::LoadTaskDetail`; `App.task_detail`; kanban titles link in).
+- [x] Dashboard "needs you: N" per workspace card (`LaneSummary.awaiting`). e2e: 4 columns +
+      toggle; a done task's 2-run transcript; a parked task's detail Approve → done.
 
 **F-5 — Per-workspace pipeline editor**
 - [ ] Workflow tab (or Team-tab section): add / remove / reorder steps; set kind, agent(s), role
