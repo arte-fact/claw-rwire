@@ -110,6 +110,27 @@ fn launch(conn: &rusqlite::Connection, task: &Task) -> Result<(), String> {
     Ok(())
 }
 
+/// The next-run timestamp for a recurrent task that just succeeded, or `None` to finish it
+/// (non-recurrent, failed, or a missing/unparseable cron). Failures finish so a broken
+/// recurrent task doesn't hammer its lane every tick.
+fn reschedule_at(task: &Task, status: TaskStatus) -> Option<String> {
+    if !matches!(task.kind, crate::db::tasks::TaskKind::Recurrent) || status != TaskStatus::Done {
+        return None;
+    }
+    let cron = crate::schedule::Cron::parse(task.schedule.as_deref()?)?;
+    let next = cron.next_after(now_unix())?;
+    Some(crate::schedule::to_rfc3339_millis(next))
+}
+
+/// Wall-clock now as unix seconds (UTC).
+fn now_unix() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// The agent that runs a task: its explicit assignee (a member), else the workspace owner.
 fn assignee(conn: &rusqlite::Connection, task: &Task) -> Option<String> {
     if let Some(agent) = &task.agent {
@@ -144,7 +165,14 @@ pub fn finished(
         }
         Err(err) => (TaskStatus::Failed, err.clone(), ActivityKind::Failed, err),
     };
-    if let Err(err) = tasks::finish(conn, id, status, Some(&stored)) {
+    // A recurrent task that succeeded re-enters its lane at the next scheduled slot rather
+    // than going terminal; a failed (or non-recurrent) one finishes. Skip-to-next-slot: we
+    // always compute the next fire strictly after now, never replaying missed occurrences.
+    if let Some(next_run) = reschedule_at(&task, status) {
+        if let Err(err) = tasks::reschedule(conn, id, &next_run, Some(&stored)) {
+            log_line(format!("scheduler: reschedule {id} failed: {err}"));
+        }
+    } else if let Err(err) = tasks::finish(conn, id, status, Some(&stored)) {
         log_line(format!("scheduler: finish {id} failed: {err}"));
     }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);

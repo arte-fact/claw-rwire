@@ -9,6 +9,7 @@ mod db;
 mod env_file;
 mod id;
 mod mcp;
+mod schedule;
 mod state;
 mod tools;
 mod ui;

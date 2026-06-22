@@ -184,6 +184,7 @@ pub fn next_ready(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Opt
     conn.query_row(
         &format!(
             "{SELECT} WHERE workspace_id = ?1 AND status = 'pending'
+               AND (next_run IS NULL OR next_run <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                AND NOT EXISTS (
                  SELECT 1 FROM task_blockers b JOIN tasks bt ON bt.id = b.blocked_by
                   WHERE b.task_id = tasks.id AND bt.status != 'done')
@@ -193,6 +194,25 @@ pub fn next_ready(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Opt
         from_row,
     )
     .optional()
+}
+
+/// Reschedule a recurrent task after a run: store its result + `last_run`, set the computed
+/// `next_run`, and return it to `pending` so the lane re-runs it once that slot arrives.
+pub fn reschedule(
+    conn: &Connection,
+    id: &str,
+    next_run: &str,
+    result: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE tasks
+            SET status = 'pending', next_run = ?2, result = ?3,
+                last_run = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?1",
+        params![id, next_run, result],
+    )?;
+    Ok(())
 }
 
 /// Record that `task_id` is blocked by `blocked_by` (both must be in the same workspace —
@@ -320,6 +340,31 @@ mod tests {
         finish(&conn, "t2", TaskStatus::Done, Some("ok")).expect("finish");
         // Blocker done → t1 becomes ready.
         assert_eq!(next_ready(&conn, "ws").expect("scan").unwrap().id, "t1");
+    }
+
+    #[test]
+    fn next_ready_gates_a_recurrent_task_on_its_next_run() {
+        let conn = seeded();
+        create(
+            &conn,
+            &NewTask {
+                schedule: Some("0 8 * * *"),
+                ..task("t1")
+            },
+        )
+        .expect("create");
+        // A future next_run hides it from the ready scan…
+        reschedule(&conn, "t1", "2999-01-01T00:00:00.000Z", Some("ran")).expect("future");
+        assert!(next_ready(&conn, "ws").expect("scan").is_none());
+        // …a past next_run makes it ready again (its slot has arrived).
+        reschedule(&conn, "t1", "2000-01-01T00:00:00.000Z", Some("ran")).expect("past");
+        let ready = next_ready(&conn, "ws").expect("scan").expect("ready");
+        assert_eq!(ready.id, "t1");
+        assert_eq!(
+            ready.status,
+            TaskStatus::Pending,
+            "rescheduled back to pending"
+        );
     }
 
     #[test]
