@@ -1,7 +1,8 @@
 # Handoff — workspace re-architecture + task board
 
-State as of commit `b9bc86f`. Working tree clean. All checks green:
-`cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo test` (**103 passing**).
+State as of commit `9f7e06e`. Working tree clean. All checks green:
+`cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo test` (**113 passing**).
+**Phase C (task board) is complete** — A, B, C all done; only Phase D (rolling context) remains.
 
 ## The arc
 
@@ -29,29 +30,26 @@ The design is settled across five docs — read these first:
 | `7580798` | **C-2** | scheduler scan (`next_ready`/`running_in`/`finish`) + `resolution::resolve_for_agent`; `bridge/scheduler.rs` (ticker + executor); `SchedulerTick`/`TaskFinished`; one running task per workspace, parallel across; result stored on the task + Activity |
 | `7260be4` | **C-3a** | delegation: concierge `ConciergeToolbox::ask` → `Command::Ask` → `bridge/orchestrate.rs` owner **planning turn** with `PlanningToolbox` (`create_task`/`list_tasks`/`cancel_task`, member enum, schedule+blockers); `AskPlanned` re-projects lane; `tasks::add_blocker` |
 | `b9bc86f` | **C-3b** | concierge **notify turn**: `origin_chat` threaded to `tasks.origin_chat_id`; `scheduler::finished` → `notify::completion` (short concierge turn) → `Command::Notified` appends to the chat (no banner/activity) |
+| `b45c43c` | **C-3c rec** | recurrence: `src/schedule.rs` (dep-free 5-field cron, `next_after`, skip-to-next-slot); `next_ready` gates on `next_run`; recurrent done → `tasks::reschedule` |
+| `3720c2a` | **C-3c ui** | schedule input in the create form (cron-validated); cards show `⟳ <cron> · next <ts>` + result snippet; `TaskView` enriched |
+| `af86fb5` | **C-3d** | global dashboard all-lanes view (`App.dashboard_lanes`/`LaneSummary`, `project_dashboard`, `LoadDashboard` + per-tick refresh) |
+| `8f6c019` | refactor | Tasks UI extracted to `ui/workspace_tasks.rs` (workspace.rs 621→448) |
+| `9f7e06e` | **C-3c drawer** | per-card edit drawer (retitle/spec/reassign/schedule/blockers/cancel); `db::tasks::update`/`set_blockers`/`blockers_of`; `tasks::Edit` + `Command::UpdateTask`; `App.editing_task` |
 
-## Next: Phase C-3 — remaining (C-3c, C-3d)
+## Next: Phase D — rolling context (per-agent memory)
 
-The delegation + notify **orchestration core is done** (C-3a/b). What's left is recurrence
-logic + task-board UI — best done with a live `CLAW_ENDPOINT` (to drive the agent tool calls)
-and Playwright (to validate the UI):
+Phase C is done. The remaining roadmap item is **Phase D**: a per-agent **rolling summary**
+store (additive table) + summarize-on-threshold, injected into `run_turn`'s system context for
+the concierge + each workspace owner — so the long-lived concierge chat and recurring owner
+planning don't grow unbounded. See the roadmap's Phase D section. (Best validated with a live
+`CLAW_ENDPOINT`.)
 
-- **C-3c — recurrence + blockers UI + edit drawer:**
-  - **Recurrence**: a recurrent task (has `schedule`, a cron string) should, on `done`, compute
-    `next_run` (skip-to-next-slot — don't fire missed occurrences) and go back to `pending`;
-    `next_ready` must also gate recurrent tasks on `next_run <= now`. Needs a cron→next-time
-    helper. **No cron crate is in the tree** — either add a small dep or implement a minimal
-    5-field parser (`db::tasks` or a new `src/schedule.rs`), unit-tested. `Task` already carries
-    `kind`/`schedule`; add `next_run`/`last_run` handling in `finish`.
-  - **Blockers in the create form** + a per-card **edit drawer** (retitle / rewrite spec /
-    reassign member / change schedule / add-remove blockers / cancel) in `src/ui/workspace.rs`
-    `tasks()`. Mirror the Team tab's immediate-apply controls; needs new bridge commands
-    (`UpdateTask`, `SetBlockers`…) + `TaskView` enrichment (status, blockers, next_run, result
-    snippet). The `tasks::add_blocker` query exists; a `remove_blocker` + `blockers_of` will be
-    needed (write them *with* their UI consumer to avoid dead-code).
-- **C-3d — global dashboard all-lanes view**: every workspace's running/queued card at a glance.
-  Add a `db::tasks::list_active` (or per-lane fold) + project into a dashboard read-model;
-  render in `src/ui/dashboard.rs`. Reuse the card/badge widgets from `workspace::tasks`.
+### Live-model validation still outstanding
+The whole delegation loop (concierge `ask` → owner planning → task runs → notify) and recurrence
+*reschedule-on-done* are wired + unit-tested, but the stub endpoint only exercises the failure
+path. With a working `CLAW_ENDPOINT`/`CLAW_MODEL`, smoke-test: chat a multi-step request → the
+concierge calls `ask` → cards appear in the owner's lane → they run → the concierge notifies in
+chat; and a recurrent task that succeeds gets a future `next_run` and returns to `pending`.
 
 ## Gotchas learned this session (important)
 
@@ -66,11 +64,15 @@ and Playwright (to validate the UI):
 - **`on_route` must not write `App`** — route-hook `App` mutations don't reliably broadcast.
   Project through the bridge instead (`Command::SetActiveWorkspace`, `LoadTasks`, etc.).
 - **No `#[allow]` / dead_code** (project rule). A DB layer with no consumer fails
-  `-D warnings`. Build the consumer in the same increment, or trim to what's used (that's why
-  `db::tasks` only has create/get/list/cancel right now — C-2 re-adds the rest *with* the
-  scheduler that uses them).
+  `-D warnings`. Build the consumer in the same increment, or trim to what's used. This also
+  rules out `#[allow(clippy::too_many_arguments)]` — when a fn crosses ~7 args (e.g. the task
+  edit path), bundle them into a struct (`bridge::tasks::Edit`) instead of silencing the lint.
 - **rwire forms can't read a multi-select** (`FormData` keeps last value). Use **immediate-apply**
   controls (toggle-chips firing a command each) — see the Team tab.
+- **On a `Submit` event, a form's `.data(...)` attribute isn't exposed via `ctx.data()`** —
+  only `ctx.field()` (FormData) is reliable. To pass a row id through a form submit (e.g. the
+  task edit drawer), put it in a hidden `<input name="id">` and read `ctx.field("id")`, not a
+  data-attribute on the `<form>`. (`ctx.data()` *does* work for click handlers on buttons.)
 - **Schema migrations**: new *tables* are safe via `CREATE TABLE IF NOT EXISTS`. New *columns*
   or PK changes on existing claw-rwire-only tables need `db::migrate` (idempotent ALTER /
   table-rebuild) — see `add_workspace_owner_column` / `widen_agent_workspaces_to_m_n`.
