@@ -226,6 +226,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   next_run        TEXT,                                -- when a recurrent task is next due
   last_run        TEXT,
   priority        INTEGER NOT NULL DEFAULT 0,
+  step_position   INTEGER NOT NULL DEFAULT 0,          -- current pipeline step (Phase F)
+  iteration       INTEGER NOT NULL DEFAULT 0,          -- iteration within a loop step (Phase F)
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
@@ -239,6 +241,42 @@ CREATE TABLE IF NOT EXISTS task_blockers (
   blocked_by  TEXT NOT NULL REFERENCES tasks(id),
   PRIMARY KEY (task_id, blocked_by)
 );
+
+-- A workspace's workflow pipeline (Phase F): an ordered list of steps a task flows through.
+-- A `stage` step is one agent run; a `loop` step is a bounded produce<->validate cycle (F-2).
+-- No rows for a workspace = the default single Execute stage (today's behaviour). Additive.
+CREATE TABLE IF NOT EXISTS pipeline_steps (
+  id                 TEXT PRIMARY KEY,
+  workspace_id       TEXT NOT NULL REFERENCES workspaces(id),
+  position           INTEGER NOT NULL,
+  kind               TEXT NOT NULL DEFAULT 'stage',   -- stage | loop
+  name               TEXT NOT NULL,
+  agent_id           TEXT REFERENCES agent_groups(id),  -- producer/stage agent (NULL = owner)
+  prompt             TEXT,                              -- role-preamble override (NULL = default)
+  validator_kind     TEXT,                              -- agent | human (loop only)
+  validator_agent_id TEXT REFERENCES agent_groups(id),
+  validator_prompt   TEXT,
+  max_iterations     INTEGER NOT NULL DEFAULT 1,
+  on_exhaust         TEXT NOT NULL DEFAULT 'human'      -- human | fail
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_steps ON pipeline_steps(workspace_id, position);
+
+-- The run history of a task as it flows through its pipeline (Phase F): one row per agent run,
+-- the source of the chained context and the detail-view audit trail. Additive.
+CREATE TABLE IF NOT EXISTS task_runs (
+  id          TEXT PRIMARY KEY,
+  task_id     TEXT NOT NULL REFERENCES tasks(id),
+  position    INTEGER NOT NULL,             -- which pipeline step
+  role        TEXT NOT NULL,                -- stage | producer | validator
+  agent_id    TEXT,
+  output      TEXT,
+  verdict     TEXT,                         -- pass | revise | reject (validator runs, F-2)
+  feedback    TEXT,
+  iteration   INTEGER NOT NULL DEFAULT 0,
+  ok          INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_runs ON task_runs(task_id, id);
 
 CREATE TABLE IF NOT EXISTS connectors (
   id             TEXT PRIMARY KEY,

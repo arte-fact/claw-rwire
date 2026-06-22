@@ -4,8 +4,10 @@ pub mod agent_tools;
 pub mod agents;
 pub mod chat;
 pub mod endpoints;
+pub mod pipeline;
 pub mod resolution;
 pub mod settings;
+pub mod task_runs;
 pub mod tasks;
 pub mod workspaces;
 
@@ -76,6 +78,23 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_workspace_owner_column(conn).map_err(DbError::Schema)?;
     widen_agent_workspaces_to_m_n(conn).map_err(DbError::Schema)?;
     add_agent_memory_paused_column(conn).map_err(DbError::Schema)?;
+    add_task_pipeline_columns(conn).map_err(DbError::Schema)?;
+    Ok(())
+}
+
+/// Add the Phase F pipeline columns to a `tasks` table that predates them. A fresh DB already
+/// has them from the schema, so each ALTER fails "duplicate column" — treated as success.
+fn add_task_pipeline_columns(conn: &Connection) -> rusqlite::Result<()> {
+    for column in [
+        "ALTER TABLE tasks ADD COLUMN step_position INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN iteration INTEGER NOT NULL DEFAULT 0",
+    ] {
+        match conn.execute(column, []) {
+            Ok(_) => {}
+            Err(err) if is_duplicate_column(&err) => {}
+            Err(err) => return Err(err),
+        }
+    }
     Ok(())
 }
 

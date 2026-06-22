@@ -80,10 +80,12 @@ pub struct Task {
     pub origin_chat: Option<String>,
     /// The next scheduled fire (recurrent tasks), ISO-8601 UTC, or `None`.
     pub next_run: Option<String>,
+    /// The current pipeline step the task is on (Phase F).
+    pub step_position: i64,
 }
 
 const SELECT: &str = "SELECT id, workspace_id, agent_group_id, title, spec, kind, schedule, \
-                      status, result, priority, origin_chat_id, next_run FROM tasks";
+                      status, result, priority, origin_chat_id, next_run, step_position FROM tasks";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
@@ -99,6 +101,7 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         priority: row.get(9)?,
         origin_chat: row.get(10)?,
         next_run: row.get(11)?,
+        step_position: row.get(12)?,
     })
 }
 
@@ -170,6 +173,16 @@ pub fn cancel(conn: &Connection, id: &str) -> rusqlite::Result<()> {
     set_status(conn, id, TaskStatus::Cancelled)
 }
 
+/// Move a task to a pipeline step (Phase F); it stays `running` as it flows through the chain.
+pub fn set_step(conn: &Connection, id: &str, position: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE tasks SET step_position = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?1",
+        params![id, position],
+    )?;
+    Ok(())
+}
+
 /// The workspace's currently running task, if any — the lane's busy check (a workspace
 /// runs one task at a time).
 pub fn running_in(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Option<Task>> {
@@ -210,7 +223,7 @@ pub fn reschedule(
 ) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE tasks
-            SET status = 'pending', next_run = ?2, result = ?3,
+            SET status = 'pending', next_run = ?2, result = ?3, step_position = 0,
                 last_run = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
           WHERE id = ?1",

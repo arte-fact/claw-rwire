@@ -182,13 +182,17 @@ can't hide.
 
 ## ☐ Phase F — roadmap (tick as it lands; gate each: `fmt --check` · `clippy -D` · `cargo test`)
 
-**F-1 — Pipeline model + linear engine** _(no loop yet)_
-- [ ] Schema: `pipeline_steps` + `task_runs` + `tasks.step_position`; default = one Execute stage.
-- [ ] `db::pipeline` (read a workspace's steps) + `db::task_runs` (append/list).
-- [ ] Engine: on `TaskFinished`, append the run, advance through **stage** steps (output →
-      next step's context), `done` after the last. Existing single-stage tasks behave identically.
-- [ ] Seed/insert a 2-stage pipeline (Studio: `Execute → Refine`) to exercise real chaining.
-- [ ] Tests (engine advance, context flow) + e2e (a 2-stage task runs both, failure path).
+**F-1 — Pipeline model + linear engine** _(done; no loop yet)_
+- [x] Schema: `pipeline_steps` + `task_runs` + `tasks.step_position`/`iteration` (migration);
+      default = one implicit Execute stage (`db::pipeline::steps_for`).
+- [x] `db::pipeline` (steps_for / insert_stage) + `db::task_runs` (append / list).
+- [x] Engine (`scheduler`): `launch_step` runs the current step's agent (step agent → assignee
+      → owner) with the step's role preamble + the **chained context** (spec + prior outputs);
+      `finished` records the run and **advances** (`next_action`) — next stage or done; failure
+      ends the task; recurrent done resets to step 0. Default single-stage tasks unchanged.
+- [x] Showcase: Studio seeded with `Execute(Forge) → Refine(Forge)`; Research keeps the default.
+- [x] 129 tests (steps_for default, task_runs, next_action, step_context) + **e2e against a mock
+      endpoint**: a Studio task chained through both stages (2 task_runs) → done.
 
 **F-2 — Validation loop (the core)**
 - [ ] `loop` step kind (producer + agent validator + `max_iterations` + `on_exhaust`).

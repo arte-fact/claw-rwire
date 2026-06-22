@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use crate::db::{agent_prompts, agents, chat, workspaces};
+use crate::db::{agent_prompts, agents, chat, pipeline, workspaces};
 use crate::state::MessageRole;
 use crate::workspace;
 
@@ -21,6 +21,11 @@ conventions. You implement and verify — you don't just describe what to do.";
 const SCOUT_PERSONA: &str = "You are Scout, a sharp researcher. You gather primary sources, \
 compare options on the dimensions that matter, and write clear, well-organized summaries. You \
 note where claims come from and flag uncertainty.";
+
+/// Role-preamble override for Studio's "Refine" stage — it improves the prior step's output.
+const REFINE_PROMPT: &str = "You are refining the previous step's work, not starting over. \
+Read what was produced, then improve its correctness, clarity, and polish — fix issues, tighten \
+the code/prose, and keep what already works. Briefly note what you changed.";
 
 const STUDIO_BRIEF: &str = "# Studio\n\nWhere we build things — apps, scripts, and tooling. \
 Forge does the engineering here; ask for something concrete and it gets made.\n\n## \
@@ -81,6 +86,27 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
 
     write_brief(data_dir, STUDIO, "Studio", STUDIO_BRIEF);
     write_brief(data_dir, RESEARCH, "Research", RESEARCH_BRIEF);
+
+    // A 2-stage pipeline for Studio so chaining is visible: Forge builds, then refines. (F-6
+    // upgrades this to a validation loop with a Critic.) Research keeps the default single stage.
+    let _ = pipeline::insert_stage(
+        conn,
+        "ps-studio-0",
+        STUDIO,
+        0,
+        "Execute",
+        Some(FORGE_ID),
+        None,
+    );
+    let _ = pipeline::insert_stage(
+        conn,
+        "ps-studio-1",
+        STUDIO,
+        1,
+        "Refine",
+        Some(FORGE_ID),
+        Some(REFINE_PROMPT),
+    );
 
     // The concierge's welcome, in the seed thread.
     if let Ok(chats) = chat::list_chats(conn)
