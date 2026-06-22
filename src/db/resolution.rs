@@ -30,6 +30,8 @@ pub struct ResolvedInference {
 pub enum ResolutionError {
     #[error("chat {chat:?} is not linked to an agent")]
     NoAgent { chat: String },
+    #[error("agent {0:?} does not exist")]
+    UnknownAgent(String),
     #[error("agent {agent:?} has no endpoint configured")]
     NoEndpoint { agent: String },
     #[error("endpoint {0:?} does not exist")]
@@ -72,6 +74,34 @@ pub fn resolve_for_chat(
         .ok_or_else(|| ResolutionError::NoAgent {
             chat: chat_id.to_owned(),
         })?;
+    // A plain chat turn runs in the agent's own workspace (its home) — the one it owns.
+    let workspace = workspaces::owned_by(conn, &agent.id).map_err(db)?;
+    inference_for(conn, &agent, workspace, env)
+}
+
+/// Resolve for a specific agent running in a specific workspace — a **task run**. The agent
+/// supplies the endpoint / model / key / identity prompt / tools; the workspace is the
+/// task's (not the agent's home), so a member runs in the workspace it was assigned to.
+pub fn resolve_for_agent(
+    conn: &Connection,
+    agent_id: &str,
+    workspace_id: &str,
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<ResolvedInference, ResolutionError> {
+    let agent = agents::get(conn, agent_id)
+        .map_err(db)?
+        .ok_or_else(|| ResolutionError::UnknownAgent(agent_id.to_owned()))?;
+    inference_for(conn, &agent, Some(workspace_id.to_owned()), env)
+}
+
+/// Assemble the inference for an already-resolved agent and a chosen workspace: look up
+/// its endpoint + model + key, identity prompt, and enabled tools.
+fn inference_for(
+    conn: &Connection,
+    agent: &agents::AgentGroup,
+    workspace: Option<String>,
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<ResolvedInference, ResolutionError> {
     let endpoint_name = agent
         .endpoint
         .clone()
@@ -89,14 +119,12 @@ pub fn resolve_for_chat(
         })?;
     let api_key = api_key_for(&endpoint, env)?;
     let tools = agent_tools::selection(conn, &agent.id).map_err(db)?;
-    // A plain chat turn runs in the agent's own workspace (its home) — the one it owns.
-    let workspace = workspaces::owned_by(conn, &agent.id).map_err(db)?;
     let agent_prompt = agent_prompts::get(conn, &agent.id).map_err(db)?;
     Ok(ResolvedInference {
         base_url: endpoint.base_url,
         model,
         api_key,
-        agent_name: agent.name,
+        agent_name: agent.name.clone(),
         workspace,
         agent_prompt,
         tools,
@@ -155,6 +183,29 @@ mod tests {
         let inf = resolve_for_chat(&conn, "chat-1", no_env).expect("resolve");
         assert_eq!(inf.workspace.as_deref(), Some("ws-1"));
         assert_eq!(inf.agent_prompt.as_deref(), Some("You are precise."));
+    }
+
+    #[test]
+    fn resolve_for_agent_uses_the_given_workspace_not_the_home() {
+        use crate::db::workspaces;
+        let conn = seeded();
+        let agent = agents::first(&conn).expect("agent").expect("some");
+        // The agent owns "home" but the task runs in "shared".
+        workspaces::create(&conn, "home", "Home").expect("home");
+        workspaces::set_owner(&conn, "home", &agent.id).expect("own");
+        workspaces::create(&conn, "shared", "Shared").expect("shared");
+        let inf = resolve_for_agent(&conn, &agent.id, "shared", no_env).expect("resolve");
+        assert_eq!(inf.workspace.as_deref(), Some("shared"));
+        assert_eq!(inf.model, "gemma");
+    }
+
+    #[test]
+    fn resolve_for_agent_rejects_an_unknown_agent() {
+        let conn = seeded();
+        assert_eq!(
+            resolve_for_agent(&conn, "ghost", "ws", no_env),
+            Err(ResolutionError::UnknownAgent("ghost".to_owned()))
+        );
     }
 
     #[test]

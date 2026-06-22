@@ -98,10 +98,15 @@
 - [x] `cargo fmt --check` · `clippy -D` · `cargo test` (84) green + e2e (create → pending →
       cancel, persisted)
 
-**C-2 — scheduler + executor (todo):**
-- [ ] `db::tasks` scheduler scan (`next_ready` / `running_in` / `finish` / `blockers_done`)
-- [ ] Scheduler thread + `SchedulerTick` / `TaskFinished`; **one running task per workspace**,
-      parallel across; executor = `run_turn` on the task's agent in the workspace dir
+**C-2 — scheduler + executor (done):**
+- [x] `db::tasks` scheduler scan (`next_ready` — blocker-aware / `running_in` / `finish`) +
+      `resolution::resolve_for_agent` (a member runs in the task's workspace, not its home)
+- [x] Scheduler thread (`spawn_ticker`, `CLAW_SCHEDULER_SECS`, default 3s) + `SchedulerTick` /
+      `TaskFinished`; **one running task per workspace**, parallel across; executor =
+      `run_turn` on the task's assignee (or owner) in the workspace dir, result stored on the
+      task + an Activity entry; lane re-projection guarded by the active workspace
+- [x] `cargo fmt --check` · `clippy -D` · `cargo test` (90) green + e2e (seeded task →
+      auto-ran → `failed` with the endpoint error in `result`, not re-run)
 
 **C-3 — orchestration + recurrence (todo):**
 - [ ] Tools: concierge `ask(workspace, request)` → owner **planning turn** with

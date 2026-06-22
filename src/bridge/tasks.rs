@@ -8,10 +8,10 @@ use crate::db::tasks::{self, NewTask};
 use crate::db::{agents, workspaces};
 use crate::state::{App, TaskView};
 
-/// Project a workspace's lane into `App.tasks` (assignee ids resolved to names).
-pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
+/// A workspace's lane as view-models (assignee ids resolved to names), for projection.
+pub fn lane_views(conn: &rusqlite::Connection, workspace: &str) -> Vec<TaskView> {
     let names = agent_names(conn);
-    let views: Vec<TaskView> = tasks::list_for_workspace(conn, workspace)
+    tasks::list_for_workspace(conn, workspace)
         .unwrap_or_default()
         .into_iter()
         .map(|task| TaskView {
@@ -24,7 +24,13 @@ pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: 
             status: task.status.as_str().to_owned(),
             recurrent: matches!(task.kind, tasks::TaskKind::Recurrent),
         })
-        .collect();
+        .collect()
+}
+
+/// Project a workspace's lane into `App.tasks` (unconditionally — the caller is acting on
+/// the active workspace). Background updates use the guarded path in the scheduler.
+pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
+    let views = lane_views(conn, workspace);
     shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_TASKS]), move |app| {
         app.tasks = views
     });

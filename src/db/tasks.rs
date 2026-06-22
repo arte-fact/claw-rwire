@@ -163,6 +163,53 @@ pub fn cancel(conn: &Connection, id: &str) -> rusqlite::Result<()> {
     set_status(conn, id, TaskStatus::Cancelled)
 }
 
+/// The workspace's currently running task, if any — the lane's busy check (a workspace
+/// runs one task at a time).
+pub fn running_in(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Option<Task>> {
+    conn.query_row(
+        &format!("{SELECT} WHERE workspace_id = ?1 AND status = 'running' LIMIT 1"),
+        params![workspace_id],
+        from_row,
+    )
+    .optional()
+}
+
+/// The next pending task ready to run in a workspace: highest priority, then oldest, and
+/// with no still-unfinished blocker. `None` when the lane is empty or everything pending
+/// is still waiting on a blocker.
+pub fn next_ready(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Option<Task>> {
+    conn.query_row(
+        &format!(
+            "{SELECT} WHERE workspace_id = ?1 AND status = 'pending'
+               AND NOT EXISTS (
+                 SELECT 1 FROM task_blockers b JOIN tasks bt ON bt.id = b.blocked_by
+                  WHERE b.task_id = tasks.id AND bt.status != 'done')
+             ORDER BY priority DESC, created_at ASC LIMIT 1"
+        ),
+        params![workspace_id],
+        from_row,
+    )
+    .optional()
+}
+
+/// Mark a task finished with a terminal status and its result text, stamping `last_run`.
+pub fn finish(
+    conn: &Connection,
+    id: &str,
+    status: TaskStatus,
+    result: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE tasks
+            SET status = ?2, result = ?3,
+                last_run = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?1",
+        params![id, status.as_str(), result],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +270,53 @@ mod tests {
             get(&conn, "t1").expect("get").unwrap().status,
             TaskStatus::Cancelled
         );
+    }
+
+    #[test]
+    fn running_in_reports_the_running_task_only() {
+        let conn = seeded();
+        create(&conn, &task("t1")).expect("t1");
+        assert!(running_in(&conn, "ws").expect("none").is_none());
+        set_status(&conn, "t1", TaskStatus::Running).expect("run");
+        assert_eq!(running_in(&conn, "ws").expect("some").unwrap().id, "t1");
+    }
+
+    #[test]
+    fn next_ready_skips_running_and_terminal() {
+        let conn = seeded();
+        create(&conn, &task("t1")).expect("t1");
+        set_status(&conn, "t1", TaskStatus::Running).expect("run");
+        // Only task is running → nothing ready.
+        assert!(next_ready(&conn, "ws").expect("scan").is_none());
+        create(&conn, &task("t2")).expect("t2");
+        assert_eq!(next_ready(&conn, "ws").expect("scan").unwrap().id, "t2");
+    }
+
+    #[test]
+    fn next_ready_skips_a_task_with_an_unfinished_blocker() {
+        let conn = seeded();
+        create(&conn, &task("t1")).expect("t1"); // older, but blocked
+        create(&conn, &task("t2")).expect("t2"); // the blocker
+        conn.execute(
+            "INSERT INTO task_blockers (task_id, blocked_by) VALUES ('t1', 't2')",
+            [],
+        )
+        .expect("block");
+        // t1 is older (would sort first) but is blocked by the still-pending t2 → t2 runs.
+        assert_eq!(next_ready(&conn, "ws").expect("scan").unwrap().id, "t2");
+        finish(&conn, "t2", TaskStatus::Done, Some("ok")).expect("finish");
+        // Blocker done → t1 becomes ready.
+        assert_eq!(next_ready(&conn, "ws").expect("scan").unwrap().id, "t1");
+    }
+
+    #[test]
+    fn finish_sets_terminal_status_and_result() {
+        let conn = seeded();
+        create(&conn, &task("t1")).expect("t1");
+        finish(&conn, "t1", TaskStatus::Done, Some("the report")).expect("finish");
+        let t = get(&conn, "t1").expect("get").unwrap();
+        assert_eq!(t.status, TaskStatus::Done);
+        assert_eq!(t.result.as_deref(), Some("the report"));
     }
 
     #[test]

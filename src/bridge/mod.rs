@@ -16,6 +16,7 @@ use rwire::{ChangeSet, SharedServerState};
 
 mod admin;
 mod files;
+mod scheduler;
 mod tasks;
 
 use crate::agent;
@@ -149,6 +150,13 @@ pub enum Command {
     /// Cancel a task (its lane re-projects).
     CancelTask {
         id: String,
+    },
+    /// Periodic scheduler scan: launch the next ready task in each idle workspace lane.
+    SchedulerTick,
+    /// A worker thread's finished task run, posted back for the bridge to persist + project.
+    TaskFinished {
+        id: String,
+        result: Result<agent::TurnResult, String>,
     },
     /// Save a workspace's `AGENT.md` brief (the Overview editor).
     SaveBrief {
@@ -326,6 +334,7 @@ pub fn spawn(shared: Arc<SharedServerState>, central_db: PathBuf) {
             handle(&conn, &shared, command);
         }
     });
+    scheduler::spawn_ticker();
 }
 
 /// Prime the projection from the DB and select the most recent thread. On first
@@ -478,6 +487,8 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             agent,
         } => tasks::create(conn, shared, &workspace, &title, &spec, agent),
         Command::CancelTask { id } => tasks::cancel(conn, shared, &id),
+        Command::SchedulerTick => scheduler::tick(conn, shared),
+        Command::TaskFinished { id, result } => scheduler::finished(conn, shared, &id, result),
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)
         }
@@ -687,24 +698,16 @@ fn dispatch_native(
     chat_id: &str,
     inference: resolution::ResolvedInference,
 ) {
-    // The agent's workspace (if it has one): scaffold the dir + starter AGENT.md, then read
-    // AGENT.md as the shared project-brief layer. The system prompt is layered —
-    // base + the agent's identity prompt + the workspace brief. Best-effort: a scaffold
-    // failure just drops the brief layer.
+    // The agent's workspace (if it has one): scaffold the dir + read AGENT.md as the
+    // shared project-brief layer, composing the layered system prompt.
     let workspace_dir = inference
         .workspace
         .as_deref()
         .map(|id| workspace::dir_for(&data_dir(), id));
-    if let Some(dir) = &workspace_dir
-        && let Err(err) = workspace::scaffold(dir, &inference.agent_name)
-    {
-        log_line(format!("bridge: workspace scaffold failed: {err}"));
-    }
-    let brief = workspace_dir.as_deref().and_then(workspace::read_agent_md);
-    let system_prompt = workspace::compose_system_prompt(
-        agent::SYSTEM_PROMPT,
+    let system_prompt = run_system_prompt(
+        workspace_dir.as_deref(),
+        &inference.agent_name,
         inference.agent_prompt.clone(),
-        brief,
     );
 
     // Two views of the transcript: the display thread (chat turns + tool cards) for the
@@ -745,6 +748,23 @@ fn dispatch_native(
             agent::run_turn(&inference, messages, toolbox.as_ref()).map_err(|err| err.to_string());
         send(Command::AgentReply { chat, result });
     });
+}
+
+/// Scaffold a run's workspace dir (best-effort) and compose its layered system prompt:
+/// base + the agent's identity prompt + the workspace's `AGENT.md` brief. Shared by chat
+/// turns and task runs. `None` workspace → just the base + identity layers.
+fn run_system_prompt(
+    workspace_dir: Option<&Path>,
+    agent_name: &str,
+    agent_prompt: Option<String>,
+) -> String {
+    if let Some(dir) = workspace_dir
+        && let Err(err) = workspace::scaffold(dir, agent_name)
+    {
+        log_line(format!("bridge: workspace scaffold failed: {err}"));
+    }
+    let brief = workspace_dir.and_then(workspace::read_agent_md);
+    workspace::compose_system_prompt(agent::SYSTEM_PROMPT, agent_prompt, brief)
 }
 
 /// Assemble the toolbox for a run from the agent's enabled tool set. `selection` is the

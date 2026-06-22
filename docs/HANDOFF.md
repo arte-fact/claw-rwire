@@ -26,35 +26,9 @@ The design is settled across five docs — read these first:
 | `191cd34` | **B-2** | editable **Team tab** (immediate-apply: rename/owner/members/delete via granular commands); dashboard "New workspace"; System Map shrunk to Channels/Agents/Endpoints (Workspaces tier deleted); concierge relabel |
 | `9acc1ab` | **B-3** | "Chat" tree label; inline `AGENT.md` brief editor on Overview (`LoadBrief`/`SaveBrief`) |
 | `ee7c7c6` | **C-1** | `tasks` + `task_blockers` schema; `db::tasks` (create/get/list/cancel); **Tasks tab** (create form + lane cards + cancel); `bridge::tasks`, `App.tasks` |
+| _pending_ | **C-2** | scheduler scan (`next_ready`/`running_in`/`finish`) + `resolution::resolve_for_agent`; `bridge/scheduler.rs` (ticker + executor); `SchedulerTick`/`TaskFinished`; one running task per workspace, parallel across; result stored on the task + Activity |
 
-## Next: Phase C-2 — scheduler + executor
-
-The Tasks tab currently queues tasks that sit `pending` (nothing runs them). C-2 makes them
-execute. Plan (already designed; the queries were prototyped then trimmed from `db::tasks` —
-re-add them):
-
-1. **`db::tasks` scan functions** (re-add, with tests):
-   - `next_ready(conn, wid) -> Option<Task>` — `pending`, all blockers `done`, due if
-     recurrent (`next_run <= now`), ordered `priority DESC, created_at ASC`.
-   - `running_in(conn, wid) -> Option<Task>` — the lane's running task (busy check).
-   - `finish(conn, id, status, result)` — terminal status + result + `last_run`.
-   - `blockers_done(conn, id) -> bool`, `add_blocker`, `blockers_of`.
-   - `list_active(conn)` — for the dashboard lane view.
-   (These existed in a prior draft of `tasks.rs`; see git history of that file if useful.)
-2. **Scheduler thread + commands** in `bridge/mod.rs`:
-   - A thread that sleeps ~Ns and `bridge::send(Command::SchedulerTick)` (mirror the existing
-     pattern; do **not** add tokio — the thread+mpsc+`update_shared_changed` seam is enough).
-   - `Command::SchedulerTick` handler: for each workspace with no `running_in`, pick
-     `next_ready`, set it `running`, spawn an executor worker.
-   - Executor = `agent::run_turn` on the task's agent (default = workspace owner) **in the
-     workspace dir** — this is the *exact* shape of `dispatch_native`'s worker (resolve
-     inference → build toolbox → `run_turn` → post a command back). Post
-     `Command::TaskFinished { id, result, ok }`.
-   - `TaskFinished` handler: `finish(...)`, re-project the lane, then the next tick picks up
-     the lane's next task.
-   - One running task per workspace; workspaces independent → parallel.
-
-## Phase C-3 (after C-2) — orchestration + recurrence
+## Next: Phase C-3 — orchestration + recurrence
 
 Concierge `ask(workspace, request)` tool → owner **planning turn** with
 `create_task`/`list_tasks`/`cancel_task` (a Toolbox, like `CoderToolbox`); concierge **notify
