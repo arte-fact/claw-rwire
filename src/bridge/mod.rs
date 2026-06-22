@@ -207,6 +207,19 @@ pub enum Command {
         summary: String,
         summarized_through: i64,
     },
+    /// Operator memory controls (the Prompts inspector's memory panel): overwrite the summary
+    /// (keeping the marker), clear it (reset summary + marker), or pause/resume auto-summary.
+    SetMemory {
+        agent_id: String,
+        summary: String,
+    },
+    ClearMemory {
+        agent_id: String,
+    },
+    SetMemoryPaused {
+        agent_id: String,
+        paused: bool,
+    },
     /// Save a workspace's `AGENT.md` brief (the Overview editor).
     SaveBrief {
         workspace: String,
@@ -607,6 +620,26 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         } => {
             if let Err(err) = db::agent_memory::set(conn, &agent_id, &summary, summarized_through) {
                 log_line(format!("bridge: update memory failed: {err}"));
+            }
+        }
+        Command::SetMemory { agent_id, summary } => {
+            // Keep the marker so the windowing stays consistent with the edited summary.
+            let marker = db::agent_memory::get(conn, &agent_id)
+                .map(|m| m.summarized_through)
+                .unwrap_or(0);
+            if let Err(err) = db::agent_memory::set(conn, &agent_id, summary.trim(), marker) {
+                log_line(format!("bridge: set memory failed: {err}"));
+            }
+        }
+        Command::ClearMemory { agent_id } => {
+            // Reset the summary and the marker — the next turn re-windows from scratch.
+            if let Err(err) = db::agent_memory::set(conn, &agent_id, "", 0) {
+                log_line(format!("bridge: clear memory failed: {err}"));
+            }
+        }
+        Command::SetMemoryPaused { agent_id, paused } => {
+            if let Err(err) = db::agent_memory::set_paused(conn, &agent_id, paused) {
+                log_line(format!("bridge: pause memory failed: {err}"));
             }
         }
         Command::SaveBrief { workspace, content } => {
@@ -1134,6 +1167,9 @@ fn maybe_summarize(conn: &rusqlite::Connection, chat_id: &str, prompt_tokens: Op
         return;
     };
     let memory = db::agent_memory::get(conn, &inference.agent_id).unwrap_or_default();
+    if memory.paused {
+        return; // operator froze this agent's memory
+    }
     let tail =
         chat::model_turns_after(conn, chat_id, memory.summarized_through).unwrap_or_default();
     // Need at least a window plus something to fold.

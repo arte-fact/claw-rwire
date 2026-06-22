@@ -263,5 +263,6 @@ CREATE TABLE IF NOT EXISTS agent_memory (
   agent_group_id        TEXT PRIMARY KEY REFERENCES agent_groups(id),
   summary               TEXT NOT NULL DEFAULT '',
   summarized_through_id INTEGER NOT NULL DEFAULT 0,
+  paused                INTEGER NOT NULL DEFAULT 0,
   updated_at            TEXT NOT NULL
 );

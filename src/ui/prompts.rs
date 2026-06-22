@@ -3,11 +3,11 @@
 //! receives. Read-only transparency — composed by the bridge via `Command::LoadPrompt`.
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 
 use crate::bridge::{self, Command};
-use crate::state::{App, RunKind};
-use crate::ui::widgets::page_header;
+use crate::state::{App, PromptPreview, RunKind};
+use crate::ui::widgets::{accent_submit, page_header};
 use crate::ui::workspace::card;
 
 pub fn page() -> ElementBuilder {
@@ -58,7 +58,7 @@ fn body(app: &App) -> ElementBuilder {
                 card("1 · Role preamble", text_block(&preview.role)),
                 card("2 · Identity / persona", text_block(&preview.persona)),
                 card("3 · Workspace brief", text_block(&preview.brief)),
-                card("4 · Working memory", text_block(&preview.memory)),
+                memory_card(app.prompt_agent.as_deref(), preview),
                 card(
                     "Assembled (what the model receives)",
                     text_block(&preview.assembled),
@@ -105,6 +105,89 @@ fn run_chip(run: RunKind, active: bool) -> ElementBuilder {
         chip.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
     } else {
         chip.st([St::BgApp, St::TextMuted]).hover([St::TextHigh])
+    }
+}
+
+/// The Working-memory layer, made operator-controllable: a size/paused line, an editable
+/// summary (Save overwrites it), Clear (reset), and Pause/Resume (freeze auto-summary).
+fn memory_card(agent: Option<&str>, preview: &PromptPreview) -> ElementBuilder {
+    let mut meta = preview.memory_meta.clone();
+    if preview.memory_paused {
+        meta.push_str(" · ⏸ paused");
+    }
+    let editor = el(El::Form)
+        .on(Ev::Submit, save_memory())
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append([
+            el(El::Textarea)
+                .id(&format!("mem-{}", agent.unwrap_or("none")))
+                .attr("name", "summary")
+                .attr("rows", "5")
+                .at_str(
+                    rwire::At::Placeholder,
+                    "(empty — fills as the conversation grows)",
+                )
+                .style(
+                    Style::new()
+                        .set("font", "inherit")
+                        .set("resize", "vertical"),
+                )
+                .st(control_st())
+                .focus([St::BorderAccent])
+                .text(&preview.memory),
+            el(El::Div)
+                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+                .append([
+                    accent_submit(icons::Icon::Check, "Save"),
+                    plain_button("Clear", clear_memory(), None),
+                    plain_button(
+                        if preview.memory_paused {
+                            "Resume"
+                        } else {
+                            "Pause"
+                        },
+                        toggle_pause(),
+                        Some(if preview.memory_paused {
+                            "false"
+                        } else {
+                            "true"
+                        }),
+                    ),
+                ]),
+        ]);
+    card(
+        "4 · Working memory",
+        el(El::Div)
+            .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+            .append([
+                el(El::Div).st([St::TextXs, St::TextMuted]).text(&meta),
+                editor,
+            ]),
+    )
+}
+
+/// A small secondary (`type=button`) action inside the memory form, optionally carrying a
+/// `data-paused` value for the pause toggle.
+fn plain_button(label: &str, on_click: rwire::HandlerSpec, paused: Option<&str>) -> ElementBuilder {
+    let button = el(El::Button)
+        .attr("type", "button")
+        .on(Ev::Click, on_click)
+        .style(Style::new().set("font", "inherit"))
+        .st([
+            St::TextXs,
+            St::PxSm,
+            St::PyXs,
+            St::RoundedSm,
+            St::BorderDefault,
+            St::BgApp,
+            St::TextMuted,
+            St::CursorPointer,
+        ])
+        .hover([St::TextHigh])
+        .text(label);
+    match paused {
+        Some(value) => button.data("paused", value),
+        None => button,
     }
 }
 
@@ -162,4 +245,42 @@ fn pick_run(app: &mut App, ctx: &EventContext) {
             run: RunKind::from_str(run),
         });
     }
+}
+
+#[handler]
+fn save_memory(app: &mut App, ctx: &EventContext) {
+    let Some(agent_id) = app.prompt_agent.clone() else {
+        return;
+    };
+    let summary = ctx.field("summary").unwrap_or_default().to_owned();
+    bridge::send(Command::SetMemory { agent_id, summary });
+    refresh(app);
+}
+
+#[handler]
+fn clear_memory(app: &mut App, ctx: &EventContext) {
+    let _ = ctx;
+    let Some(agent_id) = app.prompt_agent.clone() else {
+        return;
+    };
+    bridge::send(Command::ClearMemory { agent_id });
+    refresh(app);
+}
+
+#[handler]
+fn toggle_pause(app: &mut App, ctx: &EventContext) {
+    let Some(agent_id) = app.prompt_agent.clone() else {
+        return;
+    };
+    let paused = ctx.data("paused") == Some("true");
+    bridge::send(Command::SetMemoryPaused { agent_id, paused });
+    refresh(app);
+}
+
+/// Re-compose the preview after a memory mutation, so the panel reflects it.
+fn refresh(app: &App) {
+    bridge::send(Command::LoadPrompt {
+        agent: app.prompt_agent.clone(),
+        run: app.prompt_run,
+    });
 }

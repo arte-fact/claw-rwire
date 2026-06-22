@@ -44,12 +44,14 @@ An agent (e.g. `ag-default`) can play all three. Also opaque: the `notify` + `su
   turn (scaffold runs on a run, not at boot) — accurate, but a future tweak could scaffold
   on workspace create so the brief is visible immediately.
 
-**E-2 — Memory panel (view / edit / clear / pause)** _(adds `agent_memory.paused`)_
-- [ ] Show each agent's rolling summary, `updated_at`, turns condensed (`summarized_through`),
-      and a rough token size; on the Prompts view (or an agent Memory tab).
-- [ ] Controls: **edit** (correct a bad summary), **clear** (reset summary + marker), **pause**
-      (skip auto-summarization). New `agent_memory.paused` column (migration) + commands
-      (`SetMemory` / `ClearMemory` / `PauseMemory`); `maybe_summarize` respects `paused`.
+**E-2 — Memory panel (view / edit / clear / pause)** _(done)_
+- [x] The Prompts view's "Working memory" card now shows a size/marker line + paused badge,
+      an **editable** summary (Save overwrites it, keeping the marker), **Clear** (reset summary
+      + marker → re-windows), and **Pause/Resume** (freeze auto-summary).
+- [x] `agent_memory.paused` column (schema + idempotent `add_agent_memory_paused_column`
+      migration); `db::agent_memory::set_paused`; commands `SetMemory`/`ClearMemory`/
+      `SetMemoryPaused`; `maybe_summarize` skips a paused agent; a summarizer write preserves
+      the operator's pause. 123 tests; e2e-verified (save → persisted, pause → `paused=1`).
 
 **E-3 — Settings store + configurable defaults** _(adds a `settings` kv table)_
 - [ ] Additive `settings(key TEXT PRIMARY KEY, value TEXT)` + `db::settings` (get/set/all).

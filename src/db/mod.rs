@@ -74,7 +74,21 @@ fn apply_schema(conn: &Connection) -> Result<(), DbError> {
 fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_workspace_owner_column(conn).map_err(DbError::Schema)?;
     widen_agent_workspaces_to_m_n(conn).map_err(DbError::Schema)?;
+    add_agent_memory_paused_column(conn).map_err(DbError::Schema)?;
     Ok(())
+}
+
+/// Add `agent_memory.paused` to a DB whose `agent_memory` predates it. A fresh DB already has
+/// it from the schema, so the ALTER fails "duplicate column" — treated as success.
+fn add_agent_memory_paused_column(conn: &Connection) -> rusqlite::Result<()> {
+    match conn.execute(
+        "ALTER TABLE agent_memory ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
+        [],
+    ) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 /// Add `workspaces.owner_agent_id` to a DB created before it existed. A fresh DB already has

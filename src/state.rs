@@ -266,6 +266,9 @@ pub struct PromptPreview {
     pub brief: String,
     pub memory: String,
     pub assembled: String,
+    /// Memory metadata for the panel: a size/marker line and whether it's paused.
+    pub memory_meta: String,
+    pub memory_paused: bool,
 }
 
 /// One selectable tool in the agent drawer's tool picker: its source `group`

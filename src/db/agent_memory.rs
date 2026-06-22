@@ -5,12 +5,14 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-/// An agent's rolling memory: the `summary` text and `summarized_through` — the id of the
-/// last chat message already folded into it (turns after this are still sent raw).
+/// An agent's rolling memory: the `summary` text, `summarized_through` (the id of the last
+/// chat message folded into it — turns after this are sent raw), and whether auto-summarization
+/// is `paused` (the operator froze it).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Memory {
     pub summary: String,
     pub summarized_through: i64,
+    pub paused: bool,
 }
 
 impl Memory {
@@ -21,20 +23,35 @@ impl Memory {
     }
 }
 
-/// The agent's memory, or a default (empty summary, marker 0) if it has none yet.
+/// The agent's memory, or a default (empty summary, marker 0, not paused) if it has none yet.
 pub fn get(conn: &Connection, agent_id: &str) -> rusqlite::Result<Memory> {
     conn.query_row(
-        "SELECT summary, summarized_through_id FROM agent_memory WHERE agent_group_id = ?1",
+        "SELECT summary, summarized_through_id, paused
+           FROM agent_memory WHERE agent_group_id = ?1",
         params![agent_id],
         |row| {
             Ok(Memory {
                 summary: row.get(0)?,
                 summarized_through: row.get(1)?,
+                paused: row.get::<_, i64>(2)? != 0,
             })
         },
     )
     .optional()
     .map(Option::unwrap_or_default)
+}
+
+/// Freeze or resume an agent's auto-summarization (operator control). Upserts so it works
+/// before any summary exists.
+pub fn set_paused(conn: &Connection, agent_id: &str, paused: bool) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO agent_memory (agent_group_id, summary, summarized_through_id, paused, updated_at)
+         VALUES (?1, '', 0, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         ON CONFLICT(agent_group_id) DO UPDATE SET
+           paused = excluded.paused, updated_at = excluded.updated_at",
+        params![agent_id, i64::from(paused)],
+    )?;
+    Ok(())
 }
 
 /// Replace an agent's rolling memory (summary + how far it has consumed the transcript).
@@ -97,5 +114,19 @@ mod tests {
         let conn = seeded();
         set(&conn, "ag-1", "   \n\t", 5).expect("set");
         assert_eq!(get(&conn, "ag-1").expect("get").text(), None);
+    }
+
+    #[test]
+    fn pause_round_trips_and_survives_a_summary_write() {
+        let conn = seeded();
+        set_paused(&conn, "ag-1", true).expect("pause");
+        assert!(get(&conn, "ag-1").expect("get").paused);
+        // A later summarizer write must not unfreeze the operator's pause.
+        set(&conn, "ag-1", "folded something", 10).expect("set");
+        let memory = get(&conn, "ag-1").expect("get");
+        assert!(memory.paused, "pause preserved across a summary write");
+        assert_eq!(memory.summary, "folded something");
+        set_paused(&conn, "ag-1", false).expect("resume");
+        assert!(!get(&conn, "ag-1").expect("get").paused);
     }
 }

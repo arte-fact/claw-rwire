@@ -47,9 +47,8 @@ pub fn load(
         .as_ref()
         .map(|id| workspace::dir_for(&super::data_dir(), id))
         .and_then(|dir| workspace::read_agent_md(&dir));
-    let memory = db::agent_memory::get(conn, &agent_id)
-        .ok()
-        .and_then(|m| m.text());
+    let mem = db::agent_memory::get(conn, &agent_id).unwrap_or_default();
+    let memory = mem.text();
 
     let assembled = workspace::compose_system_prompt(
         role,
@@ -57,6 +56,15 @@ pub fn load(
         brief.clone(),
         memory.as_deref().map(super::wrap_memory),
     );
+    let memory_meta = if mem.summary.trim().is_empty() {
+        "no memory yet".to_owned()
+    } else {
+        format!(
+            "{} chars · condensed through msg #{}",
+            mem.summary.chars().count(),
+            mem.summarized_through
+        )
+    };
     let preview = PromptPreview {
         agent_name,
         run: run.label().to_owned(),
@@ -64,8 +72,10 @@ pub fn load(
         role: role.to_owned(),
         persona: persona.unwrap_or_default(),
         brief: brief.unwrap_or_default(),
-        memory: memory.unwrap_or_default(),
+        memory: mem.summary,
         assembled,
+        memory_meta,
+        memory_paused: mem.paused,
     };
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
