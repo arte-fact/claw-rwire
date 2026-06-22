@@ -237,6 +237,25 @@ pub fn next_ready(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Opt
     .optional()
 }
 
+/// Every task parked at a human gate (`awaiting`), across all workspaces, newest first — the
+/// cross-workspace review inbox.
+pub fn list_awaiting(conn: &Connection) -> rusqlite::Result<Vec<Task>> {
+    let mut stmt = conn.prepare(&format!(
+        "{SELECT} WHERE status = 'awaiting' ORDER BY updated_at DESC"
+    ))?;
+    let rows = stmt.query_map([], from_row)?;
+    rows.collect()
+}
+
+/// How many tasks are parked at a human gate — for the nav badge.
+pub fn count_awaiting(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE status = 'awaiting'",
+        [],
+        |row| row.get(0),
+    )
+}
+
 /// Reschedule a recurrent task after a run: store its result + `last_run`, set the computed
 /// `next_run`, and return it to `pending` so the lane re-runs it once that slot arrives.
 pub fn reschedule(

@@ -55,8 +55,9 @@ pub fn tick(conn: &rusqlite::Connection, shared: &SharedServerState) {
             start(conn, shared, task);
         }
     }
-    // Keep the dashboard's all-lanes view live regardless of the open route.
+    // Keep the dashboard's all-lanes view + the review badge live regardless of route.
     super::tasks::project_dashboard(conn, shared);
+    super::review::project_count(conn, shared);
 }
 
 /// Claim a task for its lane (flip to `running`), reflect it, then dispatch the worker. A
@@ -251,8 +252,9 @@ fn validator_context(spec: &str, output: &str) -> String {
     )
 }
 
-/// The most recent successful producer/stage output — the work an `approve` accepts.
-fn last_producer_output(conn: &rusqlite::Connection, task_id: &str) -> String {
+/// The most recent successful producer/stage output — the work an `approve` accepts, and what
+/// the review inbox shows.
+pub(super) fn last_producer_output(conn: &rusqlite::Connection, task_id: &str) -> String {
     task_runs::list_for_task(conn, task_id)
         .unwrap_or_default()
         .iter()
@@ -372,8 +374,13 @@ pub fn finished(
             if !ok {
                 terminal_finish(conn, shared, &task, TaskStatus::Failed, &output);
             } else if let Some(step) = &step {
-                launch_validator(conn, &task, step, &output);
-                super::tasks::project_if_active(conn, shared, &task.workspace_id);
+                if step.validator_kind.as_deref() == Some("human") {
+                    // A human gate: park for the reviewer (the inbox) instead of an agent run.
+                    park_awaiting(conn, shared, &task);
+                } else {
+                    launch_validator(conn, &task, step, &output);
+                    super::tasks::project_if_active(conn, shared, &task.workspace_id);
+                }
             }
         }
         RunRole::Validator => {
@@ -415,8 +422,10 @@ fn route_verdict(
         },
         "reject" => terminal_finish(conn, shared, task, TaskStatus::Rejected, &feedback),
         _ => {
-            // revise: iterate the producer if there's budget left, else exhaust.
-            if task.iteration + 1 < step.max_iterations {
+            // revise: iterate the producer. A human reviewer is never capped (they decide when
+            // to stop); an agent validator is bounded by `max_iterations`, then on-exhaust.
+            let human = step.validator_kind.as_deref() == Some("human");
+            if human || task.iteration + 1 < step.max_iterations {
                 let _ = tasks::set_iteration(conn, &task.id, task.iteration + 1);
                 if let Ok(Some(again)) = tasks::get(conn, &task.id) {
                     launch_current(conn, &again);
@@ -496,19 +505,85 @@ fn terminal_finish(
     activity(shared, task.title.clone(), kind, detail);
 }
 
-/// Park a task at a human gate (loop on-exhaust = human). Frees the lane; the review inbox
-/// (F-3) lets the user resolve it.
+/// Park a task at a human gate (a human validator, or a loop's on-exhaust = human). Frees the
+/// lane; the review inbox lets the user resolve it. On the first park, pings the origin chat.
 fn park_awaiting(conn: &rusqlite::Connection, shared: &SharedServerState, task: &Task) {
     if let Err(err) = tasks::set_status(conn, &task.id, TaskStatus::Awaiting) {
         log_line(format!("scheduler: park {} failed: {err}", task.id));
     }
+    // A cheap, always-works ping (not an LLM turn) on the first park, so the gate is noticed.
+    if task.iteration == 0
+        && let Some(chat) = &task.origin_chat
+    {
+        let _ = crate::db::chat::append_message(
+            conn,
+            chat,
+            MessageRole::Agent,
+            &format!(
+                "🔔 Task **{}** is ready for your review — open the **Review** tab.",
+                task.title
+            ),
+        );
+    }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
+    super::review::project_count(conn, shared);
     activity(
         shared,
         task.title.clone(),
         ActivityKind::Started,
         "awaiting review".to_owned(),
     );
+}
+
+/// Apply a human reviewer's verdict (from the review inbox) to a task parked at a human gate:
+/// record it as a validator run and drive the loop exactly like an agent verdict.
+pub fn human_verdict(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    task_id: &str,
+    decision: &str,
+    feedback: &str,
+) {
+    let Ok(Some(task)) = tasks::get(conn, task_id) else {
+        return;
+    };
+    if task.status != TaskStatus::Awaiting {
+        return; // not at a gate (already resolved) — ignore a stale click
+    }
+    let steps = pipeline::steps_for(conn, &task.workspace_id).unwrap_or_default();
+    let Some(step) = steps.get(task.step_position.max(0) as usize).cloned() else {
+        return;
+    };
+    if let Ok(run_id) = crate::id::new_id() {
+        let _ = task_runs::append(
+            conn,
+            &task_runs::NewRun {
+                id: &run_id,
+                task_id,
+                position: task.step_position,
+                role: "validator",
+                agent: None, // the human
+                output: Some(&format!("(you) {decision}")),
+                verdict: Some(decision),
+                feedback: Some(feedback),
+                iteration: task.iteration,
+                ok: true,
+            },
+        );
+    }
+    // Back to running for the advance/revise paths, then route exactly like an agent verdict.
+    let _ = tasks::set_status(conn, task_id, TaskStatus::Running);
+    if let Ok(Some(running)) = tasks::get(conn, task_id) {
+        route_verdict(
+            conn,
+            shared,
+            &running,
+            &step,
+            &steps,
+            Some((decision.to_owned(), feedback.to_owned())),
+        );
+    }
+    super::review::project_count(conn, shared);
 }
 
 fn activity(shared: &SharedServerState, title: String, kind: ActivityKind, detail: String) {

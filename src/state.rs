@@ -17,6 +17,7 @@ pub enum Tab {
     #[default]
     Chat,
     Dashboard,
+    Review,
     Archived,
     Prompts,
     System,
@@ -28,8 +29,9 @@ impl Tab {
     /// The app-level surfaces shown in the nav footer. Chat is intentionally absent — the
     /// conversation list above the nav *is* the chat surface. Dashboard leads (the
     /// cross-workspace overview); Files is gone (it's now a per-workspace tab).
-    pub const NAV: [Tab; 6] = [
+    pub const NAV: [Tab; 7] = [
         Tab::Dashboard,
+        Tab::Review,
         Tab::Archived,
         Tab::Prompts,
         Tab::System,
@@ -41,6 +43,7 @@ impl Tab {
         match self {
             Tab::Chat => "Chat",
             Tab::Dashboard => "Dashboard",
+            Tab::Review => "Review",
             Tab::Archived => "Archived",
             Tab::Prompts => "Prompts",
             Tab::System => "System",
@@ -54,6 +57,7 @@ impl Tab {
         match self {
             Tab::Chat => "/",
             Tab::Dashboard => "/dashboard",
+            Tab::Review => "/review",
             Tab::Archived => "/archived",
             Tab::Prompts => "/prompts",
             Tab::System => "/system",
@@ -69,6 +73,7 @@ impl Tab {
         match self {
             Tab::Chat => Icon::MessageSquare,
             Tab::Dashboard => Icon::Home,
+            Tab::Review => Icon::Check,
             Tab::Archived => Icon::Archive,
             Tab::Prompts => Icon::Terminal,
             Tab::System => Icon::Cpu,
@@ -301,6 +306,17 @@ pub struct RoleDefaults {
     pub planner: String,
 }
 
+/// One task parked at a human gate, shown in the cross-workspace Review inbox.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReviewItem {
+    pub task_id: String,
+    pub title: String,
+    pub workspace: String,
+    pub spec: String,
+    /// The producer's latest output — the work to review.
+    pub output: String,
+}
+
 /// One selectable tool in the agent drawer's tool picker: its source `group`
 /// (`"web"` / `"coder"`) and `name`. Projected once at boot from the connected MCP
 /// server + the built-in coder tools.
@@ -430,6 +446,9 @@ pub struct App {
     pub prompt_preview: Option<PromptPreview>,
     /// The editable global role preambles (effective values), for the Prompts defaults section.
     pub role_defaults: RoleDefaults,
+    /// Tasks parked at a human gate (the Review inbox) + the count (for the nav badge).
+    pub review_inbox: Vec<ReviewItem>,
+    pub review_count: usize,
     /// Files view: the id of the workspace being browsed.
     pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).

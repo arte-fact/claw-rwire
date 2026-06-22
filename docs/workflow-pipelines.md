@@ -208,13 +208,17 @@ can't hide.
 - [x] 133 tests (verdict parsing + tool validation; next_action) + **e2e (mock endpoint)**:
       pass → producer→validator(pass)→done; revise → producer/validator ×2 → exhaust → fail.
 
-**F-3 — Human gates + review inbox (user review + action)**
-- [ ] `validator_kind = human`: task parks in `awaiting`; user action (Approve / Request changes
-      / Reject) supplies the verdict and drives the same loop (revise → re-run producer).
-- [ ] **Review inbox** — a dedicated nav surface (`/review`) listing all tasks parked at a human
-      gate across workspaces, with a nav **count badge**; rows carry the 3 actions. Gates must be
-      discoverable the moment they exist (this is the primary "act" surface). + concierge notify.
-- [ ] Tests (human verdict advances/loops/fails) + e2e.
+**F-3 — Human gates + review inbox (user review + action)** _(done)_
+- [x] `validator_kind = human`: a producer parks in `awaiting` instead of running an agent
+      validator; `scheduler::human_verdict` records the user's decision as a validator run and
+      drives the *same* `route_verdict` (revise re-runs the producer; a human reviewer is never
+      capped). `tasks::list_awaiting`/`count_awaiting`.
+- [x] **Review inbox** — `/review` nav surface (`ui/review.rs`) listing every parked task across
+      workspaces with the work to review + Approve / Request-changes(notes) / Reject
+      (`Command::ReviewVerdict`); a live **count badge** on the Review nav row (`review_badge`,
+      refreshed each tick + on park/resolve); a cheap (non-LLM) chat ping on first park.
+- [x] 133 tests + e2e: a human-gate loop parks `awaiting` → shows in the inbox with its output
+      → **Approve** → `done`; chain = producer → validator(pass, human).
 
 **F-4 — Kanban + view toggle + task detail view**
 - [ ] Tasks tab gains a persisted **Kanban ↔ List** toggle (List = today's view, mobile default).

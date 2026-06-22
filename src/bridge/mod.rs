@@ -19,6 +19,7 @@ mod files;
 mod notify;
 mod orchestrate;
 mod prompts;
+mod review;
 mod scheduler;
 mod seed;
 mod tasks;
@@ -148,6 +149,14 @@ pub enum Command {
     },
     /// Project every workspace's lane summary into `App.dashboard_lanes` (the dashboard opening).
     LoadDashboard,
+    /// Project the review inbox (tasks parked at a human gate) — the `/review` page opening.
+    LoadReview,
+    /// A human reviewer's verdict from the inbox/detail view: drives the loop.
+    ReviewVerdict {
+        task_id: String,
+        decision: String,
+        feedback: String,
+    },
     /// Compose the Prompts inspector's preview for an agent + run-kind (read-only).
     LoadPrompt {
         agent: Option<String>,
@@ -586,6 +595,15 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadBrief { workspace } => files::load_brief(conn, shared, &workspace),
         Command::LoadTasks { workspace } => tasks::load(conn, shared, &workspace),
         Command::LoadDashboard => tasks::project_dashboard(conn, shared),
+        Command::LoadReview => review::load_inbox(conn, shared),
+        Command::ReviewVerdict {
+            task_id,
+            decision,
+            feedback,
+        } => {
+            scheduler::human_verdict(conn, shared, &task_id, &decision, &feedback);
+            review::load_inbox(conn, shared);
+        }
         Command::LoadPrompt { agent, run } => prompts::load(conn, shared, agent, run),
         Command::LoadSettings => prompts::load_settings(conn, shared),
         Command::SetRolePrompt { run, value } => prompts::set_role(conn, shared, run, &value),

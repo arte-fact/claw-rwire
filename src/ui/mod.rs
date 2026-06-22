@@ -14,6 +14,7 @@ mod dashboard;
 mod files;
 mod logs;
 mod prompts;
+mod review;
 mod system_map;
 mod widgets;
 mod workspace;
@@ -63,6 +64,7 @@ pub fn routes() -> Router {
             view(workspace::shell(wid(p), WsTab::Team, workspace::team()))
         })
         .page("/archived", |_| view(archived::page()))
+        .page("/review", |_| view(review::page()))
         .page("/prompts", |_| view(prompts::page()))
         .page("/system", |_| view(system_map::page()))
         .page("/activity", |_| view(activity::page()))
@@ -385,6 +387,14 @@ fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
     // `Link::route` is rwire's client-routed `<a>`: the client router intercepts the
     // click, pushes history, and re-renders the matched view into the outlet. The
     // extra `close_nav` collapses the mobile drawer once you've picked a destination.
+    let mut row = vec![
+        chat::accent_bar(active),
+        chat::icon_slot(icons::icon_sized(tab.icon(), 16)),
+        el(El::Span).st([St::Flex1]).text(tab.label()),
+    ];
+    if tab == Tab::Review {
+        row.push(review_badge());
+    }
     Link::route(tab.path())
         .on(Ev::Click, close_nav())
         .st([
@@ -399,11 +409,25 @@ fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
             color,
         ])
         .hover([St::TextHigh])
-        .append([
-            chat::accent_bar(active),
-            chat::icon_slot(icons::icon_sized(tab.icon(), 16)),
-            el(El::Span).text(tab.label()),
+        .append(row)
+}
+
+/// The Review nav row's count badge — how many tasks are parked at a human gate. Its own
+/// `App` renderer so it stays live; empty (a zero-width span) when nothing's waiting.
+#[renderer]
+fn review_badge(app: &App) -> ElementBuilder {
+    if app.review_count == 0 {
+        return el(El::Span);
+    }
+    el(El::Span)
+        .st([
+            St::TextXs,
+            St::PxXs,
+            St::RoundedSm,
+            St::BgAccent,
+            St::TextOnAccent,
         ])
+        .text(&app.review_count.to_string())
 }
 
 #[renderer]
@@ -527,6 +551,10 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     // Opening the global dashboard refreshes its all-lanes task view.
     if path == "/dashboard" {
         bridge::send(Command::LoadDashboard);
+    }
+    // Opening the review inbox loads the tasks parked at a human gate.
+    if path == "/review" {
+        bridge::send(Command::LoadReview);
     }
     // Opening the Prompts inspector composes the current selection (picking up any edits) and
     // loads the editable global role defaults.
