@@ -1,6 +1,6 @@
 //! Task board commands, run on the bridge thread (it owns the DB). Create / cancel a task
-//! and project a workspace's lane into `App.tasks`. The scheduler that *runs* the queued
-//! tasks lands in a later increment; for now they sit `pending`.
+//! and project a workspace's lane into `App.tasks`. The scheduler (`super::scheduler`) drains
+//! the queued tasks; this module is the manual create/cancel + the lane projection.
 
 use rwire::{ChangeSet, SharedServerState};
 
@@ -23,8 +23,25 @@ pub fn lane_views(conn: &rusqlite::Connection, workspace: &str) -> Vec<TaskView>
                 .and_then(|id| names.iter().find(|(i, _)| i == &id).map(|(_, n)| n.clone())),
             status: task.status.as_str().to_owned(),
             recurrent: matches!(task.kind, tasks::TaskKind::Recurrent),
+            schedule: task.schedule,
+            next_run: task.next_run.map(|ts| short_time(&ts)),
+            result: task.result.map(|text| snippet(&text)),
         })
         .collect()
+}
+
+/// `2026-06-22T08:00:00.000Z` → `06-22 08:00` (drop seconds/millis for the card).
+fn short_time(ts: &str) -> String {
+    let date = ts.get(5..10).unwrap_or("");
+    let time = ts.get(11..16).unwrap_or("");
+    format!("{date} {time}").trim().to_owned()
+}
+
+/// First line of a result, capped, for the card's last-run snippet.
+fn snippet(text: &str) -> String {
+    let line = text.trim().lines().next().unwrap_or("").trim();
+    let capped: String = line.chars().take(120).collect();
+    capped
 }
 
 /// Project a workspace's lane into `App.tasks` (unconditionally — the caller is acting on
@@ -58,11 +75,21 @@ pub fn create(
     title: &str,
     spec: &str,
     agent: Option<String>,
+    schedule: Option<String>,
 ) {
     let title = title.trim();
     let spec = spec.trim();
     if title.is_empty() || spec.is_empty() {
         return surface(shared, "a task needs a title and a spec".to_owned());
+    }
+    // A schedule, if given, must be a valid cron expression (else it would never fire).
+    let schedule = schedule
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    if let Some(cron) = &schedule
+        && crate::schedule::Cron::parse(cron).is_none()
+    {
+        return surface(shared, format!("not a valid cron schedule: {cron:?}"));
     }
     let Ok(id) = crate::id::new_id() else {
         return surface(shared, "could not mint a task id".to_owned());
@@ -87,7 +114,7 @@ pub fn create(
             agent: agent.as_deref(),
             title,
             spec,
-            schedule: None,
+            schedule: schedule.as_deref(),
             origin_chat: None,
         },
     ) {

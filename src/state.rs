@@ -187,6 +187,12 @@ pub struct TaskView {
     pub agent: Option<String>,
     pub status: String,
     pub recurrent: bool,
+    /// The cron schedule (recurrent tasks), shown on the card.
+    pub schedule: Option<String>,
+    /// Next scheduled fire (`HH:MM` UTC, or a date) for a recurrent task awaiting its slot.
+    pub next_run: Option<String>,
+    /// A short snippet of the last run's result/error, shown on terminal cards.
+    pub result: Option<String>,
 }
 
 /// One selectable tool in the agent drawer's tool picker: its source `group`

@@ -142,12 +142,14 @@ pub enum Command {
     LoadTasks {
         workspace: String,
     },
-    /// Queue a task in a workspace, assigned to `agent` (a member; `None` = the owner).
+    /// Queue a task in a workspace, assigned to `agent` (a member; `None` = the owner). A
+    /// `schedule` (cron string) makes it recurrent.
     CreateTask {
         workspace: String,
         title: String,
         spec: String,
         agent: Option<String>,
+        schedule: Option<String>,
     },
     /// Cancel a task (its lane re-projects).
     CancelTask {
@@ -507,7 +509,8 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             title,
             spec,
             agent,
-        } => tasks::create(conn, shared, &workspace, &title, &spec, agent),
+            schedule,
+        } => tasks::create(conn, shared, &workspace, &title, &spec, agent, schedule),
         Command::CancelTask { id } => tasks::cancel(conn, shared, &id),
         Command::SchedulerTick => scheduler::tick(conn, shared),
         Command::TaskFinished { id, result } => scheduler::finished(conn, shared, &id, result),

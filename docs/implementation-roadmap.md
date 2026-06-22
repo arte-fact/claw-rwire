@@ -121,8 +121,16 @@
       `notify::completion` — a short concierge turn (`resolve_for_chat` on the origin chat,
       no tools) whose prose is appended to that chat via `Command::Notified` (unobtrusive:
       no error banner / activity). 103 tests; e2e-verified the turn fires on completion.
-- [ ] **C-3c** — recurrence (cron → `next_run`, skip-to-next-slot) + blockers in the create
-      form; the per-card **edit drawer** (retitle / rewrite spec / reassign / schedule / cancel)
+- [x] **C-3c (recurrence + schedule UI, done):** dependency-free 5-field cron evaluator
+      (`src/schedule.rs`, `next_after`, skip-to-next-slot) → `next_ready` gates on `next_run`;
+      recurrent tasks reschedule on success (`tasks::reschedule`). Create form gained a
+      **schedule input** (cron-validated) and cards show `⟳ <cron> · next <ts>` + a result
+      snippet (`TaskView` enriched). 111 tests + e2e (create recurrent / reject bad cron).
+- [ ] **C-3c (remaining):** blockers in the create form + the per-card **edit drawer**
+      (retitle / rewrite spec / reassign / change schedule / add-remove blockers / cancel).
+      Needs `db::tasks::remove_blocker`/`blockers_of` + bridge `UpdateTask`/`SetBlockers`
+      commands, `TaskView.blockers`, and an editing-task state. **Split `ui/workspace.rs`
+      (621 lines) first** — extract the tasks UI to its own module before adding the drawer.
 - [ ] **C-3d** — global dashboard: the all-lanes parallel view
 
 ---

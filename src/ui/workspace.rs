@@ -280,6 +280,13 @@ fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
                 )
                 .st(input_st())
                 .focus([St::BorderAccent]),
+            el(El::Input)
+                .attr("name", "schedule")
+                .attr("placeholder", "Cron schedule — optional, e.g. 0 8 * * *")
+                .attr("autocomplete", "off")
+                .style(Style::new().set("font", "inherit"))
+                .st(input_st())
+                .focus([St::BorderAccent]),
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
@@ -325,12 +332,28 @@ fn task_card(task: &crate::state::TaskView) -> ElementBuilder {
             .append(head),
         el(El::Div).st([St::TextXs, St::TextMuted]).text(&task.spec),
     ];
-    let meta = format!(
-        "{}{}",
-        task.agent.as_deref().unwrap_or("owner"),
-        if task.recurrent { " · recurrent" } else { "" }
-    );
+    let mut meta = task.agent.as_deref().unwrap_or("owner").to_owned();
+    if task.recurrent {
+        meta.push_str(" · ⟳");
+        if let Some(schedule) = &task.schedule {
+            meta.push_str(&format!(" {schedule}"));
+        }
+        if let Some(next) = &task.next_run {
+            meta.push_str(&format!(" · next {next}"));
+        }
+    }
     rows.push(el(El::Div).st([St::TextXs, St::TextLow]).text(&meta));
+    if let Some(result) = task
+        .result
+        .as_deref()
+        .filter(|r| !r.is_empty() && matches!(task.status.as_str(), "done" | "failed"))
+    {
+        rows.push(
+            el(El::Div)
+                .st([St::TextXs, St::TextMuted, St::Italic])
+                .text(result),
+        );
+    }
     el(El::Div)
         .st([
             St::BgSurface,
@@ -376,11 +399,16 @@ fn submit_task(app: &mut App, ctx: &EventContext) {
         .field("agent")
         .map(str::to_owned)
         .filter(|v| !v.is_empty());
+    let schedule = ctx
+        .field("schedule")
+        .map(str::to_owned)
+        .filter(|v| !v.trim().is_empty());
     bridge::send(Command::CreateTask {
         workspace,
         title,
         spec,
         agent,
+        schedule,
     });
 }
 
