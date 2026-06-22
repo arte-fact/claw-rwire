@@ -148,6 +148,10 @@ pub fn finished(
         log_line(format!("scheduler: finish {id} failed: {err}"));
     }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
+    // Notify the chat the delegation came from, in the concierge's own voice.
+    if let Some(chat) = &task.origin_chat {
+        super::notify::completion(chat, &task.title, status.as_str(), &stored);
+    }
     activity(shared, task.title, kind, detail);
 }
 

@@ -116,8 +116,11 @@
       `Command::Ask` → `bridge/orchestrate.rs` runs the owner's planning turn on a worker →
       `Command::AskPlanned` re-projects the lane (guarded) + Activity. `tasks::add_blocker`;
       `resolve_for_agent`. 102 tests; boot smoke-tested.
-- [ ] **C-3b** — concierge **notify turn** on task completion → message in `origin_chat`
-      (global thread) + Activity entry (the `origin_chat` is already threaded through `Ask`)
+- [x] **C-3b — notify turn (done):** `origin_chat` threaded `Ask` → `PlanningToolbox` →
+      `tasks.origin_chat_id` (now on `Task`); on completion `scheduler::finished` spawns
+      `notify::completion` — a short concierge turn (`resolve_for_chat` on the origin chat,
+      no tools) whose prose is appended to that chat via `Command::Notified` (unobtrusive:
+      no error banner / activity). 103 tests; e2e-verified the turn fires on completion.
 - [ ] **C-3c** — recurrence (cron → `next_run`, skip-to-next-slot) + blockers in the create
       form; the per-card **edit drawer** (retitle / rewrite spec / reassign / schedule / cancel)
 - [ ] **C-3d** — global dashboard: the all-lanes parallel view

@@ -55,7 +55,7 @@ pub fn ask(conn: &rusqlite::Connection, workspace: &str, request: &str, origin_c
         time: now_hm(),
     };
     let messages = agent::build_messages(&system_prompt, std::slice::from_ref(&brief));
-    let toolbox = PlanningToolbox::new(planning_conn, workspace);
+    let toolbox = PlanningToolbox::new(planning_conn, workspace, Some(origin_chat.to_owned()));
 
     let workspace = workspace.to_owned();
     let origin_chat = origin_chat.to_owned();

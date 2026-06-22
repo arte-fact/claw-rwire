@@ -75,10 +75,12 @@ pub struct Task {
     pub status: TaskStatus,
     pub result: Option<String>,
     pub priority: i64,
+    /// The chat the delegation came from — where the concierge notifies on completion.
+    pub origin_chat: Option<String>,
 }
 
 const SELECT: &str = "SELECT id, workspace_id, agent_group_id, title, spec, kind, schedule, \
-                      status, result, priority FROM tasks";
+                      status, result, priority, origin_chat_id FROM tasks";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
@@ -92,6 +94,7 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         status: TaskStatus::from_str(&row.get::<_, String>(7)?),
         result: row.get(8)?,
         priority: row.get(9)?,
+        origin_chat: row.get(10)?,
     })
 }
 

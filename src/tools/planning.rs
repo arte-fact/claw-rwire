@@ -35,14 +35,22 @@ struct Member {
 pub struct PlanningToolbox {
     conn: Mutex<Connection>,
     workspace: String,
+    /// The chat the delegation came from — stamped on created tasks so the concierge can
+    /// notify there on completion.
+    origin_chat: Option<String>,
 }
 
 impl PlanningToolbox {
     #[must_use]
-    pub fn new(conn: Connection, workspace: impl Into<String>) -> Self {
+    pub fn new(
+        conn: Connection,
+        workspace: impl Into<String>,
+        origin_chat: Option<String>,
+    ) -> Self {
         Self {
             conn: Mutex::new(conn),
             workspace: workspace.into(),
+            origin_chat,
         }
     }
 
@@ -115,7 +123,7 @@ impl PlanningToolbox {
                 title: title.trim(),
                 spec: spec.trim(),
                 schedule,
-                origin_chat: None,
+                origin_chat: self.origin_chat.as_deref(),
             },
         ) {
             return ToolOutcome::error(format!("error: create_task failed: {err}"));
@@ -293,7 +301,7 @@ mod tests {
     }
 
     fn toolbox() -> PlanningToolbox {
-        PlanningToolbox::new(seeded(), "ws")
+        PlanningToolbox::new(seeded(), "ws", None)
     }
 
     #[test]
@@ -368,9 +376,25 @@ mod tests {
             },
         )
         .expect("foreign task");
-        let tb = PlanningToolbox::new(conn, "ws");
+        let tb = PlanningToolbox::new(conn, "ws", None);
         let out = tb.call(CANCEL_TASK, r#"{"id":"x1"}"#);
         assert!(!out.ok, "must refuse a task from another workspace");
+    }
+
+    #[test]
+    fn create_task_stamps_the_origin_chat_for_notification() {
+        let tb = PlanningToolbox::new(seeded(), "ws", Some("chat-9".to_owned()));
+        assert!(tb.call(CREATE_TASK, r#"{"title":"T","spec":"s"}"#).ok);
+        // Read the stamped origin_chat back through the toolbox's own connection.
+        let conn = tb.conn.lock().expect("conn");
+        let row: String = conn
+            .query_row(
+                "SELECT origin_chat_id FROM tasks WHERE workspace_id='ws' LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .expect("origin");
+        assert_eq!(row, "chat-9");
     }
 
     #[test]

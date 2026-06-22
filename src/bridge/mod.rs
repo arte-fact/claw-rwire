@@ -16,6 +16,7 @@ use rwire::{ChangeSet, SharedServerState};
 
 mod admin;
 mod files;
+mod notify;
 mod orchestrate;
 mod scheduler;
 mod tasks;
@@ -172,6 +173,12 @@ pub enum Command {
         workspace: String,
         origin_chat: String,
         result: Result<String, String>,
+    },
+    /// The concierge's notify turn produced a completion message — append it to the origin
+    /// chat and project (no error banner / activity: a background notice is unobtrusive).
+    Notified {
+        chat: String,
+        text: String,
     },
     /// Save a workspace's `AGENT.md` brief (the Overview editor).
     SaveBrief {
@@ -514,6 +521,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             origin_chat,
             result,
         } => orchestrate::planned(conn, shared, &workspace, &origin_chat, result),
+        Command::Notified { chat, text } => notified(conn, shared, &chat, &text),
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)
         }
@@ -920,6 +928,28 @@ fn agent_reply(
             );
         }
     }
+}
+
+/// Append the concierge's completion notice to its origin chat and project it (refresh the
+/// sidebar + the thread if it's the open one). Unlike `agent_reply` this raises no error
+/// banner and logs no activity — it's an unobtrusive background notice.
+fn notified(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str, text: &str) {
+    if let Err(err) = chat::append_message(conn, chat_id, MessageRole::Agent, text) {
+        log_line(format!("bridge: append notify message failed: {err}"));
+        return;
+    }
+    let chats = chat::list_chats(conn).unwrap_or_default();
+    let messages = chat::load_thread(conn, chat_id).unwrap_or_default();
+    let chat_id = chat_id.to_owned();
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_CHATS, App::FIELD_MESSAGES]),
+        |app| {
+            app.chats = chats;
+            if app.open_chat.as_deref() == Some(chat_id.as_str()) {
+                app.messages = messages;
+            }
+        },
+    );
 }
 
 /// Reload the thread + sidebar and clear `sending`/`error` after a reply landed.
