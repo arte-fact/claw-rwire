@@ -1,11 +1,13 @@
-//! The Activity board: a live, newest-first log of agent-run events (`App.activity`).
-//! The currently-running chats also show as busy dots in the sidebar (`App.running`).
+//! The Activity board: a **live** feed of agent tool-activity (`App.live_activity`) on top of
+//! the newest-first run-lifecycle log (`App.activity`). Every row deep-links to its task (and
+//! workspace) where the context exists. Running chats also show as busy dots in the sidebar.
 
+use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, St, el, handler, renderer};
 use rwire_components::Text;
 
-use crate::state::{ActivityEntry, ActivityKind, App};
+use crate::state::{ActivityEntry, ActivityKind, App, LiveEvent};
 use crate::ui::widgets::{clear_button, page_header};
 
 pub fn page() -> ElementBuilder {
@@ -16,9 +18,11 @@ pub fn page() -> ElementBuilder {
         .append([
             page_header(
                 "Activity",
-                "Agent runs as they start and finish.",
+                "What the agents are doing right now, and the runs as they start and finish. \
+                 Click any row to open its task.",
                 clear_control(),
             ),
+            live(),
             board(),
         ])
 }
@@ -34,6 +38,60 @@ fn clear_control(app: &App) -> ElementBuilder {
 #[handler]
 fn clear(app: &mut App) {
     app.activity.clear();
+}
+
+/// The live tool-activity feed (in-flight + recently finished tool calls), newest first.
+#[renderer]
+fn live(app: &App) -> ElementBuilder {
+    if app.live_activity.is_empty() {
+        return el(El::Div).style(Style::new().display("none"));
+    }
+    let mut rows = vec![
+        el(El::Div)
+            .st([St::TextXs, St::TextAccent, St::FontSemibold, St::PbXs])
+            .text("▶ Live"),
+    ];
+    rows.extend(app.live_activity.iter().map(live_row));
+    el(El::Div).st([St::DisplayFlex, St::FlexCol]).append(rows)
+}
+
+fn live_row(event: &LiveEvent) -> ElementBuilder {
+    let (mark, color) = if event.in_progress {
+        ("▷", St::TextMuted)
+    } else if event.ok {
+        ("✓", St::TextAccent)
+    } else {
+        ("✗", St::TextError)
+    };
+    Link::route(&format!(
+        "/w/{}/tasks/{}",
+        event.workspace_id, event.task_id
+    ))
+    .style(Style::new().set("font", "inherit"))
+    .st([
+        St::DisplayFlex,
+        St::ItemsCenter,
+        St::GapMd,
+        St::PyXs,
+        St::NoUnderline,
+        St::BorderBSubtle,
+    ])
+    .hover([St::BgSurface])
+    .append([
+        el(El::Span)
+            .st([St::TextLow, St::TextXs, St::FontMono])
+            .text(&event.time),
+        el(El::Span).st([color, St::TextXs]).text(mark),
+        el(El::Span)
+            .st([St::TextHigh, St::TextXs, St::FontSemibold])
+            .text(&event.agent),
+        el(El::Span)
+            .st([St::TextMuted, St::TextXs, St::Flex1, St::Truncate])
+            .text(&event.action),
+        el(El::Span)
+            .st([St::TextLow, St::TextXs])
+            .text(&event.workspace),
+    ])
 }
 
 #[renderer]
@@ -72,13 +130,21 @@ fn row(entry: &ActivityEntry) -> ElementBuilder {
                 .text(&entry.detail),
         );
     }
-    el(El::Div)
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapMd,
-            St::PySm,
-            St::BorderBDefault,
-        ])
-        .append(children)
+    let row_st = [
+        St::DisplayFlex,
+        St::ItemsCenter,
+        St::GapMd,
+        St::PySm,
+        St::BorderBDefault,
+    ];
+    // Task lifecycle rows deep-link to the task detail; chat rows are plain.
+    match (&entry.task_id, &entry.workspace_id) {
+        (Some(task), Some(workspace)) => Link::route(&format!("/w/{workspace}/tasks/{task}"))
+            .style(Style::new().set("font", "inherit"))
+            .st(row_st)
+            .st([St::NoUnderline])
+            .hover([St::BgSurface])
+            .append(children),
+        _ => el(El::Div).st(row_st).append(children),
+    }
 }

@@ -990,7 +990,7 @@ fn dispatch_native(
             app.sending = true;
             app.error = None;
             app.running.push(proj_chat.clone());
-            push_activity(app, title, ActivityKind::Started, String::new());
+            push_activity(app, title, ActivityKind::Started, String::new(), None, None);
         },
     );
 
@@ -1248,7 +1248,7 @@ fn agent_reply(
                     app.sending = false;
                     app.error = Some(message.clone());
                     app.running.retain(|id| id != &chat);
-                    push_activity(app, title, ActivityKind::Failed, message);
+                    push_activity(app, title, ActivityKind::Failed, message, None, None);
                 },
             );
         }
@@ -1389,7 +1389,14 @@ fn project_reply(conn: &rusqlite::Connection, shared: &SharedServerState, chat_i
             app.sending = false;
             app.error = None;
             app.running.retain(|id| id != &chat_id);
-            push_activity(app, title, ActivityKind::Finished, String::new());
+            push_activity(
+                app,
+                title,
+                ActivityKind::Finished,
+                String::new(),
+                None,
+                None,
+            );
         },
     );
 }
@@ -1397,7 +1404,14 @@ fn project_reply(conn: &rusqlite::Connection, shared: &SharedServerState, chat_i
 /// Newest-first, capped activity log.
 const ACTIVITY_CAP: usize = 50;
 
-fn push_activity(app: &mut App, title: String, kind: ActivityKind, detail: String) {
+fn push_activity(
+    app: &mut App,
+    title: String,
+    kind: ActivityKind,
+    detail: String,
+    task_id: Option<String>,
+    workspace_id: Option<String>,
+) {
     app.activity.insert(
         0,
         ActivityEntry {
@@ -1405,6 +1419,8 @@ fn push_activity(app: &mut App, title: String, kind: ActivityKind, detail: Strin
             title,
             kind,
             detail,
+            task_id,
+            workspace_id,
         },
     );
     app.activity.truncate(ACTIVITY_CAP);

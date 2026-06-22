@@ -69,12 +69,7 @@ fn start(conn: &rusqlite::Connection, shared: &SharedServerState, task: Task) {
     }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
     super::tasks::refresh_detail_if_open(conn, shared, &task.id);
-    activity(
-        shared,
-        task.title.clone(),
-        ActivityKind::Started,
-        String::new(),
-    );
+    activity(shared, &task, ActivityKind::Started, String::new());
     launch_current(conn, &task);
 }
 
@@ -527,7 +522,7 @@ fn route_verdict(
                 super::tasks::refresh_detail_if_open(conn, shared, &task.id);
                 activity(
                     shared,
-                    task.title.clone(),
+                    task,
                     ActivityKind::Started,
                     format!("revise {}", task.iteration + 2),
                 );
@@ -566,7 +561,7 @@ fn advance_to(
     super::tasks::refresh_detail_if_open(conn, shared, &task.id);
     activity(
         shared,
-        task.title.clone(),
+        task,
         ActivityKind::Started,
         format!("step {}", next_position + 1),
     );
@@ -598,7 +593,7 @@ fn terminal_finish(
     } else {
         (ActivityKind::Failed, output.to_owned())
     };
-    activity(shared, task.title.clone(), kind, detail);
+    activity(shared, task, kind, detail);
 }
 
 /// Park a task at a human gate (a human validator, or a loop's on-exhaust = human). Frees the
@@ -626,7 +621,7 @@ fn park_awaiting(conn: &rusqlite::Connection, shared: &SharedServerState, task: 
     super::review::project_count(conn, shared);
     activity(
         shared,
-        task.title.clone(),
+        task,
         ActivityKind::Started,
         "awaiting review".to_owned(),
     );
@@ -683,11 +678,14 @@ pub fn human_verdict(
     super::review::project_count(conn, shared);
 }
 
-fn activity(shared: &SharedServerState, title: String, kind: ActivityKind, detail: String) {
+fn activity(shared: &SharedServerState, task: &Task, kind: ActivityKind, detail: String) {
+    let title = task.title.clone();
+    let task_id = task.id.clone();
+    let workspace_id = task.workspace_id.clone();
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_ACTIVITY]),
         move |app| {
-            super::push_activity(app, title, kind, detail);
+            super::push_activity(app, title, kind, detail, Some(task_id), Some(workspace_id));
         },
     );
 }

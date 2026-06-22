@@ -96,6 +96,6 @@ pub fn planned(
     };
     shared.update_shared_changed::<App>(
         rwire::ChangeSet::from_fields(&[App::FIELD_ACTIVITY]),
-        move |app| push_activity(app, title, kind, detail),
+        move |app| push_activity(app, title, kind, detail, None, None),
     );
 }

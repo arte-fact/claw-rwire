@@ -101,6 +101,10 @@ pub struct ActivityEntry {
     pub kind: ActivityKind,
     /// Extra context — the failure message for `Failed`, empty otherwise.
     pub detail: String,
+    /// Linked context (task lifecycle events): the task + workspace, so the row deep-links to
+    /// the task detail. `None` for chat events.
+    pub task_id: Option<String>,
+    pub workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
