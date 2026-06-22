@@ -177,6 +177,18 @@ pub struct WorkspaceView {
     pub member_names: Vec<String>,
 }
 
+/// One task card in a workspace's lane (projected from the `tasks` table). `agent` is the
+/// assignee's display name (or `None` = the owner); `status` is the lifecycle string.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TaskView {
+    pub id: String,
+    pub title: String,
+    pub spec: String,
+    pub agent: Option<String>,
+    pub status: String,
+    pub recurrent: bool,
+}
+
 /// One selectable tool in the agent drawer's tool picker: its source `group`
 /// (`"web"` / `"coder"`) and `name`. Projected once at boot from the connected MCP
 /// server + the built-in coder tools.
@@ -292,6 +304,8 @@ pub struct App {
     /// The active workspace's `AGENT.md` brief, loaded when a workspace route opens — backs
     /// the Overview tab's inline brief editor.
     pub workspace_brief: String,
+    /// The active workspace's task lane (projected when its Tasks tab opens).
+    pub tasks: Vec<TaskView>,
     /// Files view: the id of the workspace being browsed.
     pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).

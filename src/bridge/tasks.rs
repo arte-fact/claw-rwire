@@ -1,0 +1,104 @@
+//! Task board commands, run on the bridge thread (it owns the DB). Create / cancel a task
+//! and project a workspace's lane into `App.tasks`. The scheduler that *runs* the queued
+//! tasks lands in a later increment; for now they sit `pending`.
+
+use rwire::{ChangeSet, SharedServerState};
+
+use crate::db::tasks::{self, NewTask};
+use crate::db::{agents, workspaces};
+use crate::state::{App, TaskView};
+
+/// Project a workspace's lane into `App.tasks` (assignee ids resolved to names).
+pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
+    let names = agent_names(conn);
+    let views: Vec<TaskView> = tasks::list_for_workspace(conn, workspace)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|task| TaskView {
+            id: task.id,
+            title: task.title,
+            spec: task.spec,
+            agent: task
+                .agent
+                .and_then(|id| names.iter().find(|(i, _)| i == &id).map(|(_, n)| n.clone())),
+            status: task.status.as_str().to_owned(),
+            recurrent: matches!(task.kind, tasks::TaskKind::Recurrent),
+        })
+        .collect();
+    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_TASKS]), move |app| {
+        app.tasks = views
+    });
+}
+
+/// Create a task in `workspace`, assigned to `agent` (a member; `None` = the owner), then
+/// re-project the lane.
+pub fn create(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    title: &str,
+    spec: &str,
+    agent: Option<String>,
+) {
+    let title = title.trim();
+    let spec = spec.trim();
+    if title.is_empty() || spec.is_empty() {
+        return surface(shared, "a task needs a title and a spec".to_owned());
+    }
+    let Ok(id) = crate::id::new_id() else {
+        return surface(shared, "could not mint a task id".to_owned());
+    };
+    // A named assignee must be a member of the workspace; `None` stores NULL and defaults to
+    // the owner at run time.
+    let agent = agent.filter(|value| !value.trim().is_empty());
+    if let Some(a) = &agent {
+        let members = workspaces::members_of(conn, workspace).unwrap_or_default();
+        if !members.iter().any(|m| m == a) {
+            return surface(
+                shared,
+                "the assignee must be a member of the workspace".into(),
+            );
+        }
+    }
+    if let Err(err) = tasks::create(
+        conn,
+        &NewTask {
+            id: &id,
+            workspace_id: workspace,
+            agent: agent.as_deref(),
+            title,
+            spec,
+            schedule: None,
+            origin_chat: None,
+        },
+    ) {
+        return surface(shared, format!("create task: {err}"));
+    }
+    load(conn, shared, workspace);
+}
+
+/// Cancel a task and re-project its workspace's lane.
+pub fn cancel(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+    let Ok(Some(task)) = tasks::get(conn, id) else {
+        return;
+    };
+    if let Err(err) = tasks::cancel(conn, id) {
+        return surface(shared, format!("cancel task: {err}"));
+    }
+    load(conn, shared, &task.workspace_id);
+}
+
+fn agent_names(conn: &rusqlite::Connection) -> Vec<(String, String)> {
+    agents::list(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| (a.id, a.name))
+        .collect()
+}
+
+fn surface(shared: &SharedServerState, error: String) {
+    super::log_line(format!("bridge tasks: {error}"));
+    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_ERROR]), move |app| {
+        app.error = Some(error)
+    });
+}

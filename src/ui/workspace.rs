@@ -216,19 +216,180 @@ fn save_brief(app: &mut App, ctx: &EventContext) {
     });
 }
 
-/// The Tasks section — a placeholder until the task board (Phase C) lands.
-pub fn tasks() -> ElementBuilder {
+/// The Tasks section — the workspace's lane: a create form + the queued/running/finished
+/// task cards. (The scheduler that *runs* them lands in the next increment; for now they
+/// sit `pending`.)
+#[renderer]
+pub fn tasks(app: &App) -> ElementBuilder {
+    let Some(workspace) = app
+        .active_workspace
+        .as_deref()
+        .and_then(|id| app.workspaces.iter().find(|w| w.id == id))
+    else {
+        return el(El::Div)
+            .st([St::TextSm, St::TextMuted])
+            .text("Select a workspace.");
+    };
+    let mut cards: Vec<ElementBuilder> = app.tasks.iter().map(task_card).collect();
+    if cards.is_empty() {
+        cards.push(
+            el(El::Div)
+                .st([St::TextSm, St::TextMuted, St::PySm])
+                .text("No tasks yet."),
+        );
+    }
     el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapLg])
+        .append([
+            card("New task", create_form(app, workspace)),
+            el(El::Div)
+                .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+                .append(cards),
+        ])
+}
+
+fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
+    // Assignee options: the workspace's members (the owner is the default).
+    let mut assignee = vec![el(El::Option).attr("value", "").text("— owner —")];
+    for agent in app
+        .agents
+        .iter()
+        .filter(|a| workspace.members.iter().any(|m| m == &a.id))
+    {
+        assignee.push(el(El::Option).attr("value", &agent.id).text(&agent.name));
+    }
+    el(El::Form)
+        .on(Ev::Submit, submit_task())
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
-            Text::body("Tasks")
-                .build()
-                .st([St::TextHigh, St::FontSemibold]),
-            el(El::Div).st([St::TextSm, St::TextMuted]).text(
-                "This workspace's task queue will live here — sequential within the workspace, \
-             parallel across workspaces. Coming with the task board.",
-            ),
+            el(El::Input)
+                .attr("name", "title")
+                .attr("placeholder", "Task title")
+                .attr("autocomplete", "off")
+                .style(Style::new().set("font", "inherit"))
+                .st(input_st())
+                .focus([St::BorderAccent]),
+            el(El::Textarea)
+                .attr("name", "spec")
+                .attr("rows", "3")
+                .at_str(rwire::At::Placeholder, "What should the agent do?")
+                .style(
+                    Style::new()
+                        .set("font", "inherit")
+                        .set("resize", "vertical"),
+                )
+                .st(input_st())
+                .focus([St::BorderAccent]),
+            el(El::Div)
+                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+                .append([
+                    el(El::Select)
+                        .attr("name", "agent")
+                        .st(input_st())
+                        .style(Style::new().set("flex", "1"))
+                        .append(assignee),
+                    accent_submit(icons::Icon::Plus, "Queue task"),
+                ]),
         ])
+}
+
+fn input_st() -> [St; 8] {
+    [
+        St::WFull,
+        St::PxSm,
+        St::PySm,
+        St::BorderDefault,
+        St::RoundedSm,
+        St::BgApp,
+        St::TextHigh,
+        St::OutlineNone,
+    ]
+}
+
+fn task_card(task: &crate::state::TaskView) -> ElementBuilder {
+    let mut head: Vec<ElementBuilder> = vec![
+        el(El::Span)
+            .st([St::Flex1, St::TextSm, St::TextHigh, St::FontSemibold])
+            .text(&task.title),
+        status_badge(&task.status),
+    ];
+    if !matches!(task.status.as_str(), "done" | "failed" | "cancelled") {
+        head.push(
+            crate::ui::widgets::icon_button(icons::Icon::Close, cancel_task(), false)
+                .data("task", &task.id),
+        );
+    }
+    let mut rows = vec![
+        el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+            .append(head),
+        el(El::Div).st([St::TextXs, St::TextMuted]).text(&task.spec),
+    ];
+    let meta = format!(
+        "{}{}",
+        task.agent.as_deref().unwrap_or("owner"),
+        if task.recurrent { " · recurrent" } else { "" }
+    );
+    rows.push(el(El::Div).st([St::TextXs, St::TextLow]).text(&meta));
+    el(El::Div)
+        .st([
+            St::BgSurface,
+            St::BorderDefault,
+            St::RoundedSm,
+            St::PMd,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapXs,
+        ])
+        .append(rows)
+}
+
+fn status_badge(status: &str) -> ElementBuilder {
+    let color = match status {
+        "running" => St::TextAccent,
+        "done" => St::TextHigh,
+        "failed" => St::TextError,
+        _ => St::TextMuted,
+    };
+    el(El::Span)
+        .st([
+            St::TextXs,
+            color,
+            St::BorderDefault,
+            St::RoundedSm,
+            St::PxXs,
+        ])
+        .text(status)
+}
+
+#[handler]
+fn submit_task(app: &mut App, ctx: &EventContext) {
+    let Some(workspace) = app.active_workspace.clone() else {
+        return;
+    };
+    let title = ctx.field("title").unwrap_or_default().trim().to_owned();
+    let spec = ctx.field("spec").unwrap_or_default().trim().to_owned();
+    if title.is_empty() || spec.is_empty() {
+        return;
+    }
+    let agent = ctx
+        .field("agent")
+        .map(str::to_owned)
+        .filter(|v| !v.is_empty());
+    bridge::send(Command::CreateTask {
+        workspace,
+        title,
+        spec,
+        agent,
+    });
+}
+
+#[handler]
+fn cancel_task(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(id) = ctx.data("task") {
+        bridge::send(Command::CancelTask { id: id.to_owned() });
+    }
 }
 
 /// The Team section — the workspace's name, **owner**, and **members**, all editable inline

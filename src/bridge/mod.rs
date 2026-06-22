@@ -16,6 +16,7 @@ use rwire::{ChangeSet, SharedServerState};
 
 mod admin;
 mod files;
+mod tasks;
 
 use crate::agent;
 use crate::db::{self, agents, chat, endpoints, resolution, workspaces};
@@ -132,6 +133,22 @@ pub enum Command {
     /// Load a workspace's `AGENT.md` brief into `App.workspace_brief` (the Overview editor).
     LoadBrief {
         workspace: String,
+    },
+    // ── Task board (the workspace Tasks tab) ──
+    /// Project a workspace's task lane into `App.tasks` (its Tasks tab opening).
+    LoadTasks {
+        workspace: String,
+    },
+    /// Queue a task in a workspace, assigned to `agent` (a member; `None` = the owner).
+    CreateTask {
+        workspace: String,
+        title: String,
+        spec: String,
+        agent: Option<String>,
+    },
+    /// Cancel a task (its lane re-projects).
+    CancelTask {
+        id: String,
     },
     /// Save a workspace's `AGENT.md` brief (the Overview editor).
     SaveBrief {
@@ -453,6 +470,14 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::CloseDrawer => close_drawer(shared),
         Command::SetActiveWorkspace { id } => set_active_workspace(shared, id),
         Command::LoadBrief { workspace } => files::load_brief(conn, shared, &workspace),
+        Command::LoadTasks { workspace } => tasks::load(conn, shared, &workspace),
+        Command::CreateTask {
+            workspace,
+            title,
+            spec,
+            agent,
+        } => tasks::create(conn, shared, &workspace, &title, &spec, agent),
+        Command::CancelTask { id } => tasks::cancel(conn, shared, &id),
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)
         }

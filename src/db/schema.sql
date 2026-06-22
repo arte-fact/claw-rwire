@@ -208,6 +208,38 @@ CREATE TABLE IF NOT EXISTS agent_workspaces (
   PRIMARY KEY (agent_group_id, workspace_id)
 );
 
+-- The task board: a queue of work cards owned by a workspace. Each workspace runs its tasks
+-- one at a time (sequential); workspaces run in parallel. A task is assigned to a member
+-- agent and executes in the workspace's directory. Additive (claw-rwire-only).
+CREATE TABLE IF NOT EXISTS tasks (
+  id              TEXT PRIMARY KEY,
+  workspace_id    TEXT NOT NULL REFERENCES workspaces(id),
+  agent_group_id  TEXT REFERENCES agent_groups(id),   -- assignee (a member); NULL = owner
+  title           TEXT NOT NULL,
+  spec            TEXT NOT NULL,                       -- the instruction the agent runs
+  kind            TEXT NOT NULL DEFAULT 'oneshot',     -- oneshot | recurrent
+  schedule        TEXT,                                -- cron (recurrent only)
+  status          TEXT NOT NULL DEFAULT 'pending',     -- pending|running|done|failed|cancelled
+  origin_chat_id  TEXT,                                -- the chat to notify on completion
+  created_by      TEXT,
+  result          TEXT,                                -- last run output
+  next_run        TEXT,                                -- when a recurrent task is next due
+  last_run        TEXT,
+  priority        INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_lane ON tasks(workspace_id, status, priority);
+
+-- Intra-workspace dependencies: `task_id` can't start until `blocked_by` is done. Both must
+-- share a workspace (cross-workspace blockers would couple the parallel lanes). A linear
+-- chain is a pipeline. Additive (claw-rwire-only).
+CREATE TABLE IF NOT EXISTS task_blockers (
+  task_id     TEXT NOT NULL REFERENCES tasks(id),
+  blocked_by  TEXT NOT NULL REFERENCES tasks(id),
+  PRIMARY KEY (task_id, blocked_by)
+);
+
 CREATE TABLE IF NOT EXISTS connectors (
   id             TEXT PRIMARY KEY,
   kind           TEXT NOT NULL UNIQUE,

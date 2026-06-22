@@ -527,6 +527,13 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
             path: String::new(),
         });
     }
+    // Entering a workspace's Tasks tab projects its lane.
+    if let Some(wid) = RoutePattern::new("/w/:wid/tasks")
+        .matches(path)
+        .and_then(|params| params.get("wid").map(str::to_owned))
+    {
+        bridge::send(Command::LoadTasks { workspace: wid });
+    }
     if let Some(id) = RoutePattern::new("/chat/:id")
         .matches(path)
         .and_then(|params| params.get("id").map(str::to_owned))

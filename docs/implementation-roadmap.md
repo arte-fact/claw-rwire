@@ -90,19 +90,25 @@
 > Workspace-owned tasks: sequential per workspace, parallel across, blockers, recurrence.
 > See the task-board doc.
 
-- [ ] Schema: `tasks` + `task_blockers` + query module (CRUD, per-lane ready-scan)
-- [ ] Scheduler thread + `Command::SchedulerTick` / `TaskFinished`; **one running task per
-      workspace**, parallel across workspaces
-- [ ] Executor = `run_turn` on the task's agent **in the workspace dir** (reuse the worker
-      pattern)
+**C-1 — storage + manual Tasks tab (done):**
+- [x] Schema: `tasks` + `task_blockers` (additive); `db::tasks` (enums, `create`/`get`/
+      `list_for_workspace`/`set_status`/`cancel`)
+- [x] Tasks section: create form (title / spec / member assignee) + lane cards (status
+      badge, cancel); `App.tasks`, `LoadTasks`/`CreateTask`/`CancelTask`, `bridge::tasks`
+- [x] `cargo fmt --check` · `clippy -D` · `cargo test` (84) green + e2e (create → pending →
+      cancel, persisted)
+
+**C-2 — scheduler + executor (todo):**
+- [ ] `db::tasks` scheduler scan (`next_ready` / `running_in` / `finish` / `blockers_done`)
+- [ ] Scheduler thread + `SchedulerTick` / `TaskFinished`; **one running task per workspace**,
+      parallel across; executor = `run_turn` on the task's agent in the workspace dir
+
+**C-3 — orchestration + recurrence (todo):**
 - [ ] Tools: concierge `ask(workspace, request)` → owner **planning turn** with
       `create_task` / `list_tasks` / `cancel_task` (auto-route by member persona)
 - [ ] Concierge notify turn → message in the global chat + Activity entry
-- [ ] Tasks section (per-workspace lane) + edit drawer (reassign / spec / schedule / blockers
-      / cancel)
-- [ ] Recurrence (cron → `next_run`) + blocker-aware ordering
+- [ ] Recurrence (cron → `next_run`) + blockers in the create form; edit drawer
 - [ ] Global dashboard: the all-lanes parallel view
-- [ ] `cargo fmt --check` · `clippy -D warnings` · `cargo test` green + e2e
 
 ---
 

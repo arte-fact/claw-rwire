@@ -4,6 +4,7 @@ pub mod agents;
 pub mod chat;
 pub mod endpoints;
 pub mod resolution;
+pub mod tasks;
 pub mod workspaces;
 
 use std::path::Path;
