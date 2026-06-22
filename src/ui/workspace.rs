@@ -6,12 +6,13 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{At, El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{At, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 use rwire_components::Text;
 
 use crate::bridge::{self, Command};
 use crate::state::{App, WorkspaceView};
 use crate::ui::files;
+use crate::ui::widgets::accent_submit;
 
 /// The sections of a workspace, in tab order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,14 +164,56 @@ pub fn dashboard(app: &App) -> ElementBuilder {
                     .st([St::DisplayFlex, St::FlexCol, St::GapXs])
                     .append(roster),
             ),
-            card(
-                "Brief",
-                el(El::Div).st([St::TextSm, St::TextMuted]).text(
-                    "The workspace's AGENT.md is its shared project brief — edit it in the \
-                     Files tab.",
-                ),
-            ),
+            card("Brief", brief_editor(&workspace.id, &app.workspace_brief)),
         ])
+}
+
+/// The inline `AGENT.md` editor on the Overview — the workspace's shared project brief.
+/// Keyed by workspace id so switching workspaces loads a fresh textarea.
+fn brief_editor(wid: &str, content: &str) -> ElementBuilder {
+    el(El::Form)
+        .on(Ev::Submit, save_brief())
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append([
+            el(El::Textarea)
+                .id(&format!("brief-{wid}"))
+                .attr("name", "brief")
+                .attr("spellcheck", "false")
+                .style(
+                    Style::new()
+                        .set("font", "inherit")
+                        .set("resize", "vertical")
+                        .set("min-height", "9rem"),
+                )
+                .st([
+                    St::WFull,
+                    St::PSm,
+                    St::BorderDefault,
+                    St::RoundedSm,
+                    St::BgApp,
+                    St::TextHigh,
+                    St::FontMono,
+                    St::TextXs,
+                    St::OutlineNone,
+                ])
+                .focus([St::BorderAccent])
+                .text(content),
+            el(El::Div)
+                .st([St::DisplayFlex])
+                .append([accent_submit(icons::Icon::Check, "Save brief")]),
+        ])
+}
+
+#[handler]
+fn save_brief(app: &mut App, ctx: &EventContext) {
+    let Some(id) = app.active_workspace.clone() else {
+        return;
+    };
+    let content = ctx.field("brief").unwrap_or_default().to_owned();
+    bridge::send(Command::SaveBrief {
+        workspace: id,
+        content,
+    });
 }
 
 /// The Tasks section — a placeholder until the task board (Phase C) lands.

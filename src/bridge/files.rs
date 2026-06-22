@@ -22,6 +22,38 @@ fn resolve(conn: &rusqlite::Connection, workspace_id: &str) -> Option<(PathBuf, 
     Some((dir, workspace.name))
 }
 
+/// Load a workspace's `AGENT.md` (raw) into `App.workspace_brief` for the Overview editor.
+pub fn load_brief(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
+    let brief = resolve(conn, workspace)
+        .and_then(|(dir, _)| std::fs::read_to_string(dir.join("AGENT.md")).ok())
+        .unwrap_or_default();
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_WORKSPACE_BRIEF]),
+        move |app| app.workspace_brief = brief,
+    );
+}
+
+/// Save a workspace's `AGENT.md` brief from the Overview editor (a normal file write at the
+/// workspace root), then re-project the saved content.
+pub fn save_brief(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    content: &str,
+) {
+    let Some((dir, _)) = resolve(conn, workspace) else {
+        return;
+    };
+    if let Err(err) = ops::write_text(&dir, "AGENT.md", content) {
+        return surface(shared, message(&err));
+    }
+    let content = content.to_owned();
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_WORKSPACE_BRIEF]),
+        move |app| app.workspace_brief = content,
+    );
+}
+
 /// The parent directory of a workspace-relative path (`""` for a top-level entry).
 fn parent_dir(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(parent, _)| parent)

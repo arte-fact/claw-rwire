@@ -134,12 +134,27 @@ fn nav_drawer(app: &App) -> ElementBuilder {
         // (System/Activity/Logs) and Log out sit below it.
         .append([
             drawer_head(),
+            section_label("Chat"),
             new_chat_bar(),
             drawer_threads(),
             workspaces_nav(),
             nav_footer(),
             drawer_foot(),
         ])
+}
+
+/// A small uppercase group label in the sidebar tree (Chat / Workspaces).
+fn section_label(text: &str) -> ElementBuilder {
+    el(El::Div)
+        .st([
+            St::PxMd,
+            St::PbXs,
+            St::TextXs,
+            St::TextMuted,
+            St::TextUppercase,
+            St::TrackingWide,
+        ])
+        .text(text)
 }
 
 /// The Workspaces group: a labelled list of workspace links (each → its dashboard),
@@ -487,9 +502,14 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     // Track the workspace the route is in, so the sidebar highlights it and the workspace
     // header/dashboard/Team renderers can resolve their `WorkspaceView`. Projected via the
     // bridge (a direct `App` write here doesn't reliably broadcast from the route hook).
+    let workspace = workspace_of(path);
     bridge::send(Command::SetActiveWorkspace {
-        id: workspace_of(path),
+        id: workspace.clone(),
     });
+    // Load the workspace's brief for the Overview editor.
+    if let Some(wid) = workspace {
+        bridge::send(Command::LoadBrief { workspace: wid });
+    }
     // Leaving any view closes the System Map drawer (its `editing` is shared state, so
     // it would otherwise re-open when you return to `/system`).
     bridge::send(Command::CloseDrawer);

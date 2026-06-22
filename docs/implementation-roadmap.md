@@ -77,10 +77,11 @@
 - [x] Concierge relabel (System Map channel: "Concierge → …", drawer label "Concierge")
 - [x] `cargo fmt --check` · `clippy -D` · `cargo test` (80) green + e2e verified
 
-**B-3 — polish (deferred):**
-- [ ] Explicit "Chat" node at the tree root; global-chat landing polish
-- [ ] Workspace dashboard inline brief (`AGENT.md`) editor
-- [ ] Mobile: confirm the tree in the slide-in nav drawer
+**B-3 — polish (done):**
+- [x] "Chat" section label at the tree root (matching "Workspaces")
+- [x] Workspace **Overview inline brief editor** — loads/saves `AGENT.md`
+      (`App.workspace_brief`, `LoadBrief`/`SaveBrief`), keyed by workspace id
+- [x] Mobile: tree confirmed in the slide-in nav drawer (screenshot)
 
 ---
 

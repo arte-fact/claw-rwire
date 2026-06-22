@@ -289,6 +289,9 @@ pub struct App {
     /// The Team tab's delete confirm is armed (deletion removes the workspace directory, so
     /// it's a two-step action). Cleared on navigation.
     pub workspace_delete_armed: bool,
+    /// The active workspace's `AGENT.md` brief, loaded when a workspace route opens — backs
+    /// the Overview tab's inline brief editor.
+    pub workspace_brief: String,
     /// Files view: the id of the workspace being browsed.
     pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).

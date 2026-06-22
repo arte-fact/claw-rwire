@@ -129,6 +129,15 @@ pub enum Command {
     SetActiveWorkspace {
         id: Option<String>,
     },
+    /// Load a workspace's `AGENT.md` brief into `App.workspace_brief` (the Overview editor).
+    LoadBrief {
+        workspace: String,
+    },
+    /// Save a workspace's `AGENT.md` brief (the Overview editor).
+    SaveBrief {
+        workspace: String,
+        content: String,
+    },
     // ── Files view (browse + edit a workspace) ──
     /// List a directory in a workspace (the `/w/:wid/files` tab + breadcrumb navigation).
     ListDir {
@@ -443,6 +452,10 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::DiscoverModels { endpoint } => admin::discover_models(conn, shared, &endpoint),
         Command::CloseDrawer => close_drawer(shared),
         Command::SetActiveWorkspace { id } => set_active_workspace(shared, id),
+        Command::LoadBrief { workspace } => files::load_brief(conn, shared, &workspace),
+        Command::SaveBrief { workspace, content } => {
+            files::save_brief(conn, shared, &workspace, &content)
+        }
         Command::ListDir { workspace, path } => files::list_dir(conn, shared, &workspace, &path),
         Command::OpenFile { workspace, path } => files::open_file(conn, shared, &workspace, &path),
         Command::WriteFile {
