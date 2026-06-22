@@ -85,9 +85,12 @@ gate frees the lane.
 Columns **are** the pipeline steps (+ a terminal `Done` and a collapsible `Closed` for
 failed/rejected/cancelled). A task sits in its current step's column. A **loop is one column**;
 its cards show an **iteration badge** (`Refine 2/3`) and the latest verdict (⏳/✓/✎/✗) — you
-watch a card *tighten in place* rather than ping-pong. Movement is via contextual card actions
-(no drag-drop; rwire has no JS). The global dashboard gains a "needs you: N" badge (cards parked
-at human gates).
+watch a card *tighten in place* rather than ping-pong.
+
+The Tasks tab has a persisted **view toggle: Kanban ↔ List**. List is today's flat, ordered
+list — the mobile-friendly view on narrow screens; Kanban is the columns. The engine drives
+movement either way (see §10 for why there's no drag-drop). The global dashboard gains a
+"needs you: N" badge (cards parked at human gates).
 
 ## 6. Task detail view
 
@@ -128,6 +131,41 @@ workspace = a single **Execute** stage → done (identical to today; zero migrat
 - **Notify (Phase C-3b)** — accept/reject rides the concierge notify turn into the chat.
 - **Memory (Phase D)** — condenses a long chain's context.
 
+## 10. UX — surfaces & interaction model
+
+**The board moves itself.** Tasks advance automatically — the engine walks the pipeline. The
+operator *never drags a card between steps*; their touchpoints are **create**, **act at a human
+gate**, **edit / cancel / re-run**, and **configure the pipeline**. So there's no drag-drop (the
+no-JS constraint is moot) — the board is a **live monitor**, not a manipulation surface. Four
+jobs:
+
+| Job | "…" | Surface |
+|---|---|---|
+| **Monitor** | what's happening | the board + dashboard |
+| **Act** | what needs *me* | the **review inbox** + gate actions |
+| **Understand** | what happened | the task **detail / chain** |
+| **Configure** | how this workspace works | the **pipeline editor** |
+
+**Board view toggle (Kanban ↔ List).** A persisted toggle on the Tasks tab. *Kanban* = columns
+by step (desktop); *List* = today's flat ordered list — the mobile default. The user switches
+freely.
+
+**Review inbox — a dedicated nav surface.** The primary "act" surface: one place listing *every*
+task across all workspaces parked at a human gate, newest first, with a **count badge in the
+nav** (reinforced by a concierge chat notify). Without it, gates get lost. Each row opens the
+review actions.
+
+**Gate actions on the card *and* the detail view.** A one-click **Approve** on the card for the
+common case; Request-changes (notes) / Reject and the rest in the detail view.
+
+**Detail view = a transcript.** The run chain (produce → validate → produce → …) renders like
+the existing chat transcript (reused), with a verdict chip between rounds — the loop "tightening"
+reads as a scrollable thread. Output rendered inline; file writes link into Files.
+
+**Cross-cutting.** Terminal/mono/small-text language + the existing card/badge/status widgets.
+The **"needs you" signal** appears in the nav badge, the dashboard, and chat, so human gates
+can't hide.
+
 ---
 
 ## ☐ Phase F — roadmap (tick as it lands; gate each: `fmt --check` · `clippy -D` · `cargo test`)
@@ -148,16 +186,20 @@ workspace = a single **Execute** stage → done (identical to today; zero migrat
       on-exhaust. Auto-review works end to end.
 - [ ] Tests (verdict routing: pass/revise/reject; cap → on-exhaust; verdict-tool parsing).
 
-**F-3 — Human gates (user review + action)**
+**F-3 — Human gates + review inbox (user review + action)**
 - [ ] `validator_kind = human`: task parks in `awaiting`; user action (Approve / Request changes
       / Reject) supplies the verdict and drives the same loop (revise → re-run producer).
-- [ ] Minimal action surface first (buttons on the card / a thin panel), full detail view in F-4.
+- [ ] **Review inbox** — a dedicated nav surface (`/review`) listing all tasks parked at a human
+      gate across workspaces, with a nav **count badge**; rows carry the 3 actions. Gates must be
+      discoverable the moment they exist (this is the primary "act" surface). + concierge notify.
 - [ ] Tests (human verdict advances/loops/fails) + e2e.
 
-**F-4 — Kanban + task detail view**
-- [ ] Tasks tab → columns = pipeline steps (+ Done / Closed); loop = one column + iteration/verdict
-      badge; contextual card actions.
-- [ ] Detail route `/w/:wid/tasks/:tid`: spec, the run **chain** (audit trail), output, actions.
+**F-4 — Kanban + view toggle + task detail view**
+- [ ] Tasks tab gains a persisted **Kanban ↔ List** toggle (List = today's view, mobile default).
+- [ ] Kanban: columns = pipeline steps (+ Done / Closed); loop = one column + iteration/verdict
+      badge; one-click **Approve on the card** (full actions in detail).
+- [ ] Detail route `/w/:wid/tasks/:tid`: spec, the run **chain** as a transcript (audit trail),
+      output, all gate + task actions.
 - [ ] Dashboard "needs you: N" badge. e2e.
 
 **F-5 — Per-workspace pipeline editor**
@@ -180,6 +222,12 @@ workspace = a single **Execute** stage → done (identical to today; zero migrat
 - [x] **Verdict** — via a `verdict` tool, not prose parsing.
 - [x] **Default pipeline** — a single Execute stage (migration-free; today's behaviour).
 - [x] **Review = a loop** — agent validator (auto) and/or human gate (you); they compose.
+- [x] **The board is a live monitor** — the engine moves cards; no drag-drop. User touchpoints:
+      create · act-at-gate · edit/cancel/rerun · configure.
+- [x] **Review inbox** — a dedicated **nav surface** (cross-workspace, count badge), the primary
+      "act" surface.
+- [x] **Board view** — a user-switchable **Kanban ↔ List** toggle (List = mobile default).
+- [x] **Gate actions** — on the **card** (one-click Approve) *and* the detail view.
 - [ ] **Default validator** when a workspace adds review — *human gate* (you sign off) vs a
       *seeded Critic agent*. Lean: human gate by default; the showcase seeds a Critic to show the
       auto path. Resolve before F-3/F-6.
