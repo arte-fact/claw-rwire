@@ -878,6 +878,9 @@ fn dispatch_native(
         let result =
             agent::run_turn(&inference, messages, toolbox.as_ref()).map_err(|err| err.to_string());
         send(Command::AgentReply { chat, result });
+        // Warm the model's context-window cache off the bridge thread (cached after the
+        // first call), so the token-budget summarize check has a real budget to compare to.
+        warm_context_cache(&inference);
     });
 }
 
@@ -938,8 +941,50 @@ fn wrap_memory(summary: &str) -> String {
 
 /// How many recent transcript turns the concierge sends raw; older ones live in the summary.
 const MEMORY_WINDOW: usize = 12;
-/// Summarize once the un-condensed tail grows past this — folding it back down to the window.
+/// Turn-count summarize trigger — the **fallback** when the endpoint reports no token usage.
 const SUMMARIZE_AT: usize = 24;
+/// Token-based summarize trigger: fold once a request's `prompt_tokens` exceeds this fraction
+/// of the model's context window. The primary path when usage + a context size are known.
+const SUMMARIZE_FRACTION: f64 = 0.6;
+/// Assumed context window when the server reports usage but not a context length yet.
+const DEFAULT_CONTEXT_TOKENS: u32 = 8192;
+
+/// Cache of each `(endpoint, model)`'s context window, so the token-budget check doesn't refetch
+/// `/models` every turn. Warmed off the bridge thread by the turn worker.
+static CONTEXT_CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> =
+    OnceLock::new();
+
+fn context_cache_key(inference: &resolution::ResolvedInference) -> String {
+    format!("{}\u{0}{}", inference.base_url, inference.model)
+}
+
+/// The cached context window for this inference's `(endpoint, model)`, if known yet.
+fn cached_context(inference: &resolution::ResolvedInference) -> Option<u32> {
+    CONTEXT_CACHE
+        .get()?
+        .lock()
+        .ok()?
+        .get(&context_cache_key(inference))
+        .copied()
+}
+
+/// Fetch and cache the model's context window from `/models` (best-effort; servers that don't
+/// advertise it are simply not cached). Runs on a worker thread — never the bridge thread.
+fn warm_context_cache(inference: &resolution::ResolvedInference) {
+    if cached_context(inference).is_some() {
+        return;
+    }
+    if let Ok(Some(length)) = agent::context_length(
+        &inference.base_url,
+        inference.api_key.as_deref(),
+        &inference.model,
+    ) && let Ok(mut map) = CONTEXT_CACHE
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+    {
+        map.insert(context_cache_key(inference), length);
+    }
+}
 
 /// Assemble the toolbox for a run from the agent's enabled tool set. `selection` is the
 /// configured names; `None` means the agent was never configured, so a default applies:
@@ -1038,8 +1083,9 @@ fn agent_reply(
                 log_line(format!("bridge: append agent message failed: {err}"));
             }
             project_reply(conn, shared, chat_id);
-            // Fold older turns into the concierge's rolling memory once the tail is long.
-            maybe_summarize(conn, chat_id);
+            // Fold older turns into the concierge's rolling memory once context gets large
+            // (by the request's real token count, else a turn-count fallback).
+            maybe_summarize(conn, chat_id, turn.prompt_tokens);
         }
         Err(message) => {
             log_line(format!("bridge: agent turn failed: {message}"));
@@ -1070,11 +1116,12 @@ into one concise summary. Preserve concrete facts, decisions, file/task/workspac
 commitments, and any open or unfinished threads; drop pleasantries. Write terse notes, not \
 prose, and output only the summary.";
 
-/// When the concierge's un-condensed transcript tail grows past [`SUMMARIZE_AT`], fold its
-/// oldest turns into the rolling summary on a worker thread (one LLM call), advancing the
-/// marker so the tail shrinks back to [`MEMORY_WINDOW`]. Best-effort: a resolve/turn failure
-/// just logs and the next reply retries.
-fn maybe_summarize(conn: &rusqlite::Connection, chat_id: &str) {
+/// Fold the concierge's older turns into its rolling memory when the thread gets large,
+/// advancing the marker so the raw tail shrinks back to [`MEMORY_WINDOW`]. The trigger is
+/// **token-based** when the endpoint reports `prompt_tokens` (over [`SUMMARIZE_FRACTION`] of
+/// the model's context window), and **falls back** to a turn count ([`SUMMARIZE_AT`]) when it
+/// doesn't. Runs the summarization on a worker thread (one LLM call); best-effort.
+fn maybe_summarize(conn: &rusqlite::Connection, chat_id: &str, prompt_tokens: Option<u32>) {
     let Ok(inference) = resolution::resolve_for_chat(conn, chat_id, |key| std::env::var(key).ok())
     else {
         return;
@@ -1082,7 +1129,18 @@ fn maybe_summarize(conn: &rusqlite::Connection, chat_id: &str) {
     let memory = db::agent_memory::get(conn, &inference.agent_id).unwrap_or_default();
     let tail =
         chat::model_turns_after(conn, chat_id, memory.summarized_through).unwrap_or_default();
-    if tail.len() <= SUMMARIZE_AT {
+    // Need at least a window plus something to fold.
+    if tail.len() <= MEMORY_WINDOW {
+        return;
+    }
+    let over = match prompt_tokens {
+        Some(tokens) => {
+            let budget = cached_context(&inference).unwrap_or(DEFAULT_CONTEXT_TOKENS);
+            f64::from(tokens) > SUMMARIZE_FRACTION * f64::from(budget)
+        }
+        None => tail.len() > SUMMARIZE_AT,
+    };
+    if !over {
         return;
     }
     let fold_count = tail.len() - MEMORY_WINDOW;

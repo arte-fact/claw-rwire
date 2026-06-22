@@ -6,7 +6,7 @@
 
 mod client;
 
-pub use client::{list_models, run_turn};
+pub use client::{context_length, list_models, run_turn};
 
 use serde::{Deserialize, Serialize};
 
@@ -147,17 +147,22 @@ pub struct ToolInvocation {
     pub ok: bool,
 }
 
-/// The outcome of a full turn: the tools it ran (in order) and the final reply text.
+/// The outcome of a full turn: the tools it ran (in order), the final reply text, and the
+/// `prompt_tokens` the endpoint reported for the final request — the real context size, used
+/// to decide when to fold the thread into rolling memory. `None` when the server omits usage.
 #[derive(Debug, Clone, Default)]
 pub struct TurnResult {
     pub invocations: Vec<ToolInvocation>,
     pub reply: Option<String>,
+    pub prompt_tokens: Option<u32>,
 }
 
-/// One model round's output: optional prose and any tool calls it wants run.
+/// One model round's output: optional prose, any tool calls it wants run, and the request's
+/// `prompt_tokens` from the response `usage` (the OpenAI-compatible token accounting).
 pub struct Completion {
     pub content: Option<String>,
     pub tool_calls: Vec<ToolCall>,
+    pub prompt_tokens: Option<u32>,
 }
 
 /// Build the base chat-completion messages: system prompt, then the transcript with

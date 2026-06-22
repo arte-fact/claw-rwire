@@ -42,6 +42,7 @@ pub fn run_turn(
             return Ok(TurnResult {
                 invocations,
                 reply: completion.content,
+                prompt_tokens: completion.prompt_tokens,
             });
         }
 
@@ -65,6 +66,7 @@ pub fn run_turn(
     Ok(TurnResult {
         invocations,
         reply: completion.content,
+        prompt_tokens: completion.prompt_tokens,
     })
 }
 
@@ -158,6 +160,7 @@ fn parse_completion(body: &str) -> Result<Completion, AgentError> {
         .content
         .map(|content| content.trim().to_owned())
         .filter(|content| !content.is_empty());
+    let prompt_tokens = parsed.usage.and_then(|usage| usage.prompt_tokens);
     let tool_calls = message.tool_calls.unwrap_or_default();
     // Some models emit tool calls as *text* in the content instead of the structured
     // `tool_calls` field (e.g. deepseek's `…invoke name="x"…` markup). When the structured
@@ -171,13 +174,49 @@ fn parse_completion(body: &str) -> Result<Completion, AgentError> {
             return Ok(Completion {
                 content: leading_prose(text),
                 tool_calls: recovered,
+                prompt_tokens,
             });
         }
     }
     Ok(Completion {
         content,
         tool_calls,
+        prompt_tokens,
     })
+}
+
+/// The model's context window (max tokens) from `GET /models`, if the server advertises it —
+/// OpenRouter and some others expose `context_length` (or `top_provider.context_length`) as an
+/// extension; base OpenAI does not. `None` when the model isn't found or no length is given.
+pub fn context_length(
+    base_url: &str,
+    api_key: Option<&str>,
+    model: &str,
+) -> Result<Option<u32>, AgentError> {
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let mut request = http().get(&url);
+    if let Some(key) = api_key {
+        request = request.set("Authorization", &format!("Bearer {key}"));
+    }
+    match request.call() {
+        Ok(response) => {
+            let text = response
+                .into_string()
+                .map_err(|err| AgentError::Http(err.to_string()))?;
+            let parsed: ModelList = serde_json::from_str(&text)
+                .map_err(|err| AgentError::Malformed(err.to_string()))?;
+            Ok(parsed
+                .data
+                .into_iter()
+                .find(|entry| entry.id == model)
+                .and_then(|entry| entry.context_length()))
+        }
+        Err(ureq::Error::Status(status, response)) => Err(AgentError::Api {
+            status,
+            body: truncate(&response.into_string().unwrap_or_default(), 500),
+        }),
+        Err(ureq::Error::Transport(transport)) => Err(AgentError::Http(transport.to_string())),
+    }
 }
 
 /// Recover tool calls a model serialised into assistant text instead of the `tool_calls`
@@ -312,6 +351,8 @@ fn truncate(text: &str, max_chars: usize) -> String {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Option<Usage>,
 }
 
 #[derive(Deserialize)]
@@ -326,6 +367,13 @@ struct ResponseMessage {
     tool_calls: Option<Vec<ToolCall>>,
 }
 
+/// The OpenAI-compatible token accounting block. Fields are optional — some servers omit it.
+#[derive(Deserialize)]
+struct Usage {
+    #[serde(default)]
+    prompt_tokens: Option<u32>,
+}
+
 #[derive(Deserialize)]
 struct ModelList {
     data: Vec<ModelEntry>,
@@ -334,6 +382,26 @@ struct ModelList {
 #[derive(Deserialize)]
 struct ModelEntry {
     id: String,
+    /// OpenRouter-style top-level context window.
+    #[serde(default)]
+    context_length: Option<u32>,
+    /// Some providers nest it under `top_provider.context_length` instead.
+    #[serde(default)]
+    top_provider: Option<TopProvider>,
+}
+
+impl ModelEntry {
+    /// The context window, preferring the top-level field, then the nested provider field.
+    fn context_length(&self) -> Option<u32> {
+        self.context_length
+            .or_else(|| self.top_provider.as_ref().and_then(|tp| tp.context_length))
+    }
+}
+
+#[derive(Deserialize)]
+struct TopProvider {
+    #[serde(default)]
+    context_length: Option<u32>,
 }
 
 #[cfg(test)]
@@ -424,5 +492,37 @@ mod tests {
     fn ordinary_prose_is_not_mistaken_for_a_tool_call() {
         let calls = recover_leaked_tool_calls("Here is a normal answer with no tool markup.");
         assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn parse_completion_reads_prompt_tokens_from_usage() {
+        let body = r#"{"choices":[{"message":{"content":"hi"}}],
+            "usage":{"prompt_tokens":1234,"completion_tokens":7,"total_tokens":1241}}"#;
+        assert_eq!(parse_completion(body).unwrap().prompt_tokens, Some(1234));
+        // Missing usage → None (turn-count fallback territory).
+        let no_usage = r#"{"choices":[{"message":{"content":"hi"}}]}"#;
+        assert_eq!(parse_completion(no_usage).unwrap().prompt_tokens, None);
+    }
+
+    #[test]
+    fn model_entry_context_length_prefers_top_level_then_nested() {
+        let list: ModelList = serde_json::from_str(
+            r#"{"data":[
+                {"id":"a","context_length":128000},
+                {"id":"b","top_provider":{"context_length":32768}},
+                {"id":"c"}
+            ]}"#,
+        )
+        .unwrap();
+        let by_id = |id: &str| {
+            list.data
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .context_length()
+        };
+        assert_eq!(by_id("a"), Some(128000));
+        assert_eq!(by_id("b"), Some(32768), "falls back to top_provider");
+        assert_eq!(by_id("c"), None, "no context advertised");
     }
 }
