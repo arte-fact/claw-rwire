@@ -350,6 +350,38 @@ pub struct TaskDetail {
     pub runs: Vec<RunView>,
 }
 
+/// One pipeline step in the Workflow editor (the configured row). `kind` is `stage`/`loop`;
+/// the validator fields apply to loops. Agent ids (not names) so the form's selects pre-fill.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StepView {
+    pub id: String,
+    pub position: i64,
+    pub kind: String,
+    pub name: String,
+    pub agent: Option<String>,
+    pub prompt: Option<String>,
+    pub validator_kind: Option<String>,
+    pub validator_agent: Option<String>,
+    pub validator_prompt: Option<String>,
+    pub max_iterations: i64,
+    pub on_exhaust: String,
+}
+
+/// The Workflow editor's step-form payload (owned). Empty agent/prompt strings mean "none";
+/// the bridge normalizes by kind before persisting.
+#[derive(Debug, Clone, Default)]
+pub struct StepForm {
+    pub kind: String,
+    pub name: String,
+    pub agent: String,
+    pub prompt: String,
+    pub validator_kind: String,
+    pub validator_agent: String,
+    pub validator_prompt: String,
+    pub max_iterations: i64,
+    pub on_exhaust: String,
+}
+
 /// One selectable tool in the agent drawer's tool picker: its source `group`
 /// (`"web"` / `"coder"`) and `name`. Projected once at boot from the connected MCP
 /// server + the built-in coder tools.
@@ -488,6 +520,12 @@ pub struct App {
     pub review_count: usize,
     /// The task whose detail view (run chain) is open, or `None`.
     pub task_detail: Option<TaskDetail>,
+    /// The active workspace's configured pipeline steps (the Workflow editor).
+    pub workflow_steps: Vec<StepView>,
+    /// The pipeline editor is locked because the workspace has in-flight tasks.
+    pub workflow_locked: bool,
+    /// The step whose inline edit form is open (the Workflow editor), or `None`.
+    pub editing_step: Option<String>,
     /// Files view: the id of the workspace being browsed.
     pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).

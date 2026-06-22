@@ -23,6 +23,7 @@ mod review;
 mod scheduler;
 mod seed;
 mod tasks;
+mod workflow;
 
 use crate::agent;
 use crate::db::{self, agents, chat, endpoints, resolution, workspaces};
@@ -154,6 +155,32 @@ pub enum Command {
     /// Project one task's detail (spec + run chain) — the detail view opening.
     LoadTaskDetail {
         task_id: String,
+    },
+    /// Project the active workspace's pipeline steps + edit lock — the Workflow tab opening.
+    LoadWorkflow {
+        workspace: String,
+    },
+    /// Append a pipeline step (`kind` = `stage`/`loop`) to a workspace.
+    AddStep {
+        workspace: String,
+        kind: String,
+    },
+    /// Persist a pipeline step's edited fields.
+    UpdateStep {
+        workspace: String,
+        id: String,
+        form: crate::state::StepForm,
+    },
+    /// Delete a pipeline step.
+    DeleteStep {
+        workspace: String,
+        id: String,
+    },
+    /// Move a pipeline step up (`up = true`) or down.
+    MoveStep {
+        workspace: String,
+        id: String,
+        up: bool,
     },
     /// A human reviewer's verdict from the inbox/detail view: drives the loop.
     ReviewVerdict {
@@ -601,6 +628,17 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadDashboard => tasks::project_dashboard(conn, shared),
         Command::LoadReview => review::load_inbox(conn, shared),
         Command::LoadTaskDetail { task_id } => tasks::load_detail(conn, shared, &task_id),
+        Command::LoadWorkflow { workspace } => workflow::load(conn, shared, &workspace),
+        Command::AddStep { workspace, kind } => workflow::add(conn, shared, &workspace, &kind),
+        Command::UpdateStep {
+            workspace,
+            id,
+            form,
+        } => workflow::update(conn, shared, &workspace, &id, &form),
+        Command::DeleteStep { workspace, id } => workflow::remove(conn, shared, &workspace, &id),
+        Command::MoveStep { workspace, id, up } => {
+            workflow::move_step(conn, shared, &workspace, &id, up)
+        }
         Command::ReviewVerdict {
             task_id,
             decision,

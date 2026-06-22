@@ -20,6 +20,7 @@ mod task_detail;
 mod widgets;
 mod workspace;
 mod workspace_tasks;
+mod workspace_workflow;
 
 use rwire::router::Link;
 use rwire::router::RoutePattern;
@@ -63,6 +64,13 @@ pub fn routes() -> Router {
         })
         .page("/w/:wid/tasks/:tid", |p| {
             view(workspace::shell(wid(p), WsTab::Tasks, task_detail::page()))
+        })
+        .page("/w/:wid/workflow", |p| {
+            view(workspace::shell(
+                wid(p),
+                WsTab::Workflow,
+                workspace_workflow::page(),
+            ))
         })
         .page("/w/:wid/team", |p| {
             view(workspace::shell(wid(p), WsTab::Team, workspace::team()))
@@ -593,6 +601,13 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     {
         bridge::send(Command::LoadTaskDetail { task_id: tid });
     }
+    // The Workflow tab loads the workspace's configured pipeline + edit lock.
+    if let Some(wid) = RoutePattern::new("/w/:wid/workflow")
+        .matches(path)
+        .and_then(|params| params.get("wid").map(str::to_owned))
+    {
+        bridge::send(Command::LoadWorkflow { workspace: wid });
+    }
     if let Some(id) = RoutePattern::new("/chat/:id")
         .matches(path)
         .and_then(|params| params.get("id").map(str::to_owned))
@@ -608,6 +623,7 @@ fn workspace_of(path: &str) -> Option<String> {
         "/w/:wid/files",
         "/w/:wid/tasks",
         "/w/:wid/tasks/:tid",
+        "/w/:wid/workflow",
         "/w/:wid/team",
     ] {
         if let Some(params) = RoutePattern::new(pattern).matches(path)

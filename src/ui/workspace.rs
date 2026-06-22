@@ -20,6 +20,7 @@ pub enum WsTab {
     Dashboard,
     Files,
     Tasks,
+    Workflow,
     Team,
 }
 
@@ -29,6 +30,7 @@ impl WsTab {
             WsTab::Dashboard => "Overview",
             WsTab::Files => "Files",
             WsTab::Tasks => "Tasks",
+            WsTab::Workflow => "Workflow",
             WsTab::Team => "Team",
         }
     }
@@ -39,12 +41,19 @@ impl WsTab {
             WsTab::Dashboard => format!("/w/{wid}"),
             WsTab::Files => format!("/w/{wid}/files"),
             WsTab::Tasks => format!("/w/{wid}/tasks"),
+            WsTab::Workflow => format!("/w/{wid}/workflow"),
             WsTab::Team => format!("/w/{wid}/team"),
         }
     }
 }
 
-const TABS: [WsTab; 4] = [WsTab::Dashboard, WsTab::Files, WsTab::Tasks, WsTab::Team];
+const TABS: [WsTab; 5] = [
+    WsTab::Dashboard,
+    WsTab::Files,
+    WsTab::Tasks,
+    WsTab::Workflow,
+    WsTab::Team,
+];
 
 /// The framed workspace view for route `wid`, with `active` tab highlighted and `content`
 /// below the tab row.

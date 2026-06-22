@@ -234,9 +234,16 @@ can't hide.
       toggle; a done task's 2-run transcript; a parked task's detail Approve → done.
 
 **F-5 — Per-workspace pipeline editor**
-- [ ] Workflow tab (or Team-tab section): add / remove / reorder steps; set kind, agent(s), role
-      prompts, `max_iterations`, `on_exhaust`. Reuses Phase E prompt-editing controls.
-- [ ] Validation (no empty pipeline; a loop needs a producer + validator). e2e.
+- [x] **Workflow tab** (`workspace_workflow.rs`): add (stage/loop) / edit / reorder (↑↓) / delete
+      steps; an inline form per step sets kind, agent, role preamble, and (loops) reviewer
+      kind/agent/preamble, `max_iterations`, `on_exhaust`. `db::pipeline` gained
+      `configured_steps`/`insert`/`update`/`delete`/`set_position` (+ `Step.id`); a `bridge/
+      workflow.rs` module with the commands; a pipeline change re-projects the kanban columns.
+- [x] Edits **locked while tasks are in-flight** (`tasks::has_inflight`; pending/running/awaiting)
+      so a running task never sees its pipeline shift; the handlers re-check the gate. Light
+      validation by normalization (empty = the default single stage; a loop always has a producer
+      [agent→owner] + validator [defaults human]). e2e: add a loop persists; the lock hides the
+      editor while a pending task exists.
 
 **F-6 — Prompts inspector + showcase**
 - [ ] Inspector gains the producer/validator run-kinds (visible + tunable defaults).

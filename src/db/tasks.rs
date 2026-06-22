@@ -256,6 +256,18 @@ pub fn count_awaiting(conn: &Connection) -> rusqlite::Result<i64> {
     )
 }
 
+/// Whether a workspace has any in-flight task (pending / running / awaiting) — the pipeline
+/// editor is locked while these exist, so a running task never sees its pipeline change.
+pub fn has_inflight(conn: &Connection, workspace_id: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tasks WHERE workspace_id = ?1
+            AND status IN ('pending','running','awaiting'))",
+        params![workspace_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+}
+
 /// Reschedule a recurrent task after a run: store its result + `last_run`, set the computed
 /// `next_run`, and return it to `pending` so the lane re-runs it once that slot arrives.
 pub fn reschedule(
