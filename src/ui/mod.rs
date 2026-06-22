@@ -517,6 +517,10 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     if path == "/archived" {
         bridge::send(Command::ListArchived);
     }
+    // Opening the global dashboard refreshes its all-lanes task view.
+    if path == "/dashboard" {
+        bridge::send(Command::LoadDashboard);
+    }
     // Entering a workspace's Files tab lists that workspace's root.
     if let Some(wid) = RoutePattern::new("/w/:wid/files")
         .matches(path)

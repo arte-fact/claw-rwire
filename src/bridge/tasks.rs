@@ -4,9 +4,9 @@
 
 use rwire::{ChangeSet, SharedServerState};
 
-use crate::db::tasks::{self, NewTask};
+use crate::db::tasks::{self, NewTask, TaskStatus};
 use crate::db::{agents, workspaces};
-use crate::state::{App, TaskView};
+use crate::state::{App, LaneSummary, TaskView};
 
 /// A workspace's lane as view-models (assignee ids resolved to names), for projection.
 pub fn lane_views(conn: &rusqlite::Connection, workspace: &str) -> Vec<TaskView> {
@@ -64,6 +64,36 @@ pub fn project_if_active(conn: &rusqlite::Connection, shared: &SharedServerState
             app.tasks = views;
         }
     });
+}
+
+/// Project every workspace's lane summary (running task + queued count) into
+/// `App.dashboard_lanes` for the global dashboard's all-lanes view. Refreshed on each
+/// scheduler tick and when the dashboard opens, so it stays live regardless of route.
+pub fn project_dashboard(conn: &rusqlite::Connection, shared: &SharedServerState) {
+    let lanes: Vec<LaneSummary> = workspaces::list(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|ws| {
+            let running = tasks::running_in(conn, &ws.id)
+                .ok()
+                .flatten()
+                .map(|task| task.title);
+            let queued = tasks::list_for_workspace(conn, &ws.id)
+                .unwrap_or_default()
+                .iter()
+                .filter(|task| task.status == TaskStatus::Pending)
+                .count();
+            LaneSummary {
+                workspace_id: ws.id,
+                running,
+                queued,
+            }
+        })
+        .collect();
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_DASHBOARD_LANES]),
+        move |app| app.dashboard_lanes = lanes,
+    );
 }
 
 /// Create a task in `workspace`, assigned to `agent` (a member; `None` = the owner), then

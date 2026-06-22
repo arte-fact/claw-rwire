@@ -75,10 +75,19 @@ fn grid(app: &App) -> ElementBuilder {
             .and_then(|id| app.agents.iter().find(|a| &a.id == id))
             .map_or_else(|| "no owner".to_owned(), |a| a.name.clone())
     };
+    let lane = |id: &str| {
+        app.dashboard_lanes
+            .iter()
+            .find(|l| l.workspace_id == id)
+            .map_or((None, 0), |l| (l.running.clone(), l.queued))
+    };
     let cards: Vec<ElementBuilder> = app
         .workspaces
         .iter()
-        .map(|w| card(w, &owner_name(w)))
+        .map(|w| {
+            let (running, queued) = lane(&w.id);
+            card(w, &owner_name(w), running.as_deref(), queued)
+        })
         .collect();
     el(El::Div)
         .style(
@@ -93,10 +102,28 @@ fn grid(app: &App) -> ElementBuilder {
         .append(cards)
 }
 
-fn card(workspace: &WorkspaceView, owner: &str) -> ElementBuilder {
+fn card(
+    workspace: &WorkspaceView,
+    owner: &str,
+    running: Option<&str>,
+    queued: usize,
+) -> ElementBuilder {
     let team = match workspace.member_names.len() {
         0 => "no members".to_owned(),
         n => format!("{n} member{}", if n == 1 { "" } else { "s" }),
+    };
+    // The lane line: the running task (accented) with the queue depth, else idle.
+    let (lane_text, lane_style) = match running {
+        Some(title) => {
+            let suffix = if queued > 0 {
+                format!(" · {queued} queued")
+            } else {
+                String::new()
+            };
+            (format!("▶ {title}{suffix}"), St::TextAccent)
+        }
+        None if queued > 0 => (format!("{queued} queued"), St::TextMuted),
+        None => ("idle".to_owned(), St::TextLow),
     };
     Link::route(&format!("/w/{}", workspace.id))
         .style(Style::new().set("font", "inherit"))
@@ -119,7 +146,6 @@ fn card(workspace: &WorkspaceView, owner: &str) -> ElementBuilder {
             el(El::Div)
                 .st([St::TextXs, St::TextMuted])
                 .text(&format!("owner {owner} · {team}")),
-            // Task-lane status arrives with the task board (Phase C).
-            el(El::Div).st([St::TextXs, St::TextLow]).text("idle"),
+            el(El::Div).st([St::TextXs, lane_style]).text(&lane_text),
         ])
 }

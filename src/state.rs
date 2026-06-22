@@ -195,6 +195,15 @@ pub struct TaskView {
     pub result: Option<String>,
 }
 
+/// One workspace's lane at a glance, for the global dashboard's all-lanes view: the title of
+/// the task currently running (if any) and how many are queued behind it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LaneSummary {
+    pub workspace_id: String,
+    pub running: Option<String>,
+    pub queued: usize,
+}
+
 /// One selectable tool in the agent drawer's tool picker: its source `group`
 /// (`"web"` / `"coder"`) and `name`. Projected once at boot from the connected MCP
 /// server + the built-in coder tools.
@@ -312,6 +321,9 @@ pub struct App {
     pub workspace_brief: String,
     /// The active workspace's task lane (projected when its Tasks tab opens).
     pub tasks: Vec<TaskView>,
+    /// Per-workspace lane summary for the global dashboard's all-lanes view (running task +
+    /// queued count), refreshed on each scheduler tick and when the dashboard opens.
+    pub dashboard_lanes: Vec<LaneSummary>,
     /// Files view: the id of the workspace being browsed.
     pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).

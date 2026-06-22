@@ -142,6 +142,8 @@ pub enum Command {
     LoadTasks {
         workspace: String,
     },
+    /// Project every workspace's lane summary into `App.dashboard_lanes` (the dashboard opening).
+    LoadDashboard,
     /// Queue a task in a workspace, assigned to `agent` (a member; `None` = the owner). A
     /// `schedule` (cron string) makes it recurrent.
     CreateTask {
@@ -504,6 +506,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::SetActiveWorkspace { id } => set_active_workspace(shared, id),
         Command::LoadBrief { workspace } => files::load_brief(conn, shared, &workspace),
         Command::LoadTasks { workspace } => tasks::load(conn, shared, &workspace),
+        Command::LoadDashboard => tasks::project_dashboard(conn, shared),
         Command::CreateTask {
             workspace,
             title,

@@ -131,7 +131,10 @@
       Needs `db::tasks::remove_blocker`/`blockers_of` + bridge `UpdateTask`/`SetBlockers`
       commands, `TaskView.blockers`, and an editing-task state. **Split `ui/workspace.rs`
       (621 lines) first** — extract the tasks UI to its own module before adding the drawer.
-- [ ] **C-3d** — global dashboard: the all-lanes parallel view
+- [x] **C-3d (done):** global dashboard all-lanes view — each workspace card shows its live
+      lane (`▶ <running> · N queued`, else `N queued` / `idle`). `App.dashboard_lanes`
+      (`LaneSummary`) projected by `bridge::tasks::project_dashboard`, refreshed on every
+      scheduler tick + on the `/dashboard` route (`Command::LoadDashboard`). 111 tests + e2e.
 
 ---
 

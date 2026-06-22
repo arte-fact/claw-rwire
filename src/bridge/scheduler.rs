@@ -52,6 +52,8 @@ pub fn tick(conn: &rusqlite::Connection, shared: &SharedServerState) {
             start(conn, shared, task);
         }
     }
+    // Keep the dashboard's all-lanes view live regardless of the open route.
+    super::tasks::project_dashboard(conn, shared);
 }
 
 /// Claim a task for its lane (flip to `running`), reflect it, then dispatch the worker. A
