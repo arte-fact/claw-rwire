@@ -103,6 +103,17 @@ pub fn owned_by(conn: &Connection, agent_id: &str) -> rusqlite::Result<Option<St
 
 // ── Membership (the team; M:N) ──────────────────────────────────────────────────
 
+/// Whether the agent belongs to (owns or is a member of) any workspace at all — used to
+/// decide if a legacy/unattached agent needs an auto-created home (member-only agents don't).
+pub fn is_attached(conn: &Connection, agent_id: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM agent_workspaces WHERE agent_group_id = ?1)",
+        params![agent_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+}
+
 /// Add `agent_id` to `workspace_id`'s team (idempotent).
 pub fn add_member(conn: &Connection, agent_id: &str, workspace_id: &str) -> rusqlite::Result<()> {
     conn.execute(

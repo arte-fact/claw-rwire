@@ -20,6 +20,7 @@ mod notify;
 mod orchestrate;
 mod prompts;
 mod scheduler;
+mod seed;
 mod tasks;
 
 use crate::agent;
@@ -415,6 +416,10 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
         let _ = chat::create_chat(conn, &id, "New chat");
     }
     seed_provider(conn);
+    // Fresh-DB showcase: a small maker team (agents + workspaces + briefs + welcome chat) so
+    // first boot demonstrates the loop. Before migrate_workspaces, which would otherwise give
+    // the member-only specialist its own home.
+    seed::seed_showcase(conn, &data_dir());
     migrate_workspaces(conn);
     link_chats_to_default_agent(conn);
     // After the web chat is linked, so `web_agent` resolves the concierge to seed.
@@ -476,11 +481,9 @@ fn migrate_workspaces(conn: &rusqlite::Connection) {
         return;
     };
     for agent in agents {
-        if workspaces::owned_by(conn, &agent.id)
-            .ok()
-            .flatten()
-            .is_some()
-        {
+        // Give an agent an owned home only if it belongs to no workspace at all (a legacy /
+        // unattached agent). Member-only agents — e.g. a showcase specialist — keep none.
+        if workspaces::is_attached(conn, &agent.id).unwrap_or(false) {
             continue;
         }
         let _ = workspaces::create(conn, &agent.folder, &agent.name);
