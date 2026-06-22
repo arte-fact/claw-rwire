@@ -18,6 +18,7 @@ mod admin;
 mod files;
 mod notify;
 mod orchestrate;
+mod prompts;
 mod scheduler;
 mod tasks;
 
@@ -25,7 +26,7 @@ use crate::agent;
 use crate::db::{self, agents, chat, endpoints, resolution, workspaces};
 use crate::id;
 use crate::mcp::{self, McpClient};
-use crate::state::{ActivityEntry, ActivityKind, App, ChatSummary, LogLine, MessageRole};
+use crate::state::{ActivityEntry, ActivityKind, App, ChatSummary, LogLine, MessageRole, RunKind};
 use crate::tools::{
     CoderToolbox, CompositeToolbox, ConciergeToolbox, Delegate, EmptyToolbox, FilteredToolbox,
     McpToolbox, Toolbox, WORKSPACE_TOOLS,
@@ -144,6 +145,11 @@ pub enum Command {
     },
     /// Project every workspace's lane summary into `App.dashboard_lanes` (the dashboard opening).
     LoadDashboard,
+    /// Compose the Prompts inspector's preview for an agent + run-kind (read-only).
+    LoadPrompt {
+        agent: Option<String>,
+        run: RunKind,
+    },
     /// Queue a task in a workspace, assigned to `agent` (a member; `None` = the owner). A
     /// `schedule` (cron string) makes it recurrent.
     CreateTask {
@@ -553,6 +559,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadBrief { workspace } => files::load_brief(conn, shared, &workspace),
         Command::LoadTasks { workspace } => tasks::load(conn, shared, &workspace),
         Command::LoadDashboard => tasks::project_dashboard(conn, shared),
+        Command::LoadPrompt { agent, run } => prompts::load(conn, shared, agent, run),
         Command::CreateTask {
             workspace,
             title,

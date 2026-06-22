@@ -13,6 +13,7 @@ mod chat;
 mod dashboard;
 mod files;
 mod logs;
+mod prompts;
 mod system_map;
 mod widgets;
 mod workspace;
@@ -62,6 +63,7 @@ pub fn routes() -> Router {
             view(workspace::shell(wid(p), WsTab::Team, workspace::team()))
         })
         .page("/archived", |_| view(archived::page()))
+        .page("/prompts", |_| view(prompts::page()))
         .page("/system", |_| view(system_map::page()))
         .page("/activity", |_| view(activity::page()))
         .page("/logs", |_| view(logs::page()))
@@ -525,6 +527,13 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     // Opening the global dashboard refreshes its all-lanes task view.
     if path == "/dashboard" {
         bridge::send(Command::LoadDashboard);
+    }
+    // Opening the Prompts inspector composes the current selection (picking up any edits).
+    if path == "/prompts" {
+        bridge::send(Command::LoadPrompt {
+            agent: app.prompt_agent.clone(),
+            run: app.prompt_run,
+        });
     }
     // Entering a workspace's Files tab lists that workspace's root.
     if let Some(wid) = RoutePattern::new("/w/:wid/files")

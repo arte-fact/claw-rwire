@@ -136,14 +136,15 @@ fn tool_chip(name: &str, on: bool) -> ElementBuilder {
 /// edited in the Files view.
 fn prompt_field(draft: &AgentDraft) -> ElementBuilder {
     labeled(
-        "System prompt",
+        "Identity / persona",
         el(El::Textarea)
             .attr("name", "prompt")
             .attr("rows", "6")
             .at_str(
                 At::Placeholder,
-                "Who this agent is — persona + instructions. Shared project context lives \
-                 in the workspace's AGENT.md.",
+                "Who this agent is — persona + instructions. Layer 2 of 4 (role · identity · \
+                 brief · memory); see the Prompts view for the assembled result. The shared \
+                 project brief lives in the workspace's AGENT.md.",
             )
             .on(Ev::Change, prompt_changed())
             .st(select_st())

@@ -18,6 +18,7 @@ pub enum Tab {
     Chat,
     Dashboard,
     Archived,
+    Prompts,
     System,
     Activity,
     Logs,
@@ -27,9 +28,10 @@ impl Tab {
     /// The app-level surfaces shown in the nav footer. Chat is intentionally absent — the
     /// conversation list above the nav *is* the chat surface. Dashboard leads (the
     /// cross-workspace overview); Files is gone (it's now a per-workspace tab).
-    pub const NAV: [Tab; 5] = [
+    pub const NAV: [Tab; 6] = [
         Tab::Dashboard,
         Tab::Archived,
+        Tab::Prompts,
         Tab::System,
         Tab::Activity,
         Tab::Logs,
@@ -40,6 +42,7 @@ impl Tab {
             Tab::Chat => "Chat",
             Tab::Dashboard => "Dashboard",
             Tab::Archived => "Archived",
+            Tab::Prompts => "Prompts",
             Tab::System => "System",
             Tab::Activity => "Activity",
             Tab::Logs => "Logs",
@@ -52,6 +55,7 @@ impl Tab {
             Tab::Chat => "/",
             Tab::Dashboard => "/dashboard",
             Tab::Archived => "/archived",
+            Tab::Prompts => "/prompts",
             Tab::System => "/system",
             Tab::Activity => "/activity",
             Tab::Logs => "/logs",
@@ -66,6 +70,7 @@ impl Tab {
             Tab::Chat => Icon::MessageSquare,
             Tab::Dashboard => Icon::Home,
             Tab::Archived => Icon::Archive,
+            Tab::Prompts => Icon::Terminal,
             Tab::System => Icon::Cpu,
             Tab::Activity => Icon::Activity,
             Tab::Logs => Icon::FileText,
@@ -208,6 +213,61 @@ pub struct LaneSummary {
     pub queued: usize,
 }
 
+/// Which kind of run the Prompts inspector previews — picks the role-preamble layer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RunKind {
+    /// A chat turn (the concierge).
+    #[default]
+    Chat,
+    /// A task execution turn (an assignee in a workspace).
+    Task,
+    /// An owner planning turn.
+    Planning,
+}
+
+impl RunKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            RunKind::Chat => "Chat",
+            RunKind::Task => "Task",
+            RunKind::Planning => "Planning",
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunKind::Chat => "chat",
+            RunKind::Task => "task",
+            RunKind::Planning => "planning",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "task" => RunKind::Task,
+            "planning" => RunKind::Planning,
+            _ => RunKind::Chat,
+        }
+    }
+
+    pub const ALL: [RunKind; 3] = [RunKind::Chat, RunKind::Task, RunKind::Planning];
+}
+
+/// The Prompts inspector's read-only assembly: each of the 4 system-prompt layers (empty =
+/// absent) for the selected agent + run-kind, plus the composed result the model would get.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromptPreview {
+    /// The agent + run-kind + representative workspace this preview is for (header context).
+    pub agent_name: String,
+    pub run: String,
+    pub workspace: String,
+    pub role: String,
+    pub persona: String,
+    pub brief: String,
+    pub memory: String,
+    pub assembled: String,
+}
+
 /// One selectable tool in the agent drawer's tool picker: its source `group`
 /// (`"web"` / `"coder"`) and `name`. Projected once at boot from the connected MCP
 /// server + the built-in coder tools.
@@ -331,6 +391,10 @@ pub struct App {
     /// Per-workspace lane summary for the global dashboard's all-lanes view (running task +
     /// queued count), refreshed on each scheduler tick and when the dashboard opens.
     pub dashboard_lanes: Vec<LaneSummary>,
+    /// The Prompts inspector's current selection (agent + run-kind) and composed preview.
+    pub prompt_agent: Option<String>,
+    pub prompt_run: RunKind,
+    pub prompt_preview: Option<PromptPreview>,
     /// Files view: the id of the workspace being browsed.
     pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).

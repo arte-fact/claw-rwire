@@ -30,14 +30,19 @@ An agent (e.g. `ag-default`) can play all three. Also opaque: the `notify` + `su
 
 ## ☐ Phase E — prompt transparency & configurability
 
-**E-1 — Prompt inspector (read-only) + relabel** _(no schema change)_
-- [ ] `/prompts` view: agent `<select>` + run-type chips (Chat / Task / Planning) → renders the
-      4 labelled layers (Role / Persona / Brief / Memory) + an **Assembled** preview (reuses
-      `compose_system_prompt`). Brief uses the agent's home/owned workspace (representative).
-- [ ] `Command::LoadPrompt { agent, run }` composes read-only (no scaffold) + projects
-      `App.prompt_preview`; `Tab::Prompts` in the footer nav; `on_route` seeds it.
-- [ ] Relabel the agent drawer's **"System prompt" → "Identity / persona"** with a "layer 2 of
-      4 — see Prompts" hint; cross-link from the workspace Brief card.
+**E-1 — Prompt inspector (read-only) + relabel** _(done, no schema change)_
+- [x] `/prompts` view (`ui/prompts.rs`): agent `<select>` + run-kind chips (Chat / Task /
+      Planning) → 4 labelled layers (Role / Persona / Brief / Memory) + an **Assembled**
+      preview (reuses `compose_system_prompt`). Brief uses the agent's home workspace.
+- [x] `Command::LoadPrompt { agent, run }` → `bridge/prompts.rs` composes read-only (no
+      scaffold) + projects `App.prompt_preview` (`RunKind`/`PromptPreview` in state);
+      `Tab::Prompts` footer nav; `on_route` seeds the current selection.
+- [x] Relabelled the agent drawer's **"System prompt" → "Identity / persona"** with a
+      "layer 2 of 4 — see Prompts" hint. 122 tests; e2e-verified (layers compose; the
+      run-kind chip swaps the role preamble live).
+- _Note:_ the brief shows `— none —` until the workspace dir is first scaffolded by a real
+  turn (scaffold runs on a run, not at boot) — accurate, but a future tweak could scaffold
+  on workspace create so the brief is visible immediately.
 
 **E-2 — Memory panel (view / edit / clear / pause)** _(adds `agent_memory.paused`)_
 - [ ] Show each agent's rolling summary, `updated_at`, turns condensed (`summarized_through`),
