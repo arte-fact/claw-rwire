@@ -121,13 +121,21 @@ pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: 
 pub fn project_if_active(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
     let views = lane_views(conn, workspace);
     let columns = columns_for(conn, workspace);
+    // Keep the Workflow editor's lock live: a task going running/awaiting (or finishing) must
+    // flip the lock so the editor's controls reflect reality rather than going stale + dead.
+    let locked = tasks::has_inflight(conn, workspace).unwrap_or(false);
     let workspace = workspace.to_owned();
     shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_TASKS, App::FIELD_PIPELINE_COLUMNS]),
+        ChangeSet::from_fields(&[
+            App::FIELD_TASKS,
+            App::FIELD_PIPELINE_COLUMNS,
+            App::FIELD_WORKFLOW_LOCKED,
+        ]),
         move |app| {
             if app.active_workspace.as_deref() == Some(workspace.as_str()) {
                 app.tasks = views;
                 app.pipeline_columns = columns;
+                app.workflow_locked = locked;
             }
         },
     );

@@ -256,12 +256,14 @@ pub fn count_awaiting(conn: &Connection) -> rusqlite::Result<i64> {
     )
 }
 
-/// Whether a workspace has any in-flight task (pending / running / awaiting) — the pipeline
-/// editor is locked while these exist, so a running task never sees its pipeline change.
+/// Whether a workspace has a task **mid-pipeline** (`running` or `awaiting`) — the pipeline
+/// editor is locked only while these exist, so a task actively flowing through the steps never
+/// sees them change under it. A `pending` task is just queued: it picks up the pipeline fresh
+/// when it starts, so it does *not* lock editing.
 pub fn has_inflight(conn: &Connection, workspace_id: &str) -> rusqlite::Result<bool> {
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM tasks WHERE workspace_id = ?1
-            AND status IN ('pending','running','awaiting'))",
+            AND status IN ('running','awaiting'))",
         params![workspace_id],
         |row| row.get::<_, i64>(0),
     )
