@@ -50,7 +50,8 @@ verdict(decision: "pass" | "revise" | "reject", feedback: string)
 ```
 
 The validator's role prompt instructs it to read the actual output/files, judge against the
-spec, and **call `verdict`**. A human gate produces the same verdict from a UI action
+spec, and **call `verdict`**. It runs with **read-only** file tools — it inspects the output and
+the workspace, it doesn't rewrite them. A human gate produces the same verdict from a UI action
 (Approve = pass, Request changes = revise + notes, Reject = reject). Same construct, different
 validator.
 
@@ -105,11 +106,19 @@ Route `/w/:wid/tasks/:tid` (or a wide drawer):
 
 ## 7. Per-workspace configuration
 
-A workspace's pipeline is fully editable (the **modular/configurable** requirement). A
-**Workflow** tab (or a Team-tab section): add / remove / reorder steps; set each step's kind
-(stage | loop), its agent(s), its role prompt(s), and — for loops — `max_iterations` +
-`on_exhaust`. Role-prompt editing reuses the Phase E controls. Default pipeline for a new
-workspace = a single **Execute** stage → done (identical to today; zero migration).
+A workspace's pipeline is fully editable (the **modular/configurable** requirement) on a
+dedicated **Workflow** tab (alongside Overview / Files / Tasks / Team): add / remove / reorder
+steps; set each step's kind (stage | loop), its **agent** (per step), its role prompt(s), and —
+for loops — `max_iterations` + `on_exhaust`. Role-prompt editing reuses the Phase E controls.
+
+**Editing is gated:** the pipeline can't be changed while the workspace has any in-flight task
+(`pending` / `running` / `awaiting` / `review`) — so an edit can never disrupt a running task;
+clear the lane first. (This is why no per-task pipeline snapshot is needed.)
+
+Default pipeline for a new workspace = a single **Execute** stage → done (identical to today;
+zero migration). Because agents are configured **per step**, the per-task assignee is superseded
+— a task carries title + spec and flows through the pipeline, each step run by its configured
+agent (the default Execute stage = the workspace owner).
 
 ## 8. Data model (additive — sketch, firmed up in F-1)
 
@@ -121,6 +130,9 @@ workspace = a single **Execute** stage → done (identical to today; zero migrat
    verdict, feedback, iteration, created_at)` — the chain history + context source.
 - `tasks` gains `step_position INTEGER DEFAULT 0`, `iteration INTEGER DEFAULT 0`; `status` gains
   `awaiting` (parked at a human gate) and `rejected`.
+- Agents are per **step** (`pipeline_steps.producer_agent_id` / `validator_agent_id`), so
+  `tasks.agent` is retired from routing (left nullable / unused) and `create_task` drops its
+  `agent` param — the workspace pipeline decides who runs each step.
 
 ## 9. Builds on what exists
 
@@ -228,10 +240,17 @@ can't hide.
       "act" surface.
 - [x] **Board view** — a user-switchable **Kanban ↔ List** toggle (List = mobile default).
 - [x] **Gate actions** — on the **card** (one-click Approve) *and* the detail view.
-- [ ] **Default validator** when a workspace adds review — *human gate* (you sign off) vs a
-      *seeded Critic agent*. Lean: human gate by default; the showcase seeds a Critic to show the
-      auto path. Resolve before F-3/F-6.
-- [ ] **Editor home** — a new **Workflow** tab vs a section on the **Team** tab. Resolve before F-5.
+- [x] **Agents are per-step** — each step configures its own agent; the per-task assignee (and
+      `create_task`'s `agent` param) is superseded. Default Execute stage = the workspace owner.
+- [x] **Pipeline edits are gated** — a pipeline can't be edited while the workspace has any
+      in-flight task (`pending`/`running`/`awaiting`/`review`); clear the lane first. So an edit
+      can't disrupt a running task — no per-task snapshot needed.
+- [x] **Default validator** = a **human gate** (you sign off); the showcase seeds a **Critic**
+      agent to demo the auto path.
+- [x] **Editor home** = a dedicated **Workflow** workspace tab (alongside Overview/Files/Tasks/Team).
+- [x] **Validator file access** = **read-only** (inspects output, doesn't rewrite it).
+
+**All design decisions are resolved — F-1 is unblocked.**
 
 ## Out of scope (later)
 
