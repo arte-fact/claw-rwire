@@ -185,10 +185,14 @@ pub struct TaskView {
     pub title: String,
     pub spec: String,
     pub agent: Option<String>,
+    /// The assignee's raw agent id (for pre-selecting the edit drawer's reassign control).
+    pub agent_id: Option<String>,
     pub status: String,
     pub recurrent: bool,
-    /// The cron schedule (recurrent tasks), shown on the card.
+    /// The cron schedule (recurrent tasks), shown on the card + edited in the drawer.
     pub schedule: Option<String>,
+    /// Ids of tasks blocking this one (its dependencies), for the drawer's blocker field.
+    pub blockers: Vec<String>,
     /// Next scheduled fire (`HH:MM` UTC, or a date) for a recurrent task awaiting its slot.
     pub next_run: Option<String>,
     /// A short snippet of the last run's result/error, shown on terminal cards.
@@ -321,6 +325,9 @@ pub struct App {
     pub workspace_brief: String,
     /// The active workspace's task lane (projected when its Tasks tab opens).
     pub tasks: Vec<TaskView>,
+    /// The id of the task whose inline edit drawer is open (retitle / reassign / schedule /
+    /// blockers), or `None`. Pure UI state, toggled by the card's edit button.
+    pub editing_task: Option<String>,
     /// Per-workspace lane summary for the global dashboard's all-lanes view (running task +
     /// queued count), refreshed on each scheduler tick and when the dashboard opens.
     pub dashboard_lanes: Vec<LaneSummary>,

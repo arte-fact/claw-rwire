@@ -22,7 +22,22 @@ pub fn tasks(app: &App) -> ElementBuilder {
             .st([St::TextSm, St::TextMuted])
             .text("Select a workspace.");
     };
-    let mut cards: Vec<ElementBuilder> = app.tasks.iter().map(task_card).collect();
+    // The assignable members (for the drawer's reassign select) and which card is open.
+    let members: Vec<(String, String)> = app
+        .agents
+        .iter()
+        .filter(|a| workspace.members.iter().any(|m| m == &a.id))
+        .map(|a| (a.id.clone(), a.name.clone()))
+        .collect();
+    let editing = app.editing_task.clone();
+    let mut cards: Vec<ElementBuilder> = app
+        .tasks
+        .iter()
+        .map(|task| {
+            let open = editing.as_deref() == Some(task.id.as_str());
+            task_card(task, &members, open)
+        })
+        .collect();
     if cards.is_empty() {
         cards.push(
             el(El::Div)
@@ -105,14 +120,19 @@ fn input_st() -> [St; 8] {
     ]
 }
 
-fn task_card(task: &TaskView) -> ElementBuilder {
+fn task_card(task: &TaskView, members: &[(String, String)], open: bool) -> ElementBuilder {
+    let terminal = matches!(task.status.as_str(), "done" | "failed" | "cancelled");
     let mut head: Vec<ElementBuilder> = vec![
         el(El::Span)
             .st([St::Flex1, St::TextSm, St::TextHigh, St::FontSemibold])
             .text(&task.title),
         status_badge(&task.status),
     ];
-    if !matches!(task.status.as_str(), "done" | "failed" | "cancelled") {
+    if !terminal {
+        head.push(
+            crate::ui::widgets::icon_button(icons::Icon::Edit, edit_task(), false)
+                .data("task", &task.id),
+        );
         head.push(
             crate::ui::widgets::icon_button(icons::Icon::Close, cancel_task(), false)
                 .data("task", &task.id),
@@ -122,29 +142,36 @@ fn task_card(task: &TaskView) -> ElementBuilder {
         el(El::Div)
             .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
             .append(head),
-        el(El::Div).st([St::TextXs, St::TextMuted]).text(&task.spec),
     ];
-    let mut meta = task.agent.as_deref().unwrap_or("owner").to_owned();
-    if task.recurrent {
-        meta.push_str(" · ⟳");
-        if let Some(schedule) = &task.schedule {
-            meta.push_str(&format!(" {schedule}"));
+    if open {
+        rows.push(edit_form(task, members));
+    } else {
+        rows.push(el(El::Div).st([St::TextXs, St::TextMuted]).text(&task.spec));
+        let mut meta = task.agent.as_deref().unwrap_or("owner").to_owned();
+        if task.recurrent {
+            meta.push_str(" · ⟳");
+            if let Some(schedule) = &task.schedule {
+                meta.push_str(&format!(" {schedule}"));
+            }
+            if let Some(next) = &task.next_run {
+                meta.push_str(&format!(" · next {next}"));
+            }
         }
-        if let Some(next) = &task.next_run {
-            meta.push_str(&format!(" · next {next}"));
+        if !task.blockers.is_empty() {
+            meta.push_str(&format!(" · blocked by {}", task.blockers.join(", ")));
         }
-    }
-    rows.push(el(El::Div).st([St::TextXs, St::TextLow]).text(&meta));
-    if let Some(result) = task
-        .result
-        .as_deref()
-        .filter(|r| !r.is_empty() && matches!(task.status.as_str(), "done" | "failed"))
-    {
-        rows.push(
-            el(El::Div)
-                .st([St::TextXs, St::TextMuted, St::Italic])
-                .text(result),
-        );
+        rows.push(el(El::Div).st([St::TextXs, St::TextLow]).text(&meta));
+        if let Some(result) = task
+            .result
+            .as_deref()
+            .filter(|r| !r.is_empty() && matches!(task.status.as_str(), "done" | "failed"))
+        {
+            rows.push(
+                el(El::Div)
+                    .st([St::TextXs, St::TextMuted, St::Italic])
+                    .text(result),
+            );
+        }
     }
     el(El::Div)
         .st([
@@ -157,6 +184,85 @@ fn task_card(task: &TaskView) -> ElementBuilder {
             St::GapXs,
         ])
         .append(rows)
+}
+
+/// The inline edit drawer for one task: retitle, rewrite the spec, reassign to a member,
+/// change the schedule, and edit the blocker ids — saved as one form submit.
+fn edit_form(task: &TaskView, members: &[(String, String)]) -> ElementBuilder {
+    let mut assignee = vec![owner_option(task.agent_id.is_none())];
+    for (id, name) in members {
+        let option = el(El::Option).attr("value", id).text(name);
+        assignee.push(if task.agent_id.as_deref() == Some(id.as_str()) {
+            option.bool_attr(rwire::At::Selected)
+        } else {
+            option
+        });
+    }
+    el(El::Form)
+        .on(Ev::Submit, save_edit())
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm, St::PtXs])
+        .append([
+            // The task id rides as a hidden field so the submit handler reads it from
+            // FormData (a form's data-attribute isn't exposed on the Submit event).
+            el(El::Input)
+                .attr("type", "hidden")
+                .attr("name", "id")
+                .attr("value", &task.id),
+            el(El::Input)
+                .attr("name", "title")
+                .attr("value", &task.title)
+                .attr("autocomplete", "off")
+                .style(Style::new().set("font", "inherit"))
+                .st(input_st())
+                .focus([St::BorderAccent]),
+            el(El::Textarea)
+                .attr("name", "spec")
+                .attr("rows", "2")
+                .style(
+                    Style::new()
+                        .set("font", "inherit")
+                        .set("resize", "vertical"),
+                )
+                .st(input_st())
+                .focus([St::BorderAccent])
+                .text(&task.spec),
+            el(El::Input)
+                .attr("name", "schedule")
+                .attr("value", task.schedule.as_deref().unwrap_or(""))
+                .attr("placeholder", "Cron schedule — empty = one-shot")
+                .attr("autocomplete", "off")
+                .style(Style::new().set("font", "inherit"))
+                .st(input_st())
+                .focus([St::BorderAccent]),
+            el(El::Input)
+                .attr("name", "blockers")
+                .attr("value", &task.blockers.join(", "))
+                .attr("placeholder", "Blocker task ids, comma-separated")
+                .attr("autocomplete", "off")
+                .style(Style::new().set("font", "inherit"))
+                .st(input_st())
+                .focus([St::BorderAccent]),
+            el(El::Div)
+                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+                .append([
+                    el(El::Select)
+                        .attr("name", "agent")
+                        .st(input_st())
+                        .style(Style::new().set("flex", "1"))
+                        .append(assignee),
+                    accent_submit(icons::Icon::Check, "Save"),
+                    crate::ui::widgets::icon_button(icons::Icon::Close, close_edit(), false),
+                ]),
+        ])
+}
+
+fn owner_option(selected: bool) -> ElementBuilder {
+    let option = el(El::Option).attr("value", "").text("— owner —");
+    if selected {
+        option.bool_attr(rwire::At::Selected)
+    } else {
+        option
+    }
 }
 
 fn status_badge(status: &str) -> ElementBuilder {
@@ -210,4 +316,55 @@ fn cancel_task(app: &mut App, ctx: &EventContext) {
     if let Some(id) = ctx.data("task") {
         bridge::send(Command::CancelTask { id: id.to_owned() });
     }
+}
+
+/// Open a task's inline edit drawer (pure UI state — no bridge round-trip).
+#[handler]
+fn edit_task(app: &mut App, ctx: &EventContext) {
+    app.editing_task = ctx.data("task").map(str::to_owned);
+}
+
+/// Close the edit drawer without saving.
+#[handler]
+fn close_edit(app: &mut App, ctx: &EventContext) {
+    let _ = ctx;
+    app.editing_task = None;
+}
+
+/// Save the edit drawer: post the changes and close it.
+#[handler]
+fn save_edit(app: &mut App, ctx: &EventContext) {
+    let Some(id) = ctx.field("id").map(str::to_owned).filter(|v| !v.is_empty()) else {
+        return;
+    };
+    let title = ctx.field("title").unwrap_or_default().trim().to_owned();
+    let spec = ctx.field("spec").unwrap_or_default().trim().to_owned();
+    if title.is_empty() || spec.is_empty() {
+        return;
+    }
+    let agent = ctx
+        .field("agent")
+        .map(str::to_owned)
+        .filter(|v| !v.is_empty());
+    let schedule = ctx
+        .field("schedule")
+        .map(str::to_owned)
+        .filter(|v| !v.trim().is_empty());
+    let blockers = ctx
+        .field("blockers")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    bridge::send(Command::UpdateTask {
+        id,
+        title,
+        spec,
+        agent,
+        schedule,
+        blockers,
+    });
+    app.editing_task = None;
 }

@@ -229,6 +229,51 @@ pub fn add_blocker(conn: &Connection, task_id: &str, blocked_by: &str) -> rusqli
     Ok(())
 }
 
+/// The ids of the tasks blocking `task_id` (its dependencies).
+pub fn blockers_of(conn: &Connection, task_id: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT blocked_by FROM task_blockers WHERE task_id = ?1")?;
+    let rows = stmt.query_map(params![task_id], |row| row.get(0))?;
+    rows.collect()
+}
+
+/// Replace a task's blocker set with `blockers` (clears the old set first). The caller
+/// validates each blocker shares the workspace.
+pub fn set_blockers(conn: &Connection, task_id: &str, blockers: &[String]) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM task_blockers WHERE task_id = ?1",
+        params![task_id],
+    )?;
+    for blocked_by in blockers {
+        add_blocker(conn, task_id, blocked_by)?;
+    }
+    Ok(())
+}
+
+/// Update a task's editable fields (title / spec / assignee / schedule); `kind` is recomputed
+/// from the new schedule. Leaves status / result / next_run untouched.
+pub fn update(
+    conn: &Connection,
+    id: &str,
+    title: &str,
+    spec: &str,
+    agent: Option<&str>,
+    schedule: Option<&str>,
+) -> rusqlite::Result<()> {
+    let kind = if schedule.is_some() {
+        TaskKind::Recurrent
+    } else {
+        TaskKind::OneShot
+    };
+    conn.execute(
+        "UPDATE tasks
+            SET title = ?2, spec = ?3, agent_group_id = ?4, schedule = ?5, kind = ?6,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?1",
+        params![id, title, spec, agent, schedule, kind.as_str()],
+    )?;
+    Ok(())
+}
+
 /// Mark a task finished with a terminal status and its result text, stamping `last_run`.
 pub fn finish(
     conn: &Connection,
@@ -368,6 +413,49 @@ mod tests {
             ready.status,
             TaskStatus::Pending,
             "rescheduled back to pending"
+        );
+    }
+
+    #[test]
+    fn update_rewrites_fields_and_recomputes_kind() {
+        let conn = seeded();
+        create(&conn, &task("t1")).expect("create");
+        update(
+            &conn,
+            "t1",
+            "New title",
+            "new spec",
+            None,
+            Some("0 9 * * *"),
+        )
+        .expect("update");
+        let t = get(&conn, "t1").expect("get").unwrap();
+        assert_eq!(t.title, "New title");
+        assert_eq!(t.spec, "new spec");
+        assert_eq!(t.kind, TaskKind::Recurrent, "a schedule makes it recurrent");
+        // Clearing the schedule flips it back to one-shot.
+        update(&conn, "t1", "New title", "new spec", None, None).expect("update2");
+        assert_eq!(
+            get(&conn, "t1").expect("get").unwrap().kind,
+            TaskKind::OneShot
+        );
+    }
+
+    #[test]
+    fn set_blockers_replaces_the_blocker_set() {
+        let conn = seeded();
+        create(&conn, &task("t1")).expect("t1");
+        create(&conn, &task("t2")).expect("t2");
+        create(&conn, &task("t3")).expect("t3");
+        set_blockers(&conn, "t1", &["t2".to_owned(), "t3".to_owned()]).expect("set");
+        let mut blockers = blockers_of(&conn, "t1").expect("of");
+        blockers.sort();
+        assert_eq!(blockers, vec!["t2".to_owned(), "t3".to_owned()]);
+        // Replacing collapses to just t3.
+        set_blockers(&conn, "t1", &["t3".to_owned()]).expect("set2");
+        assert_eq!(
+            blockers_of(&conn, "t1").expect("of2"),
+            vec!["t3".to_owned()]
         );
     }
 

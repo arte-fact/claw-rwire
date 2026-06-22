@@ -126,11 +126,12 @@
       recurrent tasks reschedule on success (`tasks::reschedule`). Create form gained a
       **schedule input** (cron-validated) and cards show `⟳ <cron> · next <ts>` + a result
       snippet (`TaskView` enriched). 111 tests + e2e (create recurrent / reject bad cron).
-- [ ] **C-3c (remaining):** blockers in the create form + the per-card **edit drawer**
-      (retitle / rewrite spec / reassign / change schedule / add-remove blockers / cancel).
-      Needs `db::tasks::remove_blocker`/`blockers_of` + bridge `UpdateTask`/`SetBlockers`
-      commands, `TaskView.blockers`, and an editing-task state. **Split `ui/workspace.rs`
-      (621 lines) first** — extract the tasks UI to its own module before adding the drawer.
+- [x] **C-3c (edit drawer, done):** `ui/workspace.rs` split (Tasks UI → `ui/workspace_tasks.rs`)
+      first; then a per-card inline **edit drawer** — retitle / rewrite spec / reassign (member
+      enum) / change schedule / edit blockers (comma-sep ids) / cancel. `db::tasks`
+      `update`/`set_blockers`/`blockers_of`; bridge `tasks::Edit` + `Command::UpdateTask`;
+      `TaskView` gained `agent_id`/`blockers`; `App.editing_task` (pure UI state). Cards show
+      "blocked by …". 113 tests + e2e (open drawer → retitle + schedule → persisted recurrent).
 - [x] **C-3d (done):** global dashboard all-lanes view — each workspace card shows its live
       lane (`▶ <running> · N queued`, else `N queued` / `idle`). `App.dashboard_lanes`
       (`LaneSummary`) projected by `bridge::tasks::project_dashboard`, refreshed on every

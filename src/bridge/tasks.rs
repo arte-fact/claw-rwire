@@ -15,17 +15,20 @@ pub fn lane_views(conn: &rusqlite::Connection, workspace: &str) -> Vec<TaskView>
         .unwrap_or_default()
         .into_iter()
         .map(|task| TaskView {
-            id: task.id,
+            id: task.id.clone(),
             title: task.title,
             spec: task.spec,
             agent: task
                 .agent
-                .and_then(|id| names.iter().find(|(i, _)| i == &id).map(|(_, n)| n.clone())),
+                .as_ref()
+                .and_then(|id| names.iter().find(|(i, _)| i == id).map(|(_, n)| n.clone())),
+            agent_id: task.agent,
             status: task.status.as_str().to_owned(),
             recurrent: matches!(task.kind, tasks::TaskKind::Recurrent),
             schedule: task.schedule,
             next_run: task.next_run.map(|ts| short_time(&ts)),
             result: task.result.map(|text| snippet(&text)),
+            blockers: tasks::blockers_of(conn, &task.id).unwrap_or_default(),
         })
         .collect()
 }
@@ -151,6 +154,70 @@ pub fn create(
         return surface(shared, format!("create task: {err}"));
     }
     load(conn, shared, workspace);
+}
+
+/// An edit-drawer change to a task — the fields the user can rewrite from the board.
+pub struct Edit {
+    pub title: String,
+    pub spec: String,
+    pub agent: Option<String>,
+    pub schedule: Option<String>,
+    pub blockers: Vec<String>,
+}
+
+/// Apply an [`Edit`] to a task, validating the assignee is a member, the schedule is valid
+/// cron, and each blocker is a distinct task in the same workspace. Re-projects on success.
+pub fn update(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str, edit: Edit) {
+    let title = edit.title.trim();
+    let spec = edit.spec.trim();
+    if title.is_empty() || spec.is_empty() {
+        return surface(shared, "a task needs a title and a spec".to_owned());
+    }
+    let Ok(Some(task)) = tasks::get(conn, id) else {
+        return;
+    };
+    let schedule = edit
+        .schedule
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    if let Some(cron) = &schedule
+        && crate::schedule::Cron::parse(cron).is_none()
+    {
+        return surface(shared, format!("not a valid cron schedule: {cron:?}"));
+    }
+    let agent = edit.agent.filter(|value| !value.trim().is_empty());
+    let members = workspaces::members_of(conn, &task.workspace_id).unwrap_or_default();
+    if let Some(a) = &agent
+        && !members.iter().any(|m| m == a)
+    {
+        return surface(
+            shared,
+            "the assignee must be a member of the workspace".into(),
+        );
+    }
+    // Blockers: distinct from self, and tasks in the same workspace.
+    let mut valid = Vec::new();
+    for blocker in edit.blockers {
+        if blocker == id {
+            continue;
+        }
+        match tasks::get(conn, &blocker).ok().flatten() {
+            Some(b) if b.workspace_id == task.workspace_id => valid.push(blocker),
+            _ => {
+                return surface(
+                    shared,
+                    format!("blocker {blocker:?} is not in this workspace"),
+                );
+            }
+        }
+    }
+    if let Err(err) = tasks::update(conn, id, title, spec, agent.as_deref(), schedule.as_deref()) {
+        return surface(shared, format!("update task: {err}"));
+    }
+    if let Err(err) = tasks::set_blockers(conn, id, &valid) {
+        return surface(shared, format!("set blockers: {err}"));
+    }
+    load(conn, shared, &task.workspace_id);
 }
 
 /// Cancel a task and re-project its workspace's lane.

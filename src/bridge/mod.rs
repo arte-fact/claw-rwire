@@ -153,6 +153,16 @@ pub enum Command {
         agent: Option<String>,
         schedule: Option<String>,
     },
+    /// Apply the edit drawer's changes to a task (title / spec / assignee / schedule /
+    /// blockers), then re-project the lane.
+    UpdateTask {
+        id: String,
+        title: String,
+        spec: String,
+        agent: Option<String>,
+        schedule: Option<String>,
+        blockers: Vec<String>,
+    },
     /// Cancel a task (its lane re-projects).
     CancelTask {
         id: String,
@@ -514,6 +524,25 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             agent,
             schedule,
         } => tasks::create(conn, shared, &workspace, &title, &spec, agent, schedule),
+        Command::UpdateTask {
+            id,
+            title,
+            spec,
+            agent,
+            schedule,
+            blockers,
+        } => tasks::update(
+            conn,
+            shared,
+            &id,
+            tasks::Edit {
+                title,
+                spec,
+                agent,
+                schedule,
+                blockers,
+            },
+        ),
         Command::CancelTask { id } => tasks::cancel(conn, shared, &id),
         Command::SchedulerTick => scheduler::tick(conn, shared),
         Command::TaskFinished { id, result } => scheduler::finished(conn, shared, &id, result),
