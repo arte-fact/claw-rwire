@@ -194,6 +194,13 @@ pub enum Command {
         chat: String,
         text: String,
     },
+    /// A summarizer worker folded older turns into an agent's rolling memory — persist the
+    /// new summary and how far it has consumed the transcript.
+    UpdateMemory {
+        agent_id: String,
+        summary: String,
+        summarized_through: i64,
+    },
     /// Save a workspace's `AGENT.md` brief (the Overview editor).
     SaveBrief {
         workspace: String,
@@ -586,6 +593,15 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             result,
         } => orchestrate::planned(conn, shared, &workspace, &origin_chat, result),
         Command::Notified { chat, text } => notified(conn, shared, &chat, &text),
+        Command::UpdateMemory {
+            agent_id,
+            summary,
+            summarized_through,
+        } => {
+            if let Err(err) = db::agent_memory::set(conn, &agent_id, &summary, summarized_through) {
+                log_line(format!("bridge: update memory failed: {err}"));
+            }
+        }
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)
         }
@@ -801,17 +817,30 @@ fn dispatch_native(
         .workspace
         .as_deref()
         .map(|id| workspace::dir_for(&data_dir(), id));
+    // The agent's rolling memory: its summary frames the system prompt, and its marker
+    // windows the transcript so only the turns after the condensed portion are sent raw.
+    let memory = db::agent_memory::get(conn, &inference.agent_id).unwrap_or_default();
     let system_prompt = run_system_prompt(
         agent::CONCIERGE_PROMPT,
         workspace_dir.as_deref(),
         &inference.agent_name,
         inference.agent_prompt.clone(),
+        memory.text().map(|summary| wrap_memory(&summary)),
     );
 
     // Two views of the transcript: the display thread (chat turns + tool cards) for the
-    // UI, and the model view (tools folded into text notes) for the request.
+    // UI, and the model view (tools folded into notes, windowed past the summary) for the request.
     let display = chat::load_thread(conn, chat_id).unwrap_or_default();
-    let model_turns = chat::load_model_turns(conn, chat_id).unwrap_or_default();
+    let model_turns: Vec<crate::state::ChatMessage> =
+        chat::model_turns_after(conn, chat_id, memory.summarized_through)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|turn| crate::state::ChatMessage {
+                role: turn.role,
+                text: turn.text,
+                time: String::new(),
+            })
+            .collect();
     let messages = agent::build_messages(&system_prompt, &model_turns);
     let chats = chat::list_chats(conn).unwrap_or_default();
     let proj_chat = chat_id.to_owned();
@@ -872,13 +901,14 @@ fn delegates(conn: &rusqlite::Connection) -> Vec<Delegate> {
 
 /// Scaffold a run's workspace dir (best-effort) and compose its layered system prompt:
 /// the role `base` (concierge / executor / planner) + the agent's identity prompt + the
-/// workspace's `AGENT.md` brief. Shared by chat turns and task/planning runs. `None`
-/// workspace → just the base + identity layers.
+/// workspace's `AGENT.md` brief + the agent's rolling `memory`. Shared by chat turns and
+/// task/planning runs. `None` workspace → just the base + identity (+ memory) layers.
 fn run_system_prompt(
     base: &str,
     workspace_dir: Option<&Path>,
     agent_name: &str,
     agent_prompt: Option<String>,
+    memory: Option<String>,
 ) -> String {
     if let Some(dir) = workspace_dir
         && let Err(err) = workspace::scaffold(dir, agent_name)
@@ -886,8 +916,30 @@ fn run_system_prompt(
         log_line(format!("bridge: workspace scaffold failed: {err}"));
     }
     let brief = workspace_dir.and_then(workspace::read_agent_md);
-    workspace::compose_system_prompt(base, agent_prompt, brief)
+    workspace::compose_system_prompt(base, agent_prompt, brief, memory)
 }
+
+/// The agent's rolling memory wrapped as a system-prompt layer, or `None` when it has no
+/// memory yet. Built from `agent_memory`; injected into every run for that agent.
+fn memory_layer(conn: &rusqlite::Connection, agent_id: &str) -> Option<String> {
+    db::agent_memory::get(conn, agent_id)
+        .ok()
+        .and_then(|memory| memory.text())
+        .map(|summary| wrap_memory(&summary))
+}
+
+/// Frame a rolling summary as the "working memory" system-prompt layer.
+fn wrap_memory(summary: &str) -> String {
+    format!(
+        "## Working memory\n\nA running summary of earlier context (older messages have been \
+         condensed here):\n\n{summary}"
+    )
+}
+
+/// How many recent transcript turns the concierge sends raw; older ones live in the summary.
+const MEMORY_WINDOW: usize = 12;
+/// Summarize once the un-condensed tail grows past this — folding it back down to the window.
+const SUMMARIZE_AT: usize = 24;
 
 /// Assemble the toolbox for a run from the agent's enabled tool set. `selection` is the
 /// configured names; `None` means the agent was never configured, so a default applies:
@@ -986,6 +1038,8 @@ fn agent_reply(
                 log_line(format!("bridge: append agent message failed: {err}"));
             }
             project_reply(conn, shared, chat_id);
+            // Fold older turns into the concierge's rolling memory once the tail is long.
+            maybe_summarize(conn, chat_id);
         }
         Err(message) => {
             log_line(format!("bridge: agent turn failed: {message}"));
@@ -1007,6 +1061,80 @@ fn agent_reply(
             );
         }
     }
+}
+
+/// The instruction for a summarization turn — fold an excerpt into the running summary.
+const SUMMARIZE_PROMPT: &str = "You maintain a running summary of a long conversation so it \
+can continue without the full transcript. Merge the existing summary with the new excerpt \
+into one concise summary. Preserve concrete facts, decisions, file/task/workspace names, \
+commitments, and any open or unfinished threads; drop pleasantries. Write terse notes, not \
+prose, and output only the summary.";
+
+/// When the concierge's un-condensed transcript tail grows past [`SUMMARIZE_AT`], fold its
+/// oldest turns into the rolling summary on a worker thread (one LLM call), advancing the
+/// marker so the tail shrinks back to [`MEMORY_WINDOW`]. Best-effort: a resolve/turn failure
+/// just logs and the next reply retries.
+fn maybe_summarize(conn: &rusqlite::Connection, chat_id: &str) {
+    let Ok(inference) = resolution::resolve_for_chat(conn, chat_id, |key| std::env::var(key).ok())
+    else {
+        return;
+    };
+    let memory = db::agent_memory::get(conn, &inference.agent_id).unwrap_or_default();
+    let tail =
+        chat::model_turns_after(conn, chat_id, memory.summarized_through).unwrap_or_default();
+    if tail.len() <= SUMMARIZE_AT {
+        return;
+    }
+    let fold_count = tail.len() - MEMORY_WINDOW;
+    let batch = &tail[..fold_count];
+    let Some(new_marker) = batch.last().map(|turn| turn.id) else {
+        return;
+    };
+    let excerpt = render_turns(batch);
+    let previous = memory.summary;
+    let agent_id = inference.agent_id.clone();
+    std::thread::spawn(move || {
+        let user = crate::state::ChatMessage {
+            role: MessageRole::User,
+            text: format!(
+                "Existing summary (may be empty):\n{previous}\n\n\
+                 --- New conversation excerpt to fold in ---\n{excerpt}"
+            ),
+            time: now_hm(),
+        };
+        let messages = agent::build_messages(SUMMARIZE_PROMPT, std::slice::from_ref(&user));
+        match agent::run_turn(&inference, messages, &EmptyToolbox) {
+            Ok(turn) => {
+                if let Some(summary) = turn
+                    .reply
+                    .map(|reply| reply.trim().to_owned())
+                    .filter(|reply| !reply.is_empty())
+                {
+                    send(Command::UpdateMemory {
+                        agent_id,
+                        summary,
+                        summarized_through: new_marker,
+                    });
+                }
+            }
+            Err(err) => log_line(format!("bridge: summarize failed: {err}")),
+        }
+    });
+}
+
+/// Render model turns as labelled lines for the summarizer's excerpt.
+fn render_turns(turns: &[chat::ModelTurn]) -> String {
+    turns
+        .iter()
+        .map(|turn| {
+            let who = match turn.role {
+                MessageRole::User => "User",
+                MessageRole::Agent => "Assistant",
+            };
+            format!("{who}: {}", turn.text)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Append the concierge's completion notice to its origin chat and project it (refresh the

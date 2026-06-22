@@ -159,29 +159,43 @@ pub fn load_thread(conn: &Connection, chat_id: &str) -> rusqlite::Result<Vec<Tra
     rows.collect()
 }
 
-/// The transcript flattened for the model: chat turns plus each tool turn folded in as
-/// a short assistant-authored note (`body`), so a later turn can see what ran without
-/// replaying raw tool-call wire messages. Timestamps are irrelevant here.
-pub fn load_model_turns(conn: &Connection, chat_id: &str) -> rusqlite::Result<Vec<ChatMessage>> {
+/// One model-facing transcript turn with its source `web_messages.id` — the id lets the
+/// rolling-memory summarizer mark how far it has consumed the thread.
+pub struct ModelTurn {
+    pub id: i64,
+    pub role: MessageRole,
+    pub text: String,
+}
+
+/// The transcript flattened for the model, only the turns *after* `after_id` (pass `0` for
+/// all): chat turns plus each tool turn folded in as a short assistant note (`body`). The
+/// rolling memory passes its `summarized_through` marker so already-condensed turns are
+/// dropped and only the recent tail is sent raw.
+pub fn model_turns_after(
+    conn: &Connection,
+    chat_id: &str,
+    after_id: i64,
+) -> rusqlite::Result<Vec<ModelTurn>> {
     let mut stmt = conn.prepare(
-        "SELECT direction, body, kind
+        "SELECT id, direction, body, kind
            FROM web_messages
-          WHERE messaging_group_id = ?1 AND kind IN ('chat', 'tool')
+          WHERE messaging_group_id = ?1 AND kind IN ('chat', 'tool') AND id > ?2
           ORDER BY id ASC",
     )?;
-    let rows = stmt.query_map([chat_id], |row| {
-        let direction: String = row.get(0)?;
-        let body: String = row.get(1)?;
-        let kind: String = row.get(2)?;
+    let rows = stmt.query_map(rusqlite::params![chat_id, after_id], |row| {
+        let id: i64 = row.get(0)?;
+        let direction: String = row.get(1)?;
+        let body: String = row.get(2)?;
+        let kind: String = row.get(3)?;
         let role = if kind == "tool" {
             MessageRole::Agent
         } else {
             role_from_direction(&direction)
         };
-        Ok(ChatMessage {
+        Ok(ModelTurn {
+            id,
             role,
             text: body,
-            time: String::new(),
         })
     })?;
     rows.collect()
@@ -314,9 +328,12 @@ mod tests {
         assert!(matches!(&thread[2], TranscriptItem::Message(m) if m.role == MessageRole::Agent));
 
         // The model view folds the tool into a note between the chat turns.
-        let turns = load_model_turns(&conn, "c1").expect("model");
+        let turns = model_turns_after(&conn, "c1", 0).expect("model");
         assert_eq!(turns.len(), 3);
         assert!(turns[1].text.starts_with("[result of search]"));
+        // The marker windows the tail: only turns after the first id remain.
+        let after_first = model_turns_after(&conn, "c1", turns[0].id).expect("after");
+        assert_eq!(after_first.len(), 2);
     }
 
     #[test]

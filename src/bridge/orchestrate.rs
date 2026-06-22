@@ -44,6 +44,7 @@ pub fn ask(conn: &rusqlite::Connection, workspace: &str, request: &str, origin_c
         Some(&workspace_dir),
         &inference.agent_name,
         inference.agent_prompt.clone(),
+        super::memory_layer(conn, &inference.agent_id),
     );
     let brief = ChatMessage {
         role: MessageRole::User,

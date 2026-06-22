@@ -139,15 +139,27 @@
 
 ---
 
-## ☐ Phase D — rolling context (per-agent memory)
+## ✅ Phase D — rolling context (per-agent memory)
 
 > Each agent (concierge + each workspace owner) keeps a **summarized, persistent memory** of
 > its own thread, so context survives across turns/tasks without unbounded growth. Makes the
 > long-lived concierge chat and recurring owner planning viable.
 
-- [ ] Per-agent rolling summary store (additive table) + summarize-on-threshold
-- [ ] Inject the rolling summary into `run_turn`'s system context (concierge + owners)
-- [ ] `cargo fmt --check` · `clippy -D warnings` · `cargo test` green
+- [x] Per-agent rolling summary store (`agent_memory` table: `summary` +
+      `summarized_through_id`) + `db::agent_memory` (get/set) + summarize-on-threshold: a
+      worker folds the concierge's oldest turns into the summary past `SUMMARIZE_AT`,
+      advancing the marker (`Command::UpdateMemory`); the chat sends only the windowed tail
+      (`chat::model_turns_after`)
+- [x] Inject the rolling summary into the system context for **every** run (concierge chat,
+      owner planning, task execution) — a 4th `compose_system_prompt` layer wrapped as
+      "## Working memory"; `agent_id` added to `ResolvedInference` to key it
+- [x] `cargo fmt --check` · `clippy -D warnings` · `cargo test` (120) green; schema/boot
+      smoke-tested. (The summarize *trigger* fires only on a successful reply, so the
+      fold-and-store loop needs a live `CLAW_ENDPOINT` to exercise end to end.)
+
+**Follow-up (not blocking):** owners/executors get the injection but, being single-turn,
+don't yet *build* their own memory — a future pass can fold their task outcomes into it
+(e.g. a per-workspace worklog) so the team remembers prior work.
 
 ---
 

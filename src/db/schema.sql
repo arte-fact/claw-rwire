@@ -254,3 +254,14 @@ CREATE TABLE IF NOT EXISTS channel_cursors (
   channel_type TEXT PRIMARY KEY,
   cursor       INTEGER NOT NULL
 );
+
+-- Per-agent rolling memory (Phase D): a summarized, persistent recollection of the agent's
+-- own thread, injected into its runs so context survives without unbounded transcript growth.
+-- `summarized_through_id` is the last chat message folded into `summary` (the concierge's
+-- thread); turns after it are still sent raw. Additive (claw-rwire-only).
+CREATE TABLE IF NOT EXISTS agent_memory (
+  agent_group_id        TEXT PRIMARY KEY REFERENCES agent_groups(id),
+  summary               TEXT NOT NULL DEFAULT '',
+  summarized_through_id INTEGER NOT NULL DEFAULT 0,
+  updated_at            TEXT NOT NULL
+);

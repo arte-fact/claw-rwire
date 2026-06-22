@@ -12,6 +12,8 @@ pub struct ResolvedInference {
     pub base_url: String,
     pub model: String,
     pub api_key: Option<String>,
+    /// The agent group's id — keys its rolling memory and any per-agent state.
+    pub agent_id: String,
     /// The agent's display name — used to seed a fresh workspace brief.
     pub agent_name: String,
     /// The id of the agent's workspace (dir name under `<data>/workspaces/`), or `None`
@@ -124,6 +126,7 @@ fn inference_for(
         base_url: endpoint.base_url,
         model,
         api_key,
+        agent_id: agent.id.clone(),
         agent_name: agent.name.clone(),
         workspace,
         agent_prompt,

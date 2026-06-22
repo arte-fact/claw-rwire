@@ -93,15 +93,17 @@ pub fn read_agent_md(workspace: &Path) -> Option<String> {
 
 /// Compose the run's layered system prompt, blank-line-separated, skipping empty layers:
 /// the global `base`, then the agent's identity `agent_prompt` ("who am I", per-agent),
-/// then the workspace `agent_md` project brief ("what we build", shared). Identity precedes
-/// project context so the persona frames the brief.
+/// then the workspace `agent_md` project brief ("what we build", shared), then the agent's
+/// rolling `memory` ("what's happened so far", Phase D). Identity precedes project context so
+/// the persona frames the brief; memory comes last as accumulated background.
 #[must_use]
 pub fn compose_system_prompt(
     base: &str,
     agent_prompt: Option<String>,
     agent_md: Option<String>,
+    memory: Option<String>,
 ) -> String {
-    [Some(base.to_owned()), agent_prompt, agent_md]
+    [Some(base.to_owned()), agent_prompt, agent_md, memory]
         .into_iter()
         .flatten()
         .map(|layer| layer.trim().to_owned())
@@ -156,18 +158,28 @@ mod tests {
 
     #[test]
     fn compose_joins_the_present_layers_in_identity_then_context_order() {
-        assert_eq!(compose_system_prompt("base", None, None), "base");
+        assert_eq!(compose_system_prompt("base", None, None, None), "base");
         assert_eq!(
-            compose_system_prompt("base", None, Some("brief".to_owned())),
+            compose_system_prompt("base", None, Some("brief".to_owned()), None),
             "base\n\nbrief"
         );
         assert_eq!(
-            compose_system_prompt("base", Some("persona".to_owned()), Some("brief".to_owned())),
+            compose_system_prompt(
+                "base",
+                Some("persona".to_owned()),
+                Some("brief".to_owned()),
+                None
+            ),
             "base\n\npersona\n\nbrief"
+        );
+        // Memory is appended last, after the brief.
+        assert_eq!(
+            compose_system_prompt("base", None, None, Some("memory".to_owned())),
+            "base\n\nmemory"
         );
         // Empty layers (and an empty base) drop out rather than leaving blank gaps.
         assert_eq!(
-            compose_system_prompt("", Some("   ".to_owned()), Some("brief".to_owned())),
+            compose_system_prompt("", Some("   ".to_owned()), Some("brief".to_owned()), None),
             "brief"
         );
     }

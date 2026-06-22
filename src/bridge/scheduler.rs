@@ -94,6 +94,7 @@ fn launch(conn: &rusqlite::Connection, task: &Task) -> Result<(), String> {
         Some(&workspace_dir),
         &inference.agent_name,
         inference.agent_prompt.clone(),
+        super::memory_layer(conn, &inference.agent_id),
     );
     // The task spec is the run's single user turn.
     let spec = ChatMessage {
