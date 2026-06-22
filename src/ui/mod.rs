@@ -16,6 +16,7 @@ mod logs;
 mod system_map;
 mod widgets;
 mod workspace;
+mod workspace_tasks;
 
 use rwire::router::Link;
 use rwire::router::RoutePattern;
@@ -51,7 +52,11 @@ pub fn routes() -> Router {
             ))
         })
         .page("/w/:wid/tasks", |p| {
-            view(workspace::shell(wid(p), WsTab::Tasks, workspace::tasks()))
+            view(workspace::shell(
+                wid(p),
+                WsTab::Tasks,
+                workspace_tasks::tasks(),
+            ))
         })
         .page("/w/:wid/team", |p| {
             view(workspace::shell(wid(p), WsTab::Team, workspace::team()))
