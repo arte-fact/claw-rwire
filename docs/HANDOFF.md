@@ -1,7 +1,7 @@
 # Handoff — workspace re-architecture + task board
 
-State as of commit `ee7c7c6`. Working tree clean. All checks green:
-`cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo test` (**84 passing**).
+State as of commit `b9bc86f`. Working tree clean. All checks green:
+`cargo fmt --check` · `cargo clippy --all-targets -- -D warnings` · `cargo test` (**103 passing**).
 
 ## The arc
 
@@ -26,14 +26,32 @@ The design is settled across five docs — read these first:
 | `191cd34` | **B-2** | editable **Team tab** (immediate-apply: rename/owner/members/delete via granular commands); dashboard "New workspace"; System Map shrunk to Channels/Agents/Endpoints (Workspaces tier deleted); concierge relabel |
 | `9acc1ab` | **B-3** | "Chat" tree label; inline `AGENT.md` brief editor on Overview (`LoadBrief`/`SaveBrief`) |
 | `ee7c7c6` | **C-1** | `tasks` + `task_blockers` schema; `db::tasks` (create/get/list/cancel); **Tasks tab** (create form + lane cards + cancel); `bridge::tasks`, `App.tasks` |
-| _pending_ | **C-2** | scheduler scan (`next_ready`/`running_in`/`finish`) + `resolution::resolve_for_agent`; `bridge/scheduler.rs` (ticker + executor); `SchedulerTick`/`TaskFinished`; one running task per workspace, parallel across; result stored on the task + Activity |
+| `7580798` | **C-2** | scheduler scan (`next_ready`/`running_in`/`finish`) + `resolution::resolve_for_agent`; `bridge/scheduler.rs` (ticker + executor); `SchedulerTick`/`TaskFinished`; one running task per workspace, parallel across; result stored on the task + Activity |
+| `7260be4` | **C-3a** | delegation: concierge `ConciergeToolbox::ask` → `Command::Ask` → `bridge/orchestrate.rs` owner **planning turn** with `PlanningToolbox` (`create_task`/`list_tasks`/`cancel_task`, member enum, schedule+blockers); `AskPlanned` re-projects lane; `tasks::add_blocker` |
+| `b9bc86f` | **C-3b** | concierge **notify turn**: `origin_chat` threaded to `tasks.origin_chat_id`; `scheduler::finished` → `notify::completion` (short concierge turn) → `Command::Notified` appends to the chat (no banner/activity) |
 
-## Next: Phase C-3 — orchestration + recurrence
+## Next: Phase C-3 — remaining (C-3c, C-3d)
 
-Concierge `ask(workspace, request)` tool → owner **planning turn** with
-`create_task`/`list_tasks`/`cancel_task` (a Toolbox, like `CoderToolbox`); concierge **notify
-turn** posts the result into the global chat; recurrence (cron → `next_run`); blockers + edit
-drawer in the Tasks UI; the dashboard all-lanes view (`list_active`).
+The delegation + notify **orchestration core is done** (C-3a/b). What's left is recurrence
+logic + task-board UI — best done with a live `CLAW_ENDPOINT` (to drive the agent tool calls)
+and Playwright (to validate the UI):
+
+- **C-3c — recurrence + blockers UI + edit drawer:**
+  - **Recurrence**: a recurrent task (has `schedule`, a cron string) should, on `done`, compute
+    `next_run` (skip-to-next-slot — don't fire missed occurrences) and go back to `pending`;
+    `next_ready` must also gate recurrent tasks on `next_run <= now`. Needs a cron→next-time
+    helper. **No cron crate is in the tree** — either add a small dep or implement a minimal
+    5-field parser (`db::tasks` or a new `src/schedule.rs`), unit-tested. `Task` already carries
+    `kind`/`schedule`; add `next_run`/`last_run` handling in `finish`.
+  - **Blockers in the create form** + a per-card **edit drawer** (retitle / rewrite spec /
+    reassign member / change schedule / add-remove blockers / cancel) in `src/ui/workspace.rs`
+    `tasks()`. Mirror the Team tab's immediate-apply controls; needs new bridge commands
+    (`UpdateTask`, `SetBlockers`…) + `TaskView` enrichment (status, blockers, next_run, result
+    snippet). The `tasks::add_blocker` query exists; a `remove_blocker` + `blockers_of` will be
+    needed (write them *with* their UI consumer to avoid dead-code).
+- **C-3d — global dashboard all-lanes view**: every workspace's running/queued card at a glance.
+  Add a `db::tasks::list_active` (or per-lane fold) + project into a dashboard read-model;
+  render in `src/ui/dashboard.rs`. Reuse the card/badge widgets from `workspace::tasks`.
 
 ## Gotchas learned this session (important)
 
