@@ -5,6 +5,7 @@ pub mod agents;
 pub mod chat;
 pub mod endpoints;
 pub mod resolution;
+pub mod settings;
 pub mod tasks;
 pub mod workspaces;
 

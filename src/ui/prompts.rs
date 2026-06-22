@@ -71,7 +71,62 @@ fn body(app: &App) -> ElementBuilder {
 
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
-        .append([picker, layers])
+        .append([picker, layers, defaults_section(&app.role_defaults)])
+}
+
+/// The editable global role preambles (layer 1) — they apply to every agent in that role.
+/// Editing here changes behaviour without a rebuild; Reset clears the override.
+fn defaults_section(defaults: &crate::state::RoleDefaults) -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapMd])
+        .append([
+            el(El::Div)
+                .st([St::TextSm, St::TextHigh, St::FontSemibold, St::PtLg])
+                .text("Global role defaults"),
+            el(El::Div).st([St::TextXs, St::TextMuted]).text(
+                "Layer 1, shared by every agent in that role. Edit to change behaviour; \
+                 leave blank / Reset to use the built-in default.",
+            ),
+            role_default_card("Concierge (chat)", RunKind::Chat, &defaults.concierge),
+            role_default_card("Executor (task)", RunKind::Task, &defaults.executor),
+            role_default_card("Owner (planning)", RunKind::Planning, &defaults.planner),
+        ])
+}
+
+fn role_default_card(label: &str, run: RunKind, value: &str) -> ElementBuilder {
+    let form = el(El::Form)
+        .on(Ev::Submit, save_role())
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append([
+            // The run rides as a hidden field (Submit doesn't expose data-attrs).
+            el(El::Input)
+                .attr("type", "hidden")
+                .attr("name", "run")
+                .attr("value", run.as_str()),
+            el(El::Textarea)
+                .id(&format!("role-{}", run.as_str()))
+                .attr("name", "prompt")
+                .attr("rows", "4")
+                .style(
+                    Style::new()
+                        .set("font", "inherit")
+                        .set("resize", "vertical"),
+                )
+                .st(control_st())
+                .focus([St::BorderAccent])
+                .text(value),
+            el(El::Div)
+                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+                .append([
+                    accent_submit(icons::Icon::Check, "Save"),
+                    plain_button(
+                        "Reset to default",
+                        reset_role(),
+                        Some(("run", run.as_str())),
+                    ),
+                ]),
+        ]);
+    card(label, form)
 }
 
 /// The three run-kinds as immediate-apply chips; the active one is highlighted.
@@ -147,11 +202,14 @@ fn memory_card(agent: Option<&str>, preview: &PromptPreview) -> ElementBuilder {
                             "Pause"
                         },
                         toggle_pause(),
-                        Some(if preview.memory_paused {
-                            "false"
-                        } else {
-                            "true"
-                        }),
+                        Some((
+                            "paused",
+                            if preview.memory_paused {
+                                "false"
+                            } else {
+                                "true"
+                            },
+                        )),
                     ),
                 ]),
         ]);
@@ -166,9 +224,13 @@ fn memory_card(agent: Option<&str>, preview: &PromptPreview) -> ElementBuilder {
     )
 }
 
-/// A small secondary (`type=button`) action inside the memory form, optionally carrying a
-/// `data-paused` value for the pause toggle.
-fn plain_button(label: &str, on_click: rwire::HandlerSpec, paused: Option<&str>) -> ElementBuilder {
+/// A small secondary (`type=button`) action, optionally carrying one `data-(key)=value`
+/// attribute for its click handler to read.
+fn plain_button(
+    label: &str,
+    on_click: rwire::HandlerSpec,
+    data: Option<(&str, &str)>,
+) -> ElementBuilder {
     let button = el(El::Button)
         .attr("type", "button")
         .on(Ev::Click, on_click)
@@ -185,8 +247,8 @@ fn plain_button(label: &str, on_click: rwire::HandlerSpec, paused: Option<&str>)
         ])
         .hover([St::TextHigh])
         .text(label);
-    match paused {
-        Some(value) => button.data("paused", value),
+    match data {
+        Some((key, value)) => button.data(key, value),
         None => button,
     }
 }
@@ -283,4 +345,23 @@ fn refresh(app: &App) {
         agent: app.prompt_agent.clone(),
         run: app.prompt_run,
     });
+}
+
+#[handler]
+fn save_role(app: &mut App, ctx: &EventContext) {
+    let run = RunKind::from_str(ctx.field("run").unwrap_or_default());
+    let value = ctx.field("prompt").unwrap_or_default().to_owned();
+    bridge::send(Command::SetRolePrompt { run, value });
+    refresh(app); // the assembled preview's role layer may have changed
+}
+
+#[handler]
+fn reset_role(app: &mut App, ctx: &EventContext) {
+    if let Some(run) = ctx.data("run") {
+        bridge::send(Command::SetRolePrompt {
+            run: RunKind::from_str(run),
+            value: String::new(),
+        });
+        refresh(app);
+    }
 }

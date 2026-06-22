@@ -4,22 +4,44 @@
 
 use rwire::{ChangeSet, SharedServerState};
 
-use crate::agent;
 use crate::db::{self, agent_prompts, agents, workspaces};
-use crate::state::{App, PromptPreview, RunKind};
+use crate::state::{App, PromptPreview, RoleDefaults, RunKind};
 use crate::workspace;
 
-/// The role preamble for a run-kind — the same constants the live run sites pass.
-fn role_preamble(run: RunKind) -> &'static str {
-    match run {
-        RunKind::Chat => agent::CONCIERGE_PROMPT,
-        RunKind::Task => agent::EXECUTOR_PROMPT,
-        RunKind::Planning => agent::OWNER_PLANNER_PROMPT,
+/// Project the effective (override-or-default) role preambles for the defaults editor.
+pub fn load_settings(conn: &rusqlite::Connection, shared: &SharedServerState) {
+    let defaults = RoleDefaults {
+        concierge: super::role_prompt(conn, RunKind::Chat),
+        executor: super::role_prompt(conn, RunKind::Task),
+        planner: super::role_prompt(conn, RunKind::Planning),
+    };
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_ROLE_DEFAULTS]),
+        move |app| app.role_defaults = defaults,
+    );
+}
+
+/// Set (or, with a blank value, reset) a role preamble override, then re-project the defaults.
+pub fn set_role(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    run: RunKind,
+    value: &str,
+) {
+    let key = match run {
+        RunKind::Chat => super::ROLE_CONCIERGE_KEY,
+        RunKind::Task => super::ROLE_EXECUTOR_KEY,
+        RunKind::Planning => super::ROLE_PLANNER_KEY,
+    };
+    if let Err(err) = db::settings::set(conn, key, value) {
+        super::log_line(format!("bridge: set role prompt failed: {err}"));
     }
+    load_settings(conn, shared);
 }
 
 /// Compose and project the preview for `agent` (defaulting to the concierge) running as `run`,
-/// using the agent's home/owned workspace as the representative brief source.
+/// using the agent's home/owned workspace as the representative brief source. The role layer
+/// uses the operator's override (`settings`) so the preview matches the live run exactly.
 pub fn load(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
@@ -35,7 +57,7 @@ pub fn load(
         .map(|a| a.name)
         .unwrap_or_else(|| agent_id.clone());
 
-    let role = role_preamble(run);
+    let role = super::role_prompt(conn, run);
     let persona = agent_prompts::get(conn, &agent_id).ok().flatten();
     let workspace_id = workspaces::owned_by(conn, &agent_id).ok().flatten();
     let workspace_name = workspace_id
@@ -51,7 +73,7 @@ pub fn load(
     let memory = mem.text();
 
     let assembled = workspace::compose_system_prompt(
-        role,
+        &role,
         persona.clone(),
         brief.clone(),
         memory.as_deref().map(super::wrap_memory),
@@ -69,7 +91,7 @@ pub fn load(
         agent_name,
         run: run.label().to_owned(),
         workspace: workspace_name,
-        role: role.to_owned(),
+        role,
         persona: persona.unwrap_or_default(),
         brief: brief.unwrap_or_default(),
         memory: mem.summary,

@@ -255,6 +255,14 @@ CREATE TABLE IF NOT EXISTS channel_cursors (
   cursor       INTEGER NOT NULL
 );
 
+-- Global key/value config (Phase E): editable defaults that override the hardcoded constants —
+-- the role preambles and the memory tuning knobs. An absent/blank value falls back to the
+-- compiled default. Additive (claw-rwire-only).
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 -- Per-agent rolling memory (Phase D): a summarized, persistent recollection of the agent's
 -- own thread, injected into its runs so context survives without unbounded transcript growth.
 -- `summarized_through_id` is the last chat message folded into `summary` (the concierge's

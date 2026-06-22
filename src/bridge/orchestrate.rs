@@ -39,8 +39,9 @@ pub fn ask(conn: &rusqlite::Connection, workspace: &str, request: &str, origin_c
     };
 
     let workspace_dir = workspace::dir_for(&data_dir(), workspace);
+    let role = super::role_prompt(conn, crate::state::RunKind::Planning);
     let system_prompt = run_system_prompt(
-        agent::OWNER_PLANNER_PROMPT,
+        &role,
         Some(&workspace_dir),
         &inference.agent_name,
         inference.agent_prompt.clone(),

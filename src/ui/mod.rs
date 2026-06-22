@@ -528,12 +528,14 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     if path == "/dashboard" {
         bridge::send(Command::LoadDashboard);
     }
-    // Opening the Prompts inspector composes the current selection (picking up any edits).
+    // Opening the Prompts inspector composes the current selection (picking up any edits) and
+    // loads the editable global role defaults.
     if path == "/prompts" {
         bridge::send(Command::LoadPrompt {
             agent: app.prompt_agent.clone(),
             run: app.prompt_run,
         });
+        bridge::send(Command::LoadSettings);
     }
     // Entering a workspace's Files tab lists that workspace's root.
     if let Some(wid) = RoutePattern::new("/w/:wid/files")

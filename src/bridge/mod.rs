@@ -150,6 +150,13 @@ pub enum Command {
         agent: Option<String>,
         run: RunKind,
     },
+    /// Project the editable global role-preamble defaults (the Prompts defaults section).
+    LoadSettings,
+    /// Set (or, blank, reset) a role preamble override.
+    SetRolePrompt {
+        run: RunKind,
+        value: String,
+    },
     /// Queue a task in a workspace, assigned to `agent` (a member; `None` = the owner). A
     /// `schedule` (cron string) makes it recurrent.
     CreateTask {
@@ -573,6 +580,8 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadTasks { workspace } => tasks::load(conn, shared, &workspace),
         Command::LoadDashboard => tasks::project_dashboard(conn, shared),
         Command::LoadPrompt { agent, run } => prompts::load(conn, shared, agent, run),
+        Command::LoadSettings => prompts::load_settings(conn, shared),
+        Command::SetRolePrompt { run, value } => prompts::set_role(conn, shared, run, &value),
         Command::CreateTask {
             workspace,
             title,
@@ -860,8 +869,9 @@ fn dispatch_native(
     // The agent's rolling memory: its summary frames the system prompt, and its marker
     // windows the transcript so only the turns after the condensed portion are sent raw.
     let memory = db::agent_memory::get(conn, &inference.agent_id).unwrap_or_default();
+    let role = role_prompt(conn, RunKind::Chat);
     let system_prompt = run_system_prompt(
-        agent::CONCIERGE_PROMPT,
+        &role,
         workspace_dir.as_deref(),
         &inference.agent_name,
         inference.agent_prompt.clone(),
@@ -960,6 +970,22 @@ fn run_system_prompt(
     }
     let brief = workspace_dir.and_then(workspace::read_agent_md);
     workspace::compose_system_prompt(base, agent_prompt, brief, memory)
+}
+
+/// `settings` keys for the editable role preambles (Phase E configurability).
+pub(super) const ROLE_CONCIERGE_KEY: &str = "role.concierge";
+pub(super) const ROLE_EXECUTOR_KEY: &str = "role.executor";
+pub(super) const ROLE_PLANNER_KEY: &str = "role.planner";
+
+/// The role preamble for a run-kind — the operator's override from `settings`, else the
+/// compiled-in constant. Used by every run site so the live prompt and the inspector agree.
+fn role_prompt(conn: &rusqlite::Connection, run: RunKind) -> String {
+    let (key, default) = match run {
+        RunKind::Chat => (ROLE_CONCIERGE_KEY, agent::CONCIERGE_PROMPT),
+        RunKind::Task => (ROLE_EXECUTOR_KEY, agent::EXECUTOR_PROMPT),
+        RunKind::Planning => (ROLE_PLANNER_KEY, agent::OWNER_PLANNER_PROMPT),
+    };
+    db::settings::get_or(conn, key, default)
 }
 
 /// The agent's rolling memory wrapped as a system-prompt layer, or `None` when it has no

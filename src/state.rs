@@ -271,6 +271,15 @@ pub struct PromptPreview {
     pub memory_paused: bool,
 }
 
+/// The effective (override-or-default) role preambles — the editable global behaviour rules
+/// shown on the Prompts view's "Global role defaults" section.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoleDefaults {
+    pub concierge: String,
+    pub executor: String,
+    pub planner: String,
+}
+
 /// One selectable tool in the agent drawer's tool picker: its source `group`
 /// (`"web"` / `"coder"`) and `name`. Projected once at boot from the connected MCP
 /// server + the built-in coder tools.
@@ -398,6 +407,8 @@ pub struct App {
     pub prompt_agent: Option<String>,
     pub prompt_run: RunKind,
     pub prompt_preview: Option<PromptPreview>,
+    /// The editable global role preambles (effective values), for the Prompts defaults section.
+    pub role_defaults: RoleDefaults,
     /// Files view: the id of the workspace being browsed.
     pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).

@@ -53,12 +53,18 @@ An agent (e.g. `ag-default`) can play all three. Also opaque: the `notify` + `su
       `SetMemoryPaused`; `maybe_summarize` skips a paused agent; a summarizer write preserves
       the operator's pause. 123 tests; e2e-verified (save → persisted, pause → `paused=1`).
 
-**E-3 — Settings store + configurable defaults** _(adds a `settings` kv table)_
-- [ ] Additive `settings(key TEXT PRIMARY KEY, value TEXT)` + `db::settings` (get/set/all).
-- [ ] Role preambles editable as **global defaults** (3 keys); run sites read the override with
-      the const as fallback. Memory knobs editable too: `MEMORY_WINDOW`, `SUMMARIZE_FRACTION`,
-      `DEFAULT_CONTEXT_TOKENS`, `SUMMARIZE_AT`.
-- [ ] A **Settings** view (or a section on `/prompts`) to edit them; "reset to default" per key.
+**E-3 — Settings store + configurable role defaults** _(role prompts done; knobs deferred)_
+- [x] Additive `settings(key, value)` table + `db::settings` (get/set/get_or; blank = reset).
+- [x] Role preambles editable as **global defaults** (`role.concierge`/`.executor`/`.planner`);
+      `bridge::role_prompt` reads the override with the const as fallback, used by **all** run
+      sites (`dispatch_native` / `scheduler::launch` / `orchestrate::ask`) *and* the inspector,
+      so live and preview agree. `Command::LoadSettings`/`SetRolePrompt`; `App.role_defaults`.
+- [x] A **"Global role defaults"** section on `/prompts`: 3 editable role textareas + Save +
+      **Reset to default** (clears the override). 124 tests; e2e-verified (override persists +
+      flows into the assembled preview and the live run).
+- [ ] **E-3b (deferred):** memory knobs as settings — `MEMORY_WINDOW`, `SUMMARIZE_FRACTION`,
+      `DEFAULT_CONTEXT_TOKENS`, `SUMMARIZE_AT` (number inputs + a `setting_or_u32/f64` reader in
+      `maybe_summarize`). The `settings` table + UI pattern from E-3a make this a small add.
 
 **Gate every increment:** `cargo fmt --check` · `clippy -D warnings` · `cargo test`.
 

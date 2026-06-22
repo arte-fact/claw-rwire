@@ -89,8 +89,9 @@ fn launch(conn: &rusqlite::Connection, task: &Task) -> Result<(), String> {
     .map_err(|err| err.to_string())?;
 
     let workspace_dir = workspace::dir_for(&data_dir(), &task.workspace_id);
+    let role = super::role_prompt(conn, crate::state::RunKind::Task);
     let system_prompt = run_system_prompt(
-        agent::EXECUTOR_PROMPT,
+        &role,
         Some(&workspace_dir),
         &inference.agent_name,
         inference.agent_prompt.clone(),
