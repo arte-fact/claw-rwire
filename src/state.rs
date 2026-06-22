@@ -310,6 +310,7 @@ pub struct RoleDefaults {
     pub concierge: String,
     pub executor: String,
     pub planner: String,
+    pub validator: String,
 }
 
 /// One task parked at a human gate, shown in the cross-workspace Review inbox.

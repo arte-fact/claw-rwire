@@ -14,6 +14,7 @@ pub fn load_settings(conn: &rusqlite::Connection, shared: &SharedServerState) {
         concierge: super::role_prompt(conn, RunKind::Chat),
         executor: super::role_prompt(conn, RunKind::Task),
         planner: super::role_prompt(conn, RunKind::Planning),
+        validator: super::role_prompt(conn, RunKind::Validator),
     };
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_ROLE_DEFAULTS]),

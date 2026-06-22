@@ -97,9 +97,12 @@ fn step_card(
 ) -> ElementBuilder {
     let is_loop = step.kind == "loop";
     let summary = if is_loop {
-        let validator = step.validator_kind.as_deref().unwrap_or("human");
+        let reviewer = match step.validator_kind.as_deref() {
+            Some("agent") => agent_label(&step.validator_agent, members),
+            _ => "you".to_owned(),
+        };
         format!(
-            "loop · {} · review: {validator} · ≤{} iters · on exhaust: {}",
+            "loop · {} → review: {reviewer} · ≤{} iters · on exhaust: {}",
             agent_label(&step.agent, members),
             step.max_iterations,
             step.on_exhaust,

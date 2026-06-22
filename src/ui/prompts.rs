@@ -90,6 +90,11 @@ fn defaults_section(defaults: &crate::state::RoleDefaults) -> ElementBuilder {
             role_default_card("Concierge (chat)", RunKind::Chat, &defaults.concierge),
             role_default_card("Executor (task)", RunKind::Task, &defaults.executor),
             role_default_card("Owner (planning)", RunKind::Planning, &defaults.planner),
+            role_default_card(
+                "Validator (review)",
+                RunKind::Validator,
+                &defaults.validator,
+            ),
         ])
 }
 

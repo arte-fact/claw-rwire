@@ -5,12 +5,14 @@
 
 use std::path::Path;
 
-use crate::db::{agent_prompts, agents, chat, pipeline, workspaces};
+use crate::db::pipeline::{self, StepFields};
+use crate::db::{agent_prompts, agents, chat, workspaces};
 use crate::state::MessageRole;
 use crate::workspace;
 
 const FORGE_ID: &str = "ag-forge";
 const SCOUT_ID: &str = "ag-scout";
+const CRITIC_ID: &str = "ag-critic";
 const STUDIO: &str = "studio";
 const RESEARCH: &str = "research";
 
@@ -22,10 +24,18 @@ const SCOUT_PERSONA: &str = "You are Scout, a sharp researcher. You gather prima
 compare options on the dimensions that matter, and write clear, well-organized summaries. You \
 note where claims come from and flag uncertainty.";
 
-/// Role-preamble override for Studio's "Refine" stage — it improves the prior step's output.
+const CRITIC_PERSONA: &str = "You are Critic, a meticulous reviewer. You check work against its \
+spec for correctness, completeness, and quality, and give specific, actionable feedback. You're \
+fair but exacting — approve work that's genuinely done, and send back work that isn't.";
+
+/// Role-preamble override for Studio's "Refine" loop — it improves the prior step's output.
 const REFINE_PROMPT: &str = "You are refining the previous step's work, not starting over. \
 Read what was produced, then improve its correctness, clarity, and polish — fix issues, tighten \
 the code/prose, and keep what already works. Briefly note what you changed.";
+
+/// Role-preamble override for Studio's final "Approve" loop — prepares the work for sign-off.
+const FINALIZE_PROMPT: &str = "Prepare the final version for the user's sign-off. Make sure it's \
+complete and correct, then briefly summarize what was built and confirm it's ready to ship.";
 
 const STUDIO_BRIEF: &str = "# Studio\n\nWhere we build things — apps, scripts, and tooling. \
 Forge does the engineering here; ask for something concrete and it gets made.\n\n## \
@@ -39,15 +49,16 @@ Conventions\n\n- `projects/` — datasets or scraped material\n- `docs/` — sum
 comparisons, and reports (the main output)\n- `skills/` — reusable research templates\n";
 
 const WELCOME: &str = "👋 I'm **claw**, your concierge. I don't just chat — I coordinate a \
-small team across workspaces and a shared task board.\n\n**Your team**\n- **Forge** — \
-engineer, in the **Studio** workspace (apps, scripts, tooling)\n- **Scout** — researcher, owns \
-the **Research** workspace (gathers, compares, summarizes)\n\n**How it works:** ask me for \
-something multi-step and I'll delegate it. The workspace owner plans it into tasks, the right \
-teammate runs each one in its workspace, and I report back here when they're done.\n\n**Try \
-one:**\n> Research the top 3 Rust web frameworks and write a comparison in the Research \
-workspace.\n\nThen watch the **Dashboard** and a workspace's **Tasks** tab fill in. Explore \
-**Prompts** to see exactly what each agent is told, and a workspace's **Files** / **Team** \
-tabs.";
+small team across workspaces, each with its own review **workflow**.\n\n**Your team**\n- \
+**Forge** — engineer, in the **Studio** workspace (apps, scripts, tooling)\n- **Critic** — \
+reviewer, checks Forge's work in Studio\n- **Scout** — researcher, owns the **Research** \
+workspace (gathers, compares, summarizes)\n\n**How it works:** ask me for something multi-step \
+and I'll delegate it. In **Studio**, every task flows through a pipeline — Forge builds, then a \
+**Refine** loop has Critic review until it passes, then it parks for **your** approval. Watch it \
+move across the board.\n\n**Try one:**\n> Build a small CLI tool in Studio that prints a \
+motivational quote.\n\nThen open Studio's **Tasks** tab (the kanban board), **Workflow** tab (the \
+pipeline — edit it!), and the **Review** tab when something needs you. **Prompts** shows exactly \
+what each agent is told.";
 
 /// Seed the showcase if the DB is fresh (exactly the default agent, no workspaces) and the
 /// demo isn't disabled. Best-effort — any step failing just leaves a smaller seed.
@@ -69,11 +80,13 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
     let model = lead.model.as_deref();
     if agents::create(conn, FORGE_ID, "Forge", endpoint, model).is_err()
         || agents::create(conn, SCOUT_ID, "Scout", endpoint, model).is_err()
+        || agents::create(conn, CRITIC_ID, "Critic", endpoint, model).is_err()
     {
         return;
     }
     let _ = agent_prompts::set(conn, FORGE_ID, FORGE_PERSONA);
     let _ = agent_prompts::set(conn, SCOUT_ID, SCOUT_PERSONA);
+    let _ = agent_prompts::set(conn, CRITIC_ID, CRITIC_PERSONA);
 
     // Workspaces + ownership (set_owner also adds the owner as a member) + membership.
     let _ = workspaces::create(conn, STUDIO, "Studio");
@@ -81,14 +94,16 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
     let _ = workspaces::set_owner(conn, STUDIO, &lead.id);
     let _ = workspaces::set_owner(conn, RESEARCH, SCOUT_ID);
     let _ = workspaces::add_member(conn, FORGE_ID, STUDIO);
+    let _ = workspaces::add_member(conn, CRITIC_ID, STUDIO);
     let _ = workspaces::add_member(conn, SCOUT_ID, STUDIO);
     let _ = workspaces::add_member(conn, &lead.id, RESEARCH);
 
     write_brief(data_dir, STUDIO, "Studio", STUDIO_BRIEF);
     write_brief(data_dir, RESEARCH, "Research", RESEARCH_BRIEF);
 
-    // A 2-stage pipeline for Studio so chaining is visible: Forge builds, then refines. (F-6
-    // upgrades this to a validation loop with a Critic.) Research keeps the default single stage.
+    // Studio's showcase pipeline — the whole feature, visible on first boot:
+    //   Execute (stage, Forge) → Refine (loop: Forge ⇄ Critic, ≤2) → Approve (loop: Forge ⇄ you).
+    // Research keeps the implicit default single stage.
     let _ = pipeline::insert_stage(
         conn,
         "ps-studio-0",
@@ -98,14 +113,39 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
         Some(FORGE_ID),
         None,
     );
-    let _ = pipeline::insert_stage(
+    let _ = pipeline::insert(
         conn,
         "ps-studio-1",
         STUDIO,
         1,
-        "Refine",
-        Some(FORGE_ID),
-        Some(REFINE_PROMPT),
+        &StepFields {
+            kind: "loop",
+            name: "Refine",
+            agent: Some(FORGE_ID),
+            prompt: Some(REFINE_PROMPT),
+            validator_kind: Some("agent"),
+            validator_agent: Some(CRITIC_ID),
+            validator_prompt: None,
+            max_iterations: 2,
+            on_exhaust: "human",
+        },
+    );
+    let _ = pipeline::insert(
+        conn,
+        "ps-studio-2",
+        STUDIO,
+        2,
+        &StepFields {
+            kind: "loop",
+            name: "Approve",
+            agent: Some(FORGE_ID),
+            prompt: Some(FINALIZE_PROMPT),
+            validator_kind: Some("human"),
+            validator_agent: None,
+            validator_prompt: None,
+            max_iterations: 2,
+            on_exhaust: "human",
+        },
     );
 
     // The concierge's welcome, in the seed thread.

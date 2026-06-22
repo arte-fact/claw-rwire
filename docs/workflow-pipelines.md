@@ -245,11 +245,23 @@ can't hide.
       [agent→owner] + validator [defaults human]). e2e: add a loop persists; the lock hides the
       editor while a pending task exists.
 
-**F-6 — Prompts inspector + showcase**
-- [ ] Inspector gains the producer/validator run-kinds (visible + tunable defaults).
-- [ ] Showcase: seed **Studio** with `Execute(Forge) → loop{ Refine(Forge) ⇄ Critic(agent), max 2 }
-      → Approve(human) → done`, and a seeded **Critic** reviewer agent, so the whole loop is
-      visible on first boot. (Other workspaces keep the default single-stage pipeline.)
+**F-6 — Prompts inspector + showcase** _(done)_
+- [x] Inspector: the `Validator` run-kind chip (already in `RunKind::ALL`) + a tunable
+      **Validator (review)** card in the Global role defaults (`RoleDefaults.validator`;
+      `role.validator` setting; `set_role` already handled it).
+- [x] Showcase: Studio seeded with `Execute(Forge) → Refine{ Forge ⇄ Critic(agent), ≤2 } →
+      Approve{ Forge ⇄ you }`, plus a seeded **Critic** reviewer agent (Studio member). The whole
+      feature — a stage, an agent-validated loop, and a human gate — is visible on first boot;
+      the welcome message points at the Tasks/Workflow/Review tabs. Research keeps the default.
+- [x] 134 tests; e2e: fresh boot seeds the 3-step pipeline + Critic; the Workflow tab renders
+      `loop · Forge → review: Critic` etc.
+
+---
+
+**Phase F is complete** — F-1…F-6 all shipped. A workspace's workflow is now a configurable
+pipeline of stages and bounded validation loops (agent or human review), driven by a step-aware
+scheduler, surfaced as a kanban board + detail transcript + review inbox, and editable from the
+Workflow tab. The showcase demonstrates the whole thing on first boot.
 
 ---
 
