@@ -13,8 +13,12 @@ use rusqlite::{Connection, OptionalExtension, params};
 pub enum TaskStatus {
     Pending,
     Running,
+    /// Parked at a human gate (or a loop's on-exhaust=human) — frees the lane, awaits the user.
+    Awaiting,
     Done,
     Failed,
+    /// A reviewer (agent or human) rejected the work — terminal.
+    Rejected,
     Cancelled,
 }
 
@@ -23,8 +27,10 @@ impl TaskStatus {
         match self {
             TaskStatus::Pending => "pending",
             TaskStatus::Running => "running",
+            TaskStatus::Awaiting => "awaiting",
             TaskStatus::Done => "done",
             TaskStatus::Failed => "failed",
+            TaskStatus::Rejected => "rejected",
             TaskStatus::Cancelled => "cancelled",
         }
     }
@@ -32,8 +38,10 @@ impl TaskStatus {
     fn from_str(value: &str) -> Self {
         match value {
             "running" => TaskStatus::Running,
+            "awaiting" => TaskStatus::Awaiting,
             "done" => TaskStatus::Done,
             "failed" => TaskStatus::Failed,
+            "rejected" => TaskStatus::Rejected,
             "cancelled" => TaskStatus::Cancelled,
             _ => TaskStatus::Pending,
         }
@@ -82,10 +90,13 @@ pub struct Task {
     pub next_run: Option<String>,
     /// The current pipeline step the task is on (Phase F).
     pub step_position: i64,
+    /// The iteration within the current loop step (Phase F).
+    pub iteration: i64,
 }
 
 const SELECT: &str = "SELECT id, workspace_id, agent_group_id, title, spec, kind, schedule, \
-                      status, result, priority, origin_chat_id, next_run, step_position FROM tasks";
+                      status, result, priority, origin_chat_id, next_run, step_position, \
+                      iteration FROM tasks";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
@@ -102,6 +113,7 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         origin_chat: row.get(10)?,
         next_run: row.get(11)?,
         step_position: row.get(12)?,
+        iteration: row.get(13)?,
     })
 }
 
@@ -174,11 +186,23 @@ pub fn cancel(conn: &Connection, id: &str) -> rusqlite::Result<()> {
 }
 
 /// Move a task to a pipeline step (Phase F); it stays `running` as it flows through the chain.
+/// Resets `iteration` to 0 — a fresh step starts a fresh loop budget.
 pub fn set_step(conn: &Connection, id: &str, position: i64) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE tasks SET step_position = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        "UPDATE tasks SET step_position = ?2, iteration = 0,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
           WHERE id = ?1",
         params![id, position],
+    )?;
+    Ok(())
+}
+
+/// Set a task's loop iteration counter (within its current loop step).
+pub fn set_iteration(conn: &Connection, id: &str, iteration: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE tasks SET iteration = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?1",
+        params![id, iteration],
     )?;
     Ok(())
 }

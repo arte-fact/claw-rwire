@@ -27,7 +27,9 @@ use crate::agent;
 use crate::db::{self, agents, chat, endpoints, resolution, workspaces};
 use crate::id;
 use crate::mcp::{self, McpClient};
-use crate::state::{ActivityEntry, ActivityKind, App, ChatSummary, LogLine, MessageRole, RunKind};
+use crate::state::{
+    ActivityEntry, ActivityKind, App, ChatSummary, LogLine, MessageRole, RunKind, RunRole,
+};
 use crate::tools::{
     CoderToolbox, CompositeToolbox, ConciergeToolbox, Delegate, EmptyToolbox, FilteredToolbox,
     McpToolbox, Toolbox, WORKSPACE_TOOLS,
@@ -184,8 +186,10 @@ pub enum Command {
     /// Periodic scheduler scan: launch the next ready task in each idle workspace lane.
     SchedulerTick,
     /// A worker thread's finished task run, posted back for the bridge to persist + project.
+    /// `role` tells the engine whether a stage / producer / validator just ran (Phase F).
     TaskFinished {
         id: String,
+        role: RunRole,
         result: Result<agent::TurnResult, String>,
     },
     /// The concierge delegated a request to a workspace owner (the `ask` tool): run the
@@ -613,7 +617,9 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         ),
         Command::CancelTask { id } => tasks::cancel(conn, shared, &id),
         Command::SchedulerTick => scheduler::tick(conn, shared),
-        Command::TaskFinished { id, result } => scheduler::finished(conn, shared, &id, result),
+        Command::TaskFinished { id, role, result } => {
+            scheduler::finished(conn, shared, &id, role, result)
+        }
         Command::Ask {
             workspace,
             request,
@@ -979,6 +985,7 @@ fn run_system_prompt(
 pub(super) const ROLE_CONCIERGE_KEY: &str = "role.concierge";
 pub(super) const ROLE_EXECUTOR_KEY: &str = "role.executor";
 pub(super) const ROLE_PLANNER_KEY: &str = "role.planner";
+pub(super) const ROLE_VALIDATOR_KEY: &str = "role.validator";
 
 /// The role preamble for a run-kind — the operator's override from `settings`, else the
 /// compiled-in constant. Used by every run site so the live prompt and the inspector agree.
@@ -987,6 +994,7 @@ fn role_prompt(conn: &rusqlite::Connection, run: RunKind) -> String {
         RunKind::Chat => (ROLE_CONCIERGE_KEY, agent::CONCIERGE_PROMPT),
         RunKind::Task => (ROLE_EXECUTOR_KEY, agent::EXECUTOR_PROMPT),
         RunKind::Planning => (ROLE_PLANNER_KEY, agent::OWNER_PLANNER_PROMPT),
+        RunKind::Validator => (ROLE_VALIDATOR_KEY, agent::VALIDATOR_PROMPT),
     };
     db::settings::get_or(conn, key, default)
 }

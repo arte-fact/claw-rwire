@@ -32,6 +32,7 @@ pub fn set_role(
         RunKind::Chat => super::ROLE_CONCIERGE_KEY,
         RunKind::Task => super::ROLE_EXECUTOR_KEY,
         RunKind::Planning => super::ROLE_PLANNER_KEY,
+        RunKind::Validator => super::ROLE_VALIDATOR_KEY,
     };
     if let Err(err) = db::settings::set(conn, key, value) {
         super::log_line(format!("bridge: set role prompt failed: {err}"));

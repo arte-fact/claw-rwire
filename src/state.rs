@@ -219,10 +219,12 @@ pub enum RunKind {
     /// A chat turn (the concierge).
     #[default]
     Chat,
-    /// A task execution turn (an assignee in a workspace).
+    /// A task execution turn (a producer in a workspace pipeline).
     Task,
     /// An owner planning turn.
     Planning,
+    /// A validation turn (a reviewer judging a producer's output in a loop step).
+    Validator,
 }
 
 impl RunKind {
@@ -231,6 +233,7 @@ impl RunKind {
             RunKind::Chat => "Chat",
             RunKind::Task => "Task",
             RunKind::Planning => "Planning",
+            RunKind::Validator => "Validator",
         }
     }
 
@@ -239,6 +242,7 @@ impl RunKind {
             RunKind::Chat => "chat",
             RunKind::Task => "task",
             RunKind::Planning => "planning",
+            RunKind::Validator => "validator",
         }
     }
 
@@ -246,11 +250,28 @@ impl RunKind {
         match value {
             "task" => RunKind::Task,
             "planning" => RunKind::Planning,
+            "validator" => RunKind::Validator,
             _ => RunKind::Chat,
         }
     }
 
-    pub const ALL: [RunKind; 3] = [RunKind::Chat, RunKind::Task, RunKind::Planning];
+    pub const ALL: [RunKind; 4] = [
+        RunKind::Chat,
+        RunKind::Task,
+        RunKind::Planning,
+        RunKind::Validator,
+    ];
+}
+
+/// Which run just finished, so the pipeline engine knows how to route the result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunRole {
+    /// A plain stage (or a loop's producer that has no validator after it).
+    Stage,
+    /// A loop step's producer — its validator runs next.
+    Producer,
+    /// A loop step's validator — its `verdict` routes the loop.
+    Validator,
 }
 
 /// The Prompts inspector's read-only assembly: each of the 4 system-prompt layers (empty =

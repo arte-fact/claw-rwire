@@ -194,13 +194,19 @@ can't hide.
 - [x] 129 tests (steps_for default, task_runs, next_action, step_context) + **e2e against a mock
       endpoint**: a Studio task chained through both stages (2 task_runs) → done.
 
-**F-2 — Validation loop (the core)**
-- [ ] `loop` step kind (producer + agent validator + `max_iterations` + `on_exhaust`).
-- [ ] `tools::validator::ValidatorToolbox` — the `verdict(decision, feedback)` tool; `VALIDATOR`
-      run-kind + preamble (settings-overridable).
-- [ ] Engine loop logic: iteration counter, feedback → producer re-run, route on verdict, cap +
-      on-exhaust. Auto-review works end to end.
-- [ ] Tests (verdict routing: pass/revise/reject; cap → on-exhaust; verdict-tool parsing).
+**F-2 — Validation loop (the core)** _(done)_
+- [x] `loop` step kind (producer + agent validator + `max_iterations` + `on_exhaust`); engine
+      runs producer → validator; `RunRole` (Stage/Producer/Validator) on `TaskFinished` routes it.
+- [x] `tools::validator::ValidatorToolbox` — the `verdict(decision, feedback)` tool;
+      `RunKind::Validator` + `VALIDATOR_PROMPT` (settings-overridable via `role.validator`);
+      validator runs **read-only** (workspace `read` + `verdict`). `parse_verdict` reads the
+      decision from the run's invocations.
+- [x] Engine loop logic (`route_verdict`): pass → advance past the loop (done if last); revise →
+      re-run producer with feedback (iteration++ up to `max_iterations`), then `on_exhaust`
+      (`fail` / `awaiting`); reject → terminal. A missing verdict defaults to revise (bounded).
+      `TaskStatus` gained `awaiting`/`rejected`; `tasks.iteration`.
+- [x] 133 tests (verdict parsing + tool validation; next_action) + **e2e (mock endpoint)**:
+      pass → producer→validator(pass)→done; revise → producer/validator ×2 → exhaust → fail.
 
 **F-3 — Human gates + review inbox (user review + action)**
 - [ ] `validator_kind = human`: task parks in `awaiting`; user action (Approve / Request changes

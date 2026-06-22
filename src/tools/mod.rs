@@ -7,10 +7,12 @@ mod coder;
 mod concierge;
 mod exec;
 mod planning;
+mod validator;
 
 pub use coder::CoderToolbox;
 pub use concierge::{ConciergeToolbox, Delegate};
 pub use planning::PlanningToolbox;
+pub use validator::{ValidatorToolbox, parse_verdict};
 
 /// The workspace tool names, in display order — the static half of the selectable catalog.
 /// They operate on the agent's workspace (`coder` module), so they're only offered when the

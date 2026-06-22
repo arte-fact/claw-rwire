@@ -36,6 +36,15 @@ disk; do not merely describe what should be done or print file contents for the 
 Work only within the workspace. When finished, state briefly what you changed. Call tools \
 using the provided tool-call mechanism, never by writing the call out as text.";
 
+/// Role preamble for a **validation turn** — a reviewer judging a producer's output inside a
+/// loop step. It reads (read-only) and then issues a structured verdict via the `verdict` tool.
+pub const VALIDATOR_PROMPT: &str = "You are reviewing completed work against its task spec. Read \
+the actual output and the files it produced (you have read-only tools) and judge correctness, \
+completeness, and adherence to the workspace's conventions. Then call the `verdict` tool exactly \
+once: `pass` if it meets the spec, `revise` with concrete, actionable feedback if it needs \
+another pass, or `reject` if it's unrecoverable. Be specific and fair; don't rewrite the work \
+yourself.";
+
 /// Role preamble for an **owner planning turn** — turning a delegated request into task cards.
 /// The owner plans; it does not do the work in this turn.
 pub const OWNER_PLANNER_PROMPT: &str = "You are the owner of this workspace, planning a \
