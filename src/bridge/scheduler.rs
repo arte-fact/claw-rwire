@@ -13,7 +13,7 @@ use crate::db::pipeline::{self, Step, StepKind};
 use crate::db::resolution::{self, ResolvedInference};
 use crate::db::tasks::{self, Task, TaskStatus};
 use crate::db::{task_runs, workspaces};
-use crate::state::{ActivityKind, App, ChatMessage, MessageRole, RunRole};
+use crate::state::{ActivityKind, App, ChatMessage, MessageRole, ProgressCtx, RunRole};
 use crate::tools::{CompositeToolbox, Toolbox, ValidatorToolbox};
 use crate::workspace;
 
@@ -68,6 +68,7 @@ fn start(conn: &rusqlite::Connection, shared: &SharedServerState, task: Task) {
         return log_line(format!("scheduler: claim {} failed: {err}", task.id));
     }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
+    super::tasks::refresh_detail_if_open(conn, shared, &task.id);
     activity(
         shared,
         task.title.clone(),
@@ -122,7 +123,7 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
         let toolbox = build_toolbox(inference.tools.clone(), Some(workspace_dir), true);
         Ok((inference, messages, toolbox))
     })();
-    spawn_run(task.id.clone(), role, prepared);
+    spawn_run(run_meta(conn, task), role, prepared);
 }
 
 /// Launch a loop step's **validator** run: a read-only review of the producer's `output` that
@@ -163,26 +164,69 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
         ]));
         Ok((inference, messages, toolbox))
     })();
-    spawn_run(task.id.clone(), RunRole::Validator, prepared);
+    spawn_run(run_meta(conn, task), RunRole::Validator, prepared);
 }
 
 type Prepared = Result<(ResolvedInference, Vec<agent::ChatMessage>, Box<dyn Toolbox>), String>;
 
-/// Spawn the worker for a prepared run, or post the preparation failure straight back.
-fn spawn_run(id: String, role: RunRole, prepared: Prepared) {
+/// The run's linked context, minus the agent name (filled from the resolved inference).
+struct RunMeta {
+    task_id: String,
+    task: String,
+    workspace_id: String,
+    workspace: String,
+}
+
+/// Spawn the worker for a prepared run, or post the preparation failure straight back. The
+/// worker streams live tool events back via `AgentProgress` as the turn runs.
+fn spawn_run(meta: RunMeta, role: RunRole, prepared: Prepared) {
     match prepared {
         Ok((inference, messages, toolbox)) => {
+            let ctx = ProgressCtx {
+                task_id: meta.task_id,
+                task: meta.task,
+                agent: inference.agent_name.clone(),
+                workspace_id: meta.workspace_id,
+                workspace: meta.workspace,
+            };
             std::thread::spawn(move || {
-                let result = agent::run_turn(&inference, messages, toolbox.as_ref())
-                    .map_err(|err| err.to_string());
-                send(Command::TaskFinished { id, role, result });
+                // Scope the sink so its borrow of `ctx` ends before we move `ctx.task_id`.
+                let result = {
+                    let mut sink = |event| {
+                        send(Command::AgentProgress {
+                            ctx: ctx.clone(),
+                            event,
+                        });
+                    };
+                    agent::run_turn_streamed(&inference, messages, toolbox.as_ref(), &mut sink)
+                        .map_err(|err| err.to_string())
+                };
+                send(Command::TaskFinished {
+                    id: ctx.task_id,
+                    role,
+                    result,
+                });
             });
         }
         Err(reason) => send(Command::TaskFinished {
-            id,
+            id: meta.task_id,
             role,
             result: Err(reason),
         }),
+    }
+}
+
+/// The run's linked context for a task (workspace name resolved once).
+fn run_meta(conn: &rusqlite::Connection, task: &Task) -> RunMeta {
+    RunMeta {
+        task_id: task.id.clone(),
+        task: task.title.clone(),
+        workspace_id: task.workspace_id.clone(),
+        workspace: workspaces::get(conn, &task.workspace_id)
+            .ok()
+            .flatten()
+            .map(|ws| ws.name)
+            .unwrap_or_else(|| task.workspace_id.clone()),
     }
 }
 
@@ -428,6 +472,7 @@ pub fn finished(
                 } else {
                     launch_validator(conn, &task, step, &output);
                     super::tasks::project_if_active(conn, shared, &task.workspace_id);
+                    super::tasks::refresh_detail_if_open(conn, shared, &task.id);
                 }
             }
         }
@@ -479,6 +524,7 @@ fn route_verdict(
                     launch_current(conn, &again);
                 }
                 super::tasks::project_if_active(conn, shared, &task.workspace_id);
+                super::tasks::refresh_detail_if_open(conn, shared, &task.id);
                 activity(
                     shared,
                     task.title.clone(),
@@ -517,6 +563,7 @@ fn advance_to(
         launch_current(conn, &advanced);
     }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
+    super::tasks::refresh_detail_if_open(conn, shared, &task.id);
     activity(
         shared,
         task.title.clone(),
@@ -542,6 +589,7 @@ fn terminal_finish(
         log_line(format!("scheduler: finish {} failed: {err}", task.id));
     }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
+    super::tasks::refresh_detail_if_open(conn, shared, &task.id);
     if let Some(chat) = &task.origin_chat {
         super::notify::completion(chat, &task.title, status.as_str(), output);
     }
@@ -574,6 +622,7 @@ fn park_awaiting(conn: &rusqlite::Connection, shared: &SharedServerState, task: 
         );
     }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
+    super::tasks::refresh_detail_if_open(conn, shared, &task.id);
     super::review::project_count(conn, shared);
     activity(
         shared,

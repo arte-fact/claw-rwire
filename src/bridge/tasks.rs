@@ -45,11 +45,10 @@ fn columns_for(conn: &rusqlite::Connection, workspace: &str) -> Vec<String> {
         .collect()
 }
 
-/// Project one task's detail (spec + the full run chain) into `App.task_detail` — the detail
-/// view's audit trail. `None` if the task is gone.
-pub fn load_detail(conn: &rusqlite::Connection, shared: &SharedServerState, task_id: &str) {
+/// Build one task's detail (spec + the full run chain). `None` if the task is gone.
+fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::state::TaskDetail> {
     let names = agent_names(conn);
-    let detail = tasks::get(conn, task_id).ok().flatten().map(|task| {
+    tasks::get(conn, task_id).ok().flatten().map(|task| {
         let runs = crate::db::task_runs::list_for_task(conn, task_id)
             .unwrap_or_default()
             .into_iter()
@@ -80,10 +79,34 @@ pub fn load_detail(conn: &rusqlite::Connection, shared: &SharedServerState, task
             status: task.status.as_str().to_owned(),
             runs,
         }
-    });
+    })
+}
+
+/// Project one task's detail into `App.task_detail` — the detail view opening (unconditional).
+pub fn load_detail(conn: &rusqlite::Connection, shared: &SharedServerState, task_id: &str) {
+    let detail = build_detail(conn, task_id);
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_TASK_DETAIL]),
         move |app| app.task_detail = detail,
+    );
+}
+
+/// Re-project the detail **only if it's the one currently open** — so a task finishing /
+/// advancing updates the open detail live without hijacking a different task's view.
+pub fn refresh_detail_if_open(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    task_id: &str,
+) {
+    let detail = build_detail(conn, task_id);
+    let task_id = task_id.to_owned();
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_TASK_DETAIL]),
+        move |app| {
+            if app.task_detail.as_ref().map(|d| d.id.as_str()) == Some(task_id.as_str()) {
+                app.task_detail = detail;
+            }
+        },
     );
 }
 

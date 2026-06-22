@@ -8,7 +8,7 @@ use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
 
 use crate::bridge::{self, Command};
-use crate::state::{App, RunView, TaskDetail};
+use crate::state::{App, LiveEvent, RunView, TaskDetail};
 use crate::ui::workspace::card;
 
 pub fn page() -> ElementBuilder {
@@ -23,6 +23,10 @@ fn body(app: &App) -> ElementBuilder {
     let Some(detail) = &app.task_detail else {
         return el(El::Div).st([St::TextSm, St::TextMuted]).text("Loading…");
     };
+    let running = !matches!(
+        detail.status.as_str(),
+        "done" | "failed" | "rejected" | "cancelled"
+    ) && !detail.awaiting;
     let mut sections = vec![
         back_link(&detail.workspace_id),
         header(detail),
@@ -35,21 +39,33 @@ fn body(app: &App) -> ElementBuilder {
                 .text(&detail.spec),
         ),
     ];
-    // The run chain (the transcript).
-    let mut runs: Vec<ElementBuilder> = detail.runs.iter().map(run_card).collect();
-    if runs.is_empty() {
-        runs.push(
+    // Live activity for THIS task while it's running — the real-time tool feed.
+    if running {
+        let mut live: Vec<&LiveEvent> = app
+            .live_activity
+            .iter()
+            .filter(|e| e.task_id == detail.id)
+            .collect();
+        live.reverse(); // ring is newest-first; show chronological
+        sections.push(live_card(&live));
+    }
+    // The persisted run chain (completed steps).
+    let runs: Vec<ElementBuilder> = detail.runs.iter().map(run_card).collect();
+    if !runs.is_empty() {
+        sections.push(card(
+            "Run chain",
+            el(El::Div)
+                .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+                .append(runs),
+        ));
+    } else if !running {
+        sections.push(card(
+            "Run chain",
             el(El::Div)
                 .st([St::TextSm, St::TextMuted])
-                .text("No runs yet — the task hasn't started."),
-        );
+                .text("No runs recorded."),
+        ));
     }
-    sections.push(card(
-        "Run chain",
-        el(El::Div)
-            .st([St::DisplayFlex, St::FlexCol, St::GapSm])
-            .append(runs),
-    ));
     // Gate actions when parked.
     if detail.awaiting {
         sections.push(actions(&detail.id));
@@ -89,6 +105,46 @@ fn header(detail: &TaskDetail) -> ElementBuilder {
                 .st([St::TextXs, St::TextMuted, St::TextUppercase])
                 .text(&detail.status),
         ])
+}
+
+/// The live tool-activity feed for a running task — what the agent is doing right now.
+fn live_card(events: &[&LiveEvent]) -> ElementBuilder {
+    let mut rows = vec![
+        el(El::Div)
+            .st([St::TextXs, St::TextAccent, St::FontSemibold])
+            .text("▶ Running — live activity"),
+    ];
+    if events.is_empty() {
+        rows.push(
+            el(El::Div)
+                .st([St::TextXs, St::TextMuted])
+                .text("The agent is working… (tool activity will appear here)"),
+        );
+    }
+    for event in events {
+        let (mark, color) = if event.in_progress {
+            ("▷", St::TextMuted)
+        } else if event.ok {
+            ("✓", St::TextAccent)
+        } else {
+            ("✗", St::TextLow)
+        };
+        rows.push(
+            el(El::Div)
+                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::TextXs])
+                .append([
+                    el(El::Span).st([color]).text(mark),
+                    el(El::Span).st([St::TextMuted]).text(&event.time),
+                    el(El::Span).st([St::TextHigh]).text(&event.action),
+                ]),
+        );
+    }
+    card(
+        "Live",
+        el(El::Div)
+            .st([St::DisplayFlex, St::FlexCol, St::GapXs])
+            .append(rows),
+    )
 }
 
 fn run_card(run: &RunView) -> ElementBuilder {

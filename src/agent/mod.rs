@@ -6,7 +6,7 @@
 
 mod client;
 
-pub use client::{context_length, list_models, run_turn};
+pub use client::{context_length, list_models, run_turn, run_turn_streamed};
 
 use serde::{Deserialize, Serialize};
 
@@ -155,6 +155,19 @@ pub struct ToolInvocation {
     pub result: String,
     pub ok: bool,
 }
+
+/// A live event emitted *during* a turn, so the UI can show real-time agent activity rather
+/// than only the final result. `run_turn` calls the [`EventSink`] with these as they happen.
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    /// A tool call is about to run (`arguments` is the raw JSON the model sent).
+    ToolStarted { name: String, arguments: String },
+    /// The current tool call finished (matched to the in-flight one for the run).
+    ToolFinished { ok: bool },
+}
+
+/// The sink `run_turn` calls with live events. Pass a no-op closure (`&mut |_| {}`) to disable.
+pub type EventSink<'a> = &'a mut dyn FnMut(AgentEvent);
 
 /// The outcome of a full turn: the tools it ran (in order), the final reply text, and the
 /// `prompt_tokens` the endpoint reported for the final request — the real context size, used

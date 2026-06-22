@@ -110,6 +110,37 @@ pub enum ActivityKind {
     Failed,
 }
 
+/// One live agent action (a tool call, in flight or finished) for the real-time feed — the
+/// Activity board's live section and a running task's detail. Carries linked context (agent ·
+/// workspace · task) so the feed can deep-link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveEvent {
+    /// `HH:MM:SS` (UTC).
+    pub time: String,
+    pub agent: String,
+    pub workspace_id: String,
+    pub workspace: String,
+    pub task_id: String,
+    pub task: String,
+    /// What the agent is doing / did — e.g. "writing src/main.rs" → "wrote src/main.rs".
+    pub action: String,
+    /// True while the tool is running; false once it's finished.
+    pub in_progress: bool,
+    /// The tool's success, once finished.
+    pub ok: bool,
+}
+
+/// The linked context for a run's live events — resolved once when the run launches and carried
+/// on every `AgentProgress` so the bridge never re-queries per event (Tier 2 streams fast).
+#[derive(Debug, Clone)]
+pub struct ProgressCtx {
+    pub task_id: String,
+    pub task: String,
+    pub agent: String,
+    pub workspace_id: String,
+    pub workspace: String,
+}
+
 /// One captured operational log line for the Logs viewer (newest first, capped).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogLine {
@@ -551,6 +582,9 @@ pub struct App {
     pub running: Vec<String>,
     /// Recent run-lifecycle events for the Activity board (newest first, capped).
     pub activity: Vec<ActivityEntry>,
+    /// Live agent actions (tool calls in flight / just finished), newest first, capped — the
+    /// real-time feed for the Activity board + a running task's detail.
+    pub live_activity: Vec<LiveEvent>,
     /// Recent operational log lines for the Logs viewer (newest first, capped).
     pub logs: Vec<LogLine>,
     /// Whether the mobile slide-in nav drawer is open. The desktop sidebar is always

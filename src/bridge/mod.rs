@@ -225,6 +225,12 @@ pub enum Command {
     },
     /// Periodic scheduler scan: launch the next ready task in each idle workspace lane.
     SchedulerTick,
+    /// A live agent event during a task run (a tool call starting/finishing, or streamed text),
+    /// folded into the real-time activity feed. Carries pre-resolved linked context.
+    AgentProgress {
+        ctx: crate::state::ProgressCtx,
+        event: agent::AgentEvent,
+    },
     /// A worker thread's finished task run, posted back for the bridge to persist + project.
     /// `role` tells the engine whether a stage / producer / validator just ran (Phase F).
     TaskFinished {
@@ -679,6 +685,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         ),
         Command::CancelTask { id } => tasks::cancel(conn, shared, &id),
         Command::SchedulerTick => scheduler::tick(conn, shared),
+        Command::AgentProgress { ctx, event } => live_progress(shared, ctx, event),
         Command::TaskFinished { id, role, result } => {
             scheduler::finished(conn, shared, &id, role, result)
         }
@@ -1401,6 +1408,94 @@ fn push_activity(app: &mut App, title: String, kind: ActivityKind, detail: Strin
         },
     );
     app.activity.truncate(ACTIVITY_CAP);
+}
+
+/// Cap on the live agent-activity ring.
+const LIVE_CAP: usize = 60;
+
+/// Fold a live agent event (a tool call starting/finishing) into `App.live_activity` — the
+/// real-time feed. `ToolStarted` adds an in-flight entry; `ToolFinished` flips the matching one.
+fn live_progress(
+    shared: &SharedServerState,
+    ctx: crate::state::ProgressCtx,
+    event: agent::AgentEvent,
+) {
+    use agent::AgentEvent;
+    match event {
+        AgentEvent::ToolStarted { name, arguments } => {
+            let entry = crate::state::LiveEvent {
+                time: now_hms(),
+                agent: ctx.agent,
+                workspace_id: ctx.workspace_id,
+                workspace: ctx.workspace,
+                task_id: ctx.task_id,
+                task: ctx.task,
+                action: describe_tool(&name, &arguments),
+                in_progress: true,
+                ok: false,
+            };
+            shared.update_shared_changed::<App>(
+                ChangeSet::from_fields(&[App::FIELD_LIVE_ACTIVITY]),
+                move |app| {
+                    app.live_activity.insert(0, entry);
+                    app.live_activity.truncate(LIVE_CAP);
+                },
+            );
+        }
+        AgentEvent::ToolFinished { ok } => {
+            let task_id = ctx.task_id;
+            shared.update_shared_changed::<App>(
+                ChangeSet::from_fields(&[App::FIELD_LIVE_ACTIVITY]),
+                move |app| {
+                    if let Some(entry) = app
+                        .live_activity
+                        .iter_mut()
+                        .find(|e| e.task_id == task_id && e.in_progress)
+                    {
+                        entry.in_progress = false;
+                        entry.ok = ok;
+                    }
+                },
+            );
+        }
+    }
+}
+
+/// A short neutral phrase for a tool call (the UI adds the ▷/✓/✗ prefix from the flags).
+fn describe_tool(name: &str, arguments: &str) -> String {
+    let value: serde_json::Value =
+        serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null);
+    let path = value.get("path").and_then(serde_json::Value::as_str);
+    match name {
+        "write" => format!("write {}", path.unwrap_or("a file")),
+        "edit" => format!("edit {}", path.unwrap_or("a file")),
+        "read" => format!("read {}", path.unwrap_or("a file")),
+        "bash" => {
+            let cmd = value
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let snippet: String = cmd.chars().take(48).collect();
+            format!("bash: {snippet}")
+        }
+        "verdict" => "review".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+/// `HH:MM:SS` (UTC) — seconds matter for the live feed (events land seconds apart).
+fn now_hms() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!(
+        "{:02}:{:02}:{:02}",
+        (secs / 3600) % 24,
+        (secs / 60) % 60,
+        secs % 60
+    )
 }
 
 fn title_of(chats: &[ChatSummary], chat_id: &str) -> String {

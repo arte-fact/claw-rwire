@@ -9,7 +9,10 @@ use serde_json::{Value, json};
 use crate::db::resolution::ResolvedInference;
 use crate::tools::{ToolDef, Toolbox};
 
-use super::{AgentError, ChatMessage, Completion, ToolCall, ToolInvocation, TurnResult};
+use super::{
+    AgentError, AgentEvent, ChatMessage, Completion, EventSink, ToolCall, ToolInvocation,
+    TurnResult,
+};
 
 /// Fail fast when the host is unreachable or the wrong scheme is configured.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -26,8 +29,19 @@ const RUN_BUDGET: Duration = Duration::from_secs(180);
 /// round/budget caps hit). Returns the tools it ran and the final reply.
 pub fn run_turn(
     inf: &ResolvedInference,
+    messages: Vec<ChatMessage>,
+    toolbox: &dyn Toolbox,
+) -> Result<TurnResult, AgentError> {
+    run_turn_streamed(inf, messages, toolbox, &mut |_| {})
+}
+
+/// As [`run_turn`], but reports live progress through `sink` (tool calls as they run, and —
+/// later — streamed text) so callers can surface real-time agent activity.
+pub fn run_turn_streamed(
+    inf: &ResolvedInference,
     mut messages: Vec<ChatMessage>,
     toolbox: &dyn Toolbox,
+    sink: EventSink,
 ) -> Result<TurnResult, AgentError> {
     let defs = toolbox.defs();
     let mut invocations = Vec::new();
@@ -50,7 +64,12 @@ pub fn run_turn(
             completion.tool_calls.clone(),
         ));
         for call in &completion.tool_calls {
+            sink(AgentEvent::ToolStarted {
+                name: call.function.name.clone(),
+                arguments: call.function.arguments.clone(),
+            });
             let outcome = toolbox.call(&call.function.name, &call.function.arguments);
+            sink(AgentEvent::ToolFinished { ok: outcome.ok });
             invocations.push(ToolInvocation {
                 name: call.function.name.clone(),
                 arguments: call.function.arguments.clone(),
