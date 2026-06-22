@@ -154,13 +154,151 @@ fn parse_completion(body: &str) -> Result<Completion, AgentError> {
         .next()
         .map(|choice| choice.message)
         .ok_or(AgentError::Empty)?;
+    let content = message
+        .content
+        .map(|content| content.trim().to_owned())
+        .filter(|content| !content.is_empty());
+    let tool_calls = message.tool_calls.unwrap_or_default();
+    // Some models emit tool calls as *text* in the content instead of the structured
+    // `tool_calls` field (e.g. deepseek's `…invoke name="x"…` markup). When the structured
+    // field is empty, recover them from the content so the loop actually runs them rather
+    // than leaking the markup to the user as a final answer.
+    if tool_calls.is_empty()
+        && let Some(text) = &content
+    {
+        let recovered = recover_leaked_tool_calls(text);
+        if !recovered.is_empty() {
+            return Ok(Completion {
+                content: leading_prose(text),
+                tool_calls: recovered,
+            });
+        }
+    }
     Ok(Completion {
-        content: message
-            .content
-            .map(|content| content.trim().to_owned())
-            .filter(|content| !content.is_empty()),
-        tool_calls: message.tool_calls.unwrap_or_default(),
+        content,
+        tool_calls,
     })
+}
+
+/// Recover tool calls a model serialised into assistant text instead of the `tool_calls`
+/// field: the `…invoke name="x"…parameter name="k"…>v</…` markup (deepseek "DSML" and the
+/// Anthropic-style `<invoke>` form) and `<tool_call>{json}</tool_call>` blocks.
+fn recover_leaked_tool_calls(content: &str) -> Vec<ToolCall> {
+    let mut calls = recover_invoke_markup(content);
+    calls.extend(recover_tool_call_json(content));
+    for (index, call) in calls.iter_mut().enumerate() {
+        call.id = format!("recovered_{index}");
+    }
+    calls
+}
+
+/// Parse `invoke name="NAME"` blocks, each with `parameter name="KEY" …>VALUE</…` children,
+/// into tool calls. Delimiter-agnostic — keys on the `invoke`/`parameter` markers, so it
+/// works across the `<｜｜DSML｜｜…>` and plain `<invoke>` variants.
+fn recover_invoke_markup(content: &str) -> Vec<ToolCall> {
+    const MARK: &str = "invoke name=\"";
+    let starts: Vec<usize> = content.match_indices(MARK).map(|(i, _)| i).collect();
+    let mut calls = Vec::new();
+    for (idx, &start) in starts.iter().enumerate() {
+        let name_at = start + MARK.len();
+        let Some(quote) = content[name_at..].find('"') else {
+            continue;
+        };
+        let name = content[name_at..name_at + quote].trim();
+        if name.is_empty() {
+            continue;
+        }
+        let block_end = starts.get(idx + 1).copied().unwrap_or(content.len());
+        let block = &content[name_at + quote..block_end];
+        calls.push(ToolCall {
+            id: String::new(),
+            kind: "function".to_owned(),
+            function: super::FunctionCall {
+                name: name.to_owned(),
+                arguments: recover_params(block),
+            },
+        });
+    }
+    calls
+}
+
+/// Pull `parameter name="KEY" …>VALUE</…` pairs out of one invoke block into a JSON object.
+/// Values are taken between the parameter tag's `>` and the next `<` — fine for the paths /
+/// urls / strings these calls carry.
+fn recover_params(block: &str) -> String {
+    const MARK: &str = "parameter name=\"";
+    let mut obj = serde_json::Map::new();
+    let mut rest = block;
+    while let Some(pos) = rest.find(MARK) {
+        let after = &rest[pos + MARK.len()..];
+        let Some(quote) = after.find('"') else {
+            break;
+        };
+        let key = after[..quote].to_owned();
+        let tail = &after[quote..];
+        let Some(gt) = tail.find('>') else {
+            break;
+        };
+        let value_region = &tail[gt + 1..];
+        let value_end = value_region.find('<').unwrap_or(value_region.len());
+        obj.insert(
+            key,
+            Value::String(value_region[..value_end].trim().to_owned()),
+        );
+        rest = &value_region[value_end..];
+    }
+    Value::Object(obj).to_string()
+}
+
+/// Parse `<tool_call>{ "name": …, "arguments": … }</tool_call>` blocks (Hermes/Qwen style).
+fn recover_tool_call_json(content: &str) -> Vec<ToolCall> {
+    const OPEN: &str = "<tool_call>";
+    const CLOSE: &str = "</tool_call>";
+    let mut calls = Vec::new();
+    let mut rest = content;
+    while let Some(open) = rest.find(OPEN) {
+        let after = &rest[open + OPEN.len()..];
+        let Some(close) = after.find(CLOSE) else {
+            break;
+        };
+        if let Ok(value) = serde_json::from_str::<Value>(after[..close].trim())
+            && let Some(name) = value.get("name").and_then(Value::as_str)
+        {
+            let arguments = value
+                .get("arguments")
+                .or_else(|| value.get("parameters"))
+                .map(|args| {
+                    args.as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| args.to_string())
+                })
+                .unwrap_or_else(|| "{}".to_owned());
+            calls.push(ToolCall {
+                id: String::new(),
+                kind: "function".to_owned(),
+                function: super::FunctionCall {
+                    name: name.to_owned(),
+                    arguments,
+                },
+            });
+        }
+        rest = &after[close..];
+    }
+    calls
+}
+
+/// The prose before any leaked tool-call markup, so a recovered turn keeps the model's
+/// preamble (if any) and drops the machinery. `None` if nothing meaningful precedes it.
+fn leading_prose(content: &str) -> Option<String> {
+    let cut = ["invoke name=\"", "<tool_call>", "<｜｜", "<tool_calls"]
+        .iter()
+        .filter_map(|marker| content.find(marker))
+        .min()
+        .unwrap_or(content.len());
+    let prose = content[..cut]
+        .trim_end_matches(['<', '\n', ' ', '\t'])
+        .trim();
+    (!prose.is_empty()).then(|| prose.to_owned())
 }
 
 fn truncate(text: &str, max_chars: usize) -> String {
@@ -226,5 +364,65 @@ mod tests {
         assert_eq!(completion.tool_calls.len(), 1);
         assert_eq!(completion.tool_calls[0].function.name, "search");
         assert_eq!(completion.tool_calls[0].id, "call_1");
+    }
+
+    #[test]
+    fn recovers_deepseek_dsml_tool_calls_leaked_into_content() {
+        // The exact shape deepseek-v4-flash emitted in the real session (fullwidth `｜`).
+        let leaked = "Now let me read the files:\n\
+            <｜｜DSML｜｜tool_calls>\n\
+            <｜｜DSML｜｜invoke name=\"read\">\n\
+            <｜｜DSML｜｜parameter name=\"path\" string=\"true\">projects/isola/src/main.rs</｜｜DSML｜｜parameter>\n\
+            </｜｜DSML｜｜invoke>\n\
+            <｜｜DSML｜｜invoke name=\"fetch\">\n\
+            <｜｜DSML｜｜parameter name=\"url\" string=\"true\">https://example.com/x.rs</｜｜DSML｜｜parameter>\n\
+            </｜｜DSML｜｜invoke>\n\
+            </｜｜DSML｜｜tool_calls>";
+        let calls = recover_leaked_tool_calls(leaked);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].function.name, "read");
+        assert_eq!(
+            calls[0].function.arguments,
+            r#"{"path":"projects/isola/src/main.rs"}"#
+        );
+        assert_eq!(calls[1].function.name, "fetch");
+        assert_eq!(
+            calls[1].function.arguments,
+            r#"{"url":"https://example.com/x.rs"}"#
+        );
+        // Recovered calls get synthetic, distinct ids.
+        assert_eq!(calls[0].id, "recovered_0");
+        assert_eq!(calls[1].id, "recovered_1");
+    }
+
+    #[test]
+    fn parse_completion_recovers_leaked_calls_and_keeps_preamble() {
+        let body = "{\"choices\":[{\"message\":{\"content\":\"Reading it now:\\n\
+            <｜｜DSML｜｜invoke name=\\\"read\\\">\
+            <｜｜DSML｜｜parameter name=\\\"path\\\" string=\\\"true\\\">a.txt</｜｜DSML｜｜parameter>\
+            </｜｜DSML｜｜invoke>\"}}]}";
+        let completion = parse_completion(body).unwrap();
+        assert_eq!(
+            completion.tool_calls.len(),
+            1,
+            "leaked call must be recovered"
+        );
+        assert_eq!(completion.tool_calls[0].function.name, "read");
+        assert_eq!(completion.content.as_deref(), Some("Reading it now:"));
+    }
+
+    #[test]
+    fn recovers_hermes_style_tool_call_json() {
+        let leaked = r#"<tool_call>{"name": "write", "arguments": {"path": "x.md", "content": "hi"}}</tool_call>"#;
+        let calls = recover_leaked_tool_calls(leaked);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "write");
+        assert!(calls[0].function.arguments.contains("\"path\":\"x.md\""));
+    }
+
+    #[test]
+    fn ordinary_prose_is_not_mistaken_for_a_tool_call() {
+        let calls = recover_leaked_tool_calls("Here is a normal answer with no tool markup.");
+        assert!(calls.is_empty());
     }
 }

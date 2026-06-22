@@ -212,7 +212,12 @@ pub fn append_tool(
     result: &str,
     ok: bool,
 ) -> rusqlite::Result<()> {
-    let note = format!("[tool:{name}] {}", truncate(result, 2000));
+    // Phrase the replay as a past-tense *observation*, not a call. The model sees prior
+    // tool turns in its context; the earlier `[tool:{name}] …` framing read like an
+    // invocation, and the model learned to imitate it — emitting `[tool:ask] …` as prose
+    // instead of a real tool call, so those delegations silently no-op'd. "result of" reads
+    // as something that already happened.
+    let note = format!("[result of {name}]\n{}", truncate(result, 2000));
     conn.execute(
         "INSERT INTO web_messages (messaging_group_id, direction, sender, body, kind, created_at)
          VALUES (?1, 'out', 'claw', ?2, 'tool', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
@@ -311,7 +316,7 @@ mod tests {
         // The model view folds the tool into a note between the chat turns.
         let turns = load_model_turns(&conn, "c1").expect("model");
         assert_eq!(turns.len(), 3);
-        assert!(turns[1].text.starts_with("[tool:search]"));
+        assert!(turns[1].text.starts_with("[result of search]"));
     }
 
     #[test]
