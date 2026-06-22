@@ -108,12 +108,19 @@
 - [x] `cargo fmt --check` · `clippy -D` · `cargo test` (90) green + e2e (seeded task →
       auto-ran → `failed` with the endpoint error in `result`, not re-run)
 
-**C-3 — orchestration + recurrence (todo):**
-- [ ] Tools: concierge `ask(workspace, request)` → owner **planning turn** with
-      `create_task` / `list_tasks` / `cancel_task` (auto-route by member persona)
-- [ ] Concierge notify turn → message in the global chat + Activity entry
-- [ ] Recurrence (cron → `next_run`) + blockers in the create form; edit drawer
-- [ ] Global dashboard: the all-lanes parallel view
+**C-3 — orchestration + recurrence:**
+- [x] **C-3a — delegation backbone (done):** owner `PlanningToolbox`
+      (`create_task` / `list_tasks` / `cancel_task`, scoped to one workspace; assignee = a
+      persona-described member enum; `schedule` + `blockers` args) + concierge
+      `ConciergeToolbox` `ask(workspace, request)` (workspace enum from each brief) →
+      `Command::Ask` → `bridge/orchestrate.rs` runs the owner's planning turn on a worker →
+      `Command::AskPlanned` re-projects the lane (guarded) + Activity. `tasks::add_blocker`;
+      `resolve_for_agent`. 102 tests; boot smoke-tested.
+- [ ] **C-3b** — concierge **notify turn** on task completion → message in `origin_chat`
+      (global thread) + Activity entry (the `origin_chat` is already threaded through `Ask`)
+- [ ] **C-3c** — recurrence (cron → `next_run`, skip-to-next-slot) + blockers in the create
+      form; the per-card **edit drawer** (retitle / rewrite spec / reassign / schedule / cancel)
+- [ ] **C-3d** — global dashboard: the all-lanes parallel view
 
 ---
 

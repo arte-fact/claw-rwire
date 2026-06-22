@@ -28,11 +28,24 @@ pub fn lane_views(conn: &rusqlite::Connection, workspace: &str) -> Vec<TaskView>
 }
 
 /// Project a workspace's lane into `App.tasks` (unconditionally — the caller is acting on
-/// the active workspace). Background updates use the guarded path in the scheduler.
+/// the active workspace). Background updates use [`project_if_active`].
 pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
     let views = lane_views(conn, workspace);
     shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_TASKS]), move |app| {
         app.tasks = views
+    });
+}
+
+/// Re-project a lane into `App.tasks`, but only when the operator is actually viewing that
+/// workspace — a background lane (a scheduler run, a planning turn) must not clobber the
+/// lane on screen.
+pub fn project_if_active(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
+    let views = lane_views(conn, workspace);
+    let workspace = workspace.to_owned();
+    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_TASKS]), move |app| {
+        if app.active_workspace.as_deref() == Some(workspace.as_str()) {
+            app.tasks = views;
+        }
     });
 }
 

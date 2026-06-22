@@ -16,6 +16,7 @@ use rwire::{ChangeSet, SharedServerState};
 
 mod admin;
 mod files;
+mod orchestrate;
 mod scheduler;
 mod tasks;
 
@@ -25,8 +26,8 @@ use crate::id;
 use crate::mcp::{self, McpClient};
 use crate::state::{ActivityEntry, ActivityKind, App, ChatSummary, LogLine, MessageRole};
 use crate::tools::{
-    CoderToolbox, CompositeToolbox, EmptyToolbox, FilteredToolbox, McpToolbox, Toolbox,
-    WORKSPACE_TOOLS,
+    CoderToolbox, CompositeToolbox, ConciergeToolbox, Delegate, EmptyToolbox, FilteredToolbox,
+    McpToolbox, Toolbox, WORKSPACE_TOOLS,
 };
 use crate::workspace;
 
@@ -157,6 +158,20 @@ pub enum Command {
     TaskFinished {
         id: String,
         result: Result<agent::TurnResult, String>,
+    },
+    /// The concierge delegated a request to a workspace owner (the `ask` tool): run the
+    /// owner's planning turn, which queues task cards.
+    Ask {
+        workspace: String,
+        request: String,
+        origin_chat: String,
+    },
+    /// The owner's planning turn finished: re-project the lane and record the plan. The
+    /// notify-on-completion is the task scheduler's job; this just surfaces the planning.
+    AskPlanned {
+        workspace: String,
+        origin_chat: String,
+        result: Result<String, String>,
     },
     /// Save a workspace's `AGENT.md` brief (the Overview editor).
     SaveBrief {
@@ -489,6 +504,16 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::CancelTask { id } => tasks::cancel(conn, shared, &id),
         Command::SchedulerTick => scheduler::tick(conn, shared),
         Command::TaskFinished { id, result } => scheduler::finished(conn, shared, &id, result),
+        Command::Ask {
+            workspace,
+            request,
+            origin_chat,
+        } => orchestrate::ask(conn, &workspace, &request, &origin_chat),
+        Command::AskPlanned {
+            workspace,
+            origin_chat,
+            result,
+        } => orchestrate::planned(conn, shared, &workspace, &origin_chat, result),
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)
         }
@@ -740,14 +765,36 @@ fn dispatch_native(
     );
 
     // Build the run's toolbox from the agent's tool selection: web MCP tools and/or the
-    // workspace coder tools, each filtered to the enabled set.
-    let toolbox = build_toolbox(inference.tools.clone(), workspace_dir);
+    // workspace coder tools, each filtered to the enabled set. The chat agent is the
+    // concierge, so it also gets the `ask` delegation tool over every workspace.
+    let selected = build_toolbox(inference.tools.clone(), workspace_dir);
+    let concierge = ConciergeToolbox::new(chat_id, delegates(conn));
+    let toolbox: Box<dyn Toolbox> =
+        Box::new(CompositeToolbox::new(vec![Box::new(concierge), selected]));
     let chat = chat_id.to_owned();
     std::thread::spawn(move || {
         let result =
             agent::run_turn(&inference, messages, toolbox.as_ref()).map_err(|err| err.to_string());
         send(Command::AgentReply { chat, result });
     });
+}
+
+/// The concierge's delegation targets: every workspace, with the first line of its `AGENT.md`
+/// brief as the routing description the model picks by.
+fn delegates(conn: &rusqlite::Connection) -> Vec<Delegate> {
+    workspaces::list(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|ws| {
+            let brief = workspace::read_agent_md(&workspace::dir_for(&data_dir(), &ws.id))
+                .unwrap_or_default();
+            Delegate {
+                id: ws.id,
+                name: ws.name,
+                brief,
+            }
+        })
+        .collect()
 }
 
 /// Scaffold a run's workspace dir (best-effort) and compose its layered system prompt:

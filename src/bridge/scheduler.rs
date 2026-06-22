@@ -61,7 +61,7 @@ fn start(conn: &rusqlite::Connection, shared: &SharedServerState, task: Task) {
     if let Err(err) = tasks::set_status(conn, &task.id, TaskStatus::Running) {
         return log_line(format!("scheduler: claim {} failed: {err}", task.id));
     }
-    project_lane(conn, shared, &task.workspace_id);
+    super::tasks::project_if_active(conn, shared, &task.workspace_id);
     activity(
         shared,
         task.title.clone(),
@@ -147,20 +147,8 @@ pub fn finished(
     if let Err(err) = tasks::finish(conn, id, status, Some(&stored)) {
         log_line(format!("scheduler: finish {id} failed: {err}"));
     }
-    project_lane(conn, shared, &task.workspace_id);
+    super::tasks::project_if_active(conn, shared, &task.workspace_id);
     activity(shared, task.title, kind, detail);
-}
-
-/// Re-project a lane into `App.tasks`, but only when the operator is actually viewing that
-/// workspace — a background lane must not clobber the lane on screen.
-fn project_lane(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
-    let views = super::tasks::lane_views(conn, workspace);
-    let workspace = workspace.to_owned();
-    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_TASKS]), move |app| {
-        if app.active_workspace.as_deref() == Some(workspace.as_str()) {
-            app.tasks = views;
-        }
-    });
 }
 
 fn activity(shared: &SharedServerState, title: String, kind: ActivityKind, detail: String) {

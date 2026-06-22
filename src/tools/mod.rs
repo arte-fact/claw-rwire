@@ -4,9 +4,13 @@
 //! workspace coder tools (`coder`).
 
 mod coder;
+mod concierge;
 mod exec;
+mod planning;
 
 pub use coder::CoderToolbox;
+pub use concierge::{ConciergeToolbox, Delegate};
+pub use planning::PlanningToolbox;
 
 /// The workspace tool names, in display order — the static half of the selectable catalog.
 /// They operate on the agent's workspace (`coder` module), so they're only offered when the

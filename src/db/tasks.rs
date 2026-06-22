@@ -192,6 +192,16 @@ pub fn next_ready(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Opt
     .optional()
 }
 
+/// Record that `task_id` is blocked by `blocked_by` (both must be in the same workspace —
+/// the caller enforces that). Idempotent on the composite primary key.
+pub fn add_blocker(conn: &Connection, task_id: &str, blocked_by: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO task_blockers (task_id, blocked_by) VALUES (?1, ?2)",
+        params![task_id, blocked_by],
+    )?;
+    Ok(())
+}
+
 /// Mark a task finished with a terminal status and its result text, stamping `last_run`.
 pub fn finish(
     conn: &Connection,
