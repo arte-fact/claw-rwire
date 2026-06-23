@@ -58,49 +58,54 @@ fn panes() -> ElementBuilder {
         .md([St::FlexRow])
         .append([
             // Tree pane: a fixed, comfortable width on md+, with the divider on its right edge.
+            // This plain Div is the scroll container — the `#[renderer]` inside is wrapped in an
+            // inline span that can't bound the flex height, so the scroll lives here.
             el(El::Div)
                 .style(
                     Style::new()
                         .min_height("0")
                         .min_width("0")
-                        .set("flex", "0 0 22rem"),
+                        .set("flex", "0 0 22rem")
+                        .set("overflow-y", "auto"),
                 )
-                .st([St::DisplayFlex, St::FlexCol])
                 .md([St::BorderRDefault])
                 .append([browser()]),
-            // Editor pane: takes the remaining width.
+            // Editor pane: takes the remaining width; likewise the scroll container.
             el(El::Div)
                 .style(
                     Style::new()
                         .min_height("0")
                         .min_width("0")
-                        .set("flex", "1 1 0"),
+                        .set("flex", "1 1 0")
+                        .set("overflow-y", "auto"),
                 )
-                .st([St::DisplayFlex, St::FlexCol])
                 .append([editor()]),
         ])
 }
 
-/// A borderless pane: a header bar (single bottom divider) above a body that fills the pane. The
-/// surrounding block (`panes`) supplies the outer border; this just structures one column.
+/// A borderless pane: a header bar above a body. The pane Div (in `panes`) is the scroll
+/// container; the header is pinned with `position: sticky` so it stays while the body scrolls.
 fn panel(header: ElementBuilder, body: ElementBuilder) -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().min_height("0"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol])
-        .append([
-            el(El::Div)
-                .st([
-                    St::DisplayFlex,
-                    St::ItemsCenter,
-                    St::JustifyBetween,
-                    St::GapMd,
-                    St::PxMd,
-                    St::PySm,
-                    St::BorderBSubtle,
-                ])
-                .append([header]),
-            body,
+        .st([St::DisplayFlex, St::FlexCol])
+        .append([sticky_header(header), body])
+}
+
+/// A header bar that stays pinned to the top of its scrolling pane.
+fn sticky_header(header: ElementBuilder) -> ElementBuilder {
+    el(El::Div)
+        .style(Style::new().set("position", "sticky").set("top", "0"))
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::JustifyBetween,
+            St::GapMd,
+            St::PxMd,
+            St::PySm,
+            St::BorderBSubtle,
+            St::BgSurface,
         ])
+        .append([header])
 }
 
 // ── Browser ────────────────────────────────────────────────────────────────────
@@ -125,14 +130,7 @@ fn browser(app: &App) -> ElementBuilder {
     body_children.push(tree_inner(app));
 
     let body = el(El::Div)
-        .style(Style::new().min_height("0"))
-        .st([
-            St::Flex1,
-            St::DisplayFlex,
-            St::FlexCol,
-            St::OverflowYAuto,
-            St::PSm,
-        ])
+        .st([St::DisplayFlex, St::FlexCol, St::PSm])
         .append(body_children);
     panel(header, body)
 }
@@ -466,10 +464,7 @@ fn editor(app: &App) -> ElementBuilder {
         let controls = el(El::Div)
             .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::FlexShrink0])
             .append([mode_toggle(true)]);
-        let body = el(El::Div)
-            .style(Style::new().min_height("0"))
-            .st([St::Flex1, St::OverflowYAuto, St::PMd])
-            .append([rendered_view(open)]);
+        let body = el(El::Div).st([St::PMd]).append([rendered_view(open)]);
         return panel(header_row([filename, controls]), body);
     }
 
@@ -486,26 +481,14 @@ fn editor(app: &App) -> ElementBuilder {
         ]);
     el(El::Form)
         .on(Ev::Submit, save_file())
-        .style(Style::new().min_height("0"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol])
+        .st([St::DisplayFlex, St::FlexCol])
         .append([
-            el(El::Div)
-                .st([
-                    St::DisplayFlex,
-                    St::ItemsCenter,
-                    St::JustifyBetween,
-                    St::GapMd,
-                    St::PxMd,
-                    St::PySm,
-                    St::BorderBSubtle,
-                ])
-                .append([header_row([filename, controls])]),
+            sticky_header(header_row([filename, controls])),
             el(El::Textarea)
                 .id(&field_id)
                 .attr("name", "content")
                 .attr("spellcheck", "false")
                 .st([
-                    St::Flex1,
                     St::WFull,
                     St::PMd,
                     St::BgApp,
@@ -517,8 +500,8 @@ fn editor(app: &App) -> ElementBuilder {
                     Style::new()
                         .set("outline", "none")
                         .set("border", "none")
-                        .set("resize", "none")
-                        .min_height("0")
+                        .set("resize", "vertical")
+                        .set("min-height", "24rem")
                         .set("white-space", "pre"),
                 )
                 .text(&open.content),
@@ -601,9 +584,8 @@ fn lang_for_path(path: &str) -> Option<&'static str> {
 /// A centered placeholder body for the editor panel (no file / not editable).
 fn placeholder(text: &str) -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().min_height("0"))
+        .style(Style::new().set("min-height", "12rem"))
         .st([
-            St::Flex1,
             St::DisplayFlex,
             St::ItemsCenter,
             St::JustifyCenter,
