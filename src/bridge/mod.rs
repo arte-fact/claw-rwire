@@ -471,6 +471,7 @@ pub fn spawn(shared: Arc<SharedServerState>, central_db: PathBuf) {
     // before the projection lands shows blank data, and a client-side tab switch —
     // which doesn't touch those fields — never re-renders it (needs a reload).
     boot(&conn, &shared);
+    log_sandbox_mode();
     connect_web_mcp();
     admin::project_tool_catalog(&shared);
     std::thread::spawn(move || {
@@ -479,6 +480,24 @@ pub fn spawn(shared: Arc<SharedServerState>, central_db: PathBuf) {
         }
     });
     scheduler::spawn_ticker();
+}
+
+/// Resolve `CLAW_SANDBOX` once at startup and announce the command-execution mode. If `isola` is
+/// requested but isn't compiled in for this build/platform, say so and note we fall back to host
+/// execution (rather than failing runs). The exec routing itself lands in a later subtask.
+fn log_sandbox_mode() {
+    use crate::sandbox::SandboxMode;
+    let requested = SandboxMode::resolve(env("CLAW_SANDBOX").ok().as_deref());
+    match requested {
+        SandboxMode::Host => {}
+        SandboxMode::Isola if requested.effective() == SandboxMode::Isola => {
+            log_line("sandbox: isola mode — agent commands run inside the workspace sandbox");
+        }
+        SandboxMode::Isola => log_line(
+            "sandbox: CLAW_SANDBOX=isola requested but isola support isn't compiled in \
+             (build with --features sandbox on Linux); running commands on the host",
+        ),
+    }
 }
 
 /// Prime the projection from the DB and select the most recent thread. On first

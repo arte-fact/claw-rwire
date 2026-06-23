@@ -10,6 +10,7 @@ mod diff;
 mod env_file;
 mod id;
 mod mcp;
+mod sandbox;
 mod schedule;
 mod state;
 mod tools;

@@ -17,5 +17,15 @@ thiserror = "2"
 # a blocking pure-Rust client (rustls TLS) fits with no async runtime there.
 ureq = { version = "2", features = ["json"] }
 
+# Optional rootless sandbox for agent `bash` execution (R6), behind the `sandbox` feature and
+# Linux-only. First-party crate (../isola, we own it).
+[target.'cfg(target_os = "linux")'.dependencies]
+isola = { path = "../isola", optional = true }
+
+[features]
+# Compile in isola-backed command execution. Off by default → `bash` runs on the host (today's
+# behaviour); `CLAW_SANDBOX=isola` only takes effect when built with this feature on Linux.
+sandbox = ["dep:isola"]
+
 [dev-dependencies]
 tempfile = "3"
