@@ -9,7 +9,7 @@ use rwire::{El, ElementBuilder, Ev, HandlerSpec, St, el, handler, icons, rendere
 use rwire_components::Text;
 
 use crate::bridge::{self, Command};
-use crate::state::{App, FileEntry, FileKind};
+use crate::state::{App, FileKind, FileNode};
 use crate::ui::widgets::{accent_submit, action_icon, icon_button, submit};
 
 /// The Files section of a workspace view: the error banner + the two-pane browser/editor,
@@ -104,7 +104,7 @@ fn browser(app: &App) -> ElementBuilder {
     if let Some(kind) = &app.files_creating {
         body_children.push(create_row(kind, &app.files_new_name));
     }
-    body_children.push(listing_inner(app));
+    body_children.push(tree_inner(app));
 
     let body = el(El::Div)
         .style(Style::new().min_height("0").set("max-height", "26rem"))
@@ -213,100 +213,102 @@ fn create_row(kind: &str, value: &str) -> ElementBuilder {
         ])
 }
 
-/// The directory entries (and a `..` row when not at root).
-fn listing_inner(app: &App) -> ElementBuilder {
-    let mut rows: Vec<ElementBuilder> = Vec::new();
-    if !app.files_path.is_empty() {
-        rows.push(up_row(parent_of(&app.files_path)));
-    }
-    if app.files_entries.is_empty() && app.files_creating.is_none() {
-        rows.push(
-            el(El::Div)
-                .st([St::PMd, St::TextXs, St::TextMuted, St::TextCenter])
-                .text("empty folder"),
-        );
+/// The workspace tree: indented rows for the root and the children of each expanded folder. A
+/// folder row toggles its expansion (and selects it as the create target); a file row opens it.
+fn tree_inner(app: &App) -> ElementBuilder {
+    if app.files_tree.is_empty() && app.files_creating.is_none() {
+        return el(El::Div)
+            .st([St::PMd, St::TextXs, St::TextMuted, St::TextCenter])
+            .text("empty workspace");
     }
     let rename = app.files_rename.as_deref();
     let pending = app.files_pending_delete.as_deref();
     let open = app.files_open.as_ref().map(|f| f.path.as_str());
-    for entry in &app.files_entries {
-        let path = join(&app.files_path, &entry.name);
-        rows.push(if rename == Some(path.as_str()) {
-            rename_row(&entry.name)
-        } else {
-            entry_row(
-                entry,
-                &path,
-                pending == Some(path.as_str()),
-                open == Some(path.as_str()),
-            )
-        });
-    }
+    let selected = app.files_path.as_str();
+    let rows: Vec<ElementBuilder> = app
+        .files_tree
+        .iter()
+        .map(|node| {
+            let row = if rename == Some(node.path.as_str()) {
+                rename_row(&node.name)
+            } else {
+                tree_row(
+                    node,
+                    selected == node.path,
+                    pending == Some(node.path.as_str()),
+                    open == Some(node.path.as_str()),
+                )
+            };
+            indent(node.depth, row)
+        })
+        .collect();
     el(El::Div).st([St::DisplayFlex, St::FlexCol]).append(rows)
 }
 
-/// The `..` parent row.
-fn up_row(parent: String) -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "button")
-        .data("path", &parent)
-        .on(Ev::Click, navigate())
-        .style(
-            Style::new()
-                .set("font", "inherit")
-                .set("border", "none")
-                .set("background", "transparent")
-                .set("text-align", "left"),
-        )
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::PyXs,
-            St::PxSm,
-            St::RoundedSm,
-            St::TextSm,
-            St::TextMuted,
-            St::CursorPointer,
-        ])
-        .hover([St::TextHigh, St::BgSubtle])
-        .append([
-            icons::icon_sized(icons::Icon::ArrowUp, 14),
-            el(El::Span).text(".."),
-        ])
+/// Indent a tree row by its depth.
+fn indent(depth: usize, row: ElementBuilder) -> ElementBuilder {
+    if depth == 0 {
+        return row;
+    }
+    el(El::Div)
+        .style(Style::new().set("padding-left", &format!("{:.2}rem", depth as f32 * 0.85)))
+        .append([row])
 }
 
-/// One entry: a folder (descend) or file (open) on the left, rename/delete on the right.
-/// `active` is the open file (highlighted); `pending_delete` swaps to a `delete?` confirm.
-fn entry_row(entry: &FileEntry, path: &str, pending_delete: bool, active: bool) -> ElementBuilder {
-    let (icon, icon_color, handler, suffix) = match entry.kind {
-        FileKind::Dir => (
-            icons::Icon::Folder,
-            St::TextAccent,
-            navigate(),
-            "/".to_owned(),
-        ),
-        FileKind::File => (
-            icons::Icon::FileText,
-            St::TextLow,
-            open_file(),
-            String::new(),
-        ),
-        FileKind::Symlink => (
-            icons::Icon::FileText,
-            St::TextLow,
-            open_file(),
-            " →".to_owned(),
-        ),
+/// One tree row: a folder (toggle + select) or file (open) on the left, rename/delete on the
+/// right. `selected` highlights the create-target folder; `active` the open file.
+fn tree_row(node: &FileNode, selected: bool, pending_delete: bool, active: bool) -> ElementBuilder {
+    let is_dir = node.kind == FileKind::Dir;
+    let (handler, suffix) = match node.kind {
+        FileKind::Dir => (toggle_dir(), "/".to_owned()),
+        FileKind::Symlink => (open_file(), " →".to_owned()),
+        FileKind::File => (open_file(), String::new()),
     };
-    let name_color = if active {
+    let highlight = (is_dir && selected) || (!is_dir && active);
+    let name_color = if highlight {
         St::TextAccent
     } else {
         St::TextDefault
     };
-    let open = el(El::Button)
+
+    let mut leading: Vec<ElementBuilder> = Vec::new();
+    if is_dir {
+        let chevron = if node.expanded {
+            icons::Icon::ChevronDown
+        } else {
+            icons::Icon::ChevronRight
+        };
+        leading.push(
+            el(El::Span)
+                .st([St::TextLow])
+                .append([icons::icon_sized(chevron, 12)]),
+        );
+        leading.push(
+            el(El::Span)
+                .st([St::TextAccent])
+                .append([icons::icon_sized(icons::Icon::Folder, 14)]),
+        );
+    } else {
+        leading.push(
+            el(El::Span)
+                .st([St::TextLow])
+                .append([icons::icon_sized(icons::Icon::FileText, 14)]),
+        );
+    }
+    leading.push(
+        el(El::Span)
+            .st([St::Truncate])
+            .text(&format!("{}{suffix}", node.name)),
+    );
+    leading.push(
+        el(El::Span)
+            .st([St::TextLow, St::TextXs, St::FlexShrink0])
+            .text(&size_label(node)),
+    );
+
+    let open_btn = el(El::Button)
         .attr("type", "button")
-        .data("path", path)
+        .data("path", &node.path)
         .on(Ev::Click, handler)
         .style(
             Style::new()
@@ -326,28 +328,23 @@ fn entry_row(entry: &FileEntry, path: &str, pending_delete: bool, active: bool) 
             St::CursorPointer,
             St::Truncate,
         ])
-        .append([
-            el(El::Span)
-                .st([icon_color])
-                .append([icons::icon_sized(icon, 14)]),
-            el(El::Span)
-                .st([St::Truncate])
-                .text(&format!("{}{suffix}", entry.name)),
-            el(El::Span)
-                .st([St::TextLow, St::TextXs, St::FlexShrink0])
-                .text(&size_label(entry)),
-        ]);
+        .append(leading);
 
     let actions = if pending_delete {
         vec![
             el(El::Span).st([St::TextXs, St::TextError]).text("delete?"),
-            row_action(icons::Icon::Trash, confirm_delete(), Some(path), true),
+            row_action(icons::Icon::Trash, confirm_delete(), Some(&node.path), true),
             row_action(icons::Icon::Close, cancel_delete(), None, false),
         ]
     } else {
         vec![
-            row_action(icons::Icon::FileText, start_rename(), Some(path), false),
-            row_action(icons::Icon::Trash, ask_delete(), Some(path), false),
+            row_action(
+                icons::Icon::FileText,
+                start_rename(),
+                Some(&node.path),
+                false,
+            ),
+            row_action(icons::Icon::Trash, ask_delete(), Some(&node.path), false),
         ]
     };
     let mut row = el(El::Div)
@@ -360,10 +357,10 @@ fn entry_row(entry: &FileEntry, path: &str, pending_delete: bool, active: bool) 
             St::RoundedSm,
         ])
         .hover([St::BgSubtle]);
-    if active {
+    if highlight {
         row = row.st([St::BgSubtle]);
     }
-    row.append([open].into_iter().chain(actions))
+    row.append([open_btn].into_iter().chain(actions))
 }
 
 /// The inline rename editor for one row: an (uncontrolled) input + confirm/cancel.
@@ -626,11 +623,11 @@ fn parent_of(path: &str) -> String {
         .map_or(String::new(), |(p, _)| p.to_owned())
 }
 
-fn size_label(entry: &FileEntry) -> String {
-    if entry.kind == FileKind::Dir {
+fn size_label(node: &FileNode) -> String {
+    if node.kind == FileKind::Dir {
         return String::new();
     }
-    let size = entry.size;
+    let size = node.size;
     if size >= 1 << 20 {
         format!("{}M", size >> 20)
     } else if size >= 1 << 10 {
@@ -642,11 +639,22 @@ fn size_label(entry: &FileEntry) -> String {
 
 // ── Handlers ────────────────────────────────────────────────────────────────────
 
-/// Navigate into the directory named by the clicked element's `data-path`.
+/// Navigate to (select) the directory named by the clicked element's `data-path` — the breadcrumb.
 #[handler]
 fn navigate(app: &mut App, ctx: &EventContext) {
     if let (Some(workspace), Some(path)) = (app.files_workspace.clone(), ctx.data("path")) {
         bridge::send(Command::ListDir {
+            workspace,
+            path: path.to_owned(),
+        });
+    }
+}
+
+/// Toggle a folder's expansion (and select it as the create target) — a tree folder-row click.
+#[handler]
+fn toggle_dir(app: &mut App, ctx: &EventContext) {
+    if let (Some(workspace), Some(path)) = (app.files_workspace.clone(), ctx.data("path")) {
+        bridge::send(Command::ToggleDir {
             workspace,
             path: path.to_owned(),
         });
@@ -742,7 +750,8 @@ fn submit_rename(app: &mut App, ctx: &EventContext) {
     if name.is_empty() {
         return;
     }
-    let to = join(&app.files_path, &name);
+    // Rename within the entry's own directory (it may not be the selected dir).
+    let to = join(&parent_of(&from), &name);
     bridge::send(Command::RenameEntry {
         workspace,
         from,

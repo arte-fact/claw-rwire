@@ -466,6 +466,21 @@ pub struct FileEntry {
     pub size: u64,
 }
 
+/// One node in the Files view's tree (a flattened, depth-tagged listing — root plus the children
+/// of every expanded folder, in display order). The bridge owns which folders are expanded.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileNode {
+    pub name: String,
+    /// Workspace-relative path (the create/open/rename/delete target).
+    pub path: String,
+    pub kind: FileKind,
+    pub size: u64,
+    /// Nesting depth from the root (0 = top level) — the row's indent.
+    pub depth: usize,
+    /// For a directory: whether it's expanded (its children follow). Always false for files.
+    pub expanded: bool,
+}
+
 /// The file open in the Files view's right pane. `editable` is false for binary/oversized
 /// files, with `note` explaining why; the editor is then replaced by that note.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -590,8 +605,12 @@ pub struct App {
     pub files_workspace: Option<String>,
     /// Files view: the current directory, relative to the workspace root (`""` = root).
     pub files_path: String,
-    /// Files view: entries of `files_path` (dirs first).
+    /// Files view: entries of `files_path` (dirs first). Legacy flat listing (kept for callers
+    /// that still read it); the browser renders [`Self::files_tree`].
     pub files_entries: Vec<FileEntry>,
+    /// Files view: the workspace tree — root plus the children of every expanded folder, flattened
+    /// with depth for indented rendering.
+    pub files_tree: Vec<FileNode>,
     /// Files view: the file open in the editor pane, if any.
     pub files_open: Option<OpenFile>,
     /// Files view: editor mode — `true` = rendered View (Markdown / highlighted code), `false` =

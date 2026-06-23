@@ -303,8 +303,13 @@ pub enum Command {
         content: String,
     },
     // ── Files view (browse + edit a workspace) ──
-    /// List a directory in a workspace (the `/w/:wid/files` tab + breadcrumb navigation).
+    /// Select a directory + (re)project the tree (the `/w/:wid/files` tab + breadcrumb navigation).
     ListDir {
+        workspace: String,
+        path: String,
+    },
+    /// Toggle a folder's expansion in the tree (and select it as the create target).
+    ToggleDir {
         workspace: String,
         path: String,
     },
@@ -772,6 +777,9 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             files::save_brief(conn, shared, &workspace, &content)
         }
         Command::ListDir { workspace, path } => files::list_dir(conn, shared, &workspace, &path),
+        Command::ToggleDir { workspace, path } => {
+            files::toggle_dir(conn, shared, &workspace, &path)
+        }
         Command::OpenFile { workspace, path } => files::open_file(conn, shared, &workspace, &path),
         Command::WriteFile {
             workspace,
