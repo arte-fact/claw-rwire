@@ -39,7 +39,7 @@ closing out**.
 | **M2** ✅ | UX quick win | R5 create side panel (+ T5 field) | S–M | below — **done** |
 | **M3** ✅ | Files | R1 file tree + view/edit editor | M | below — **done** |
 | **M4** ✅ | Review depth | R2 rich review (tools + diff + thread) | M–L | below — **done** |
-| **M5** 🟡 | Sandboxing | R6 isola P0 + P1 | L | below — **P0/U1 + P1/T1-T2 done**; T3-T6 need a provisioned host |
+| **M5** 🟢 | Sandboxing | R6 isola P0 + P1 | L | below — **P1 T1-T6 + U1 done** (feature-gated, off by default); U2 bench + live verify need a provisioned host |
 | **M6** 🟡 | Delegation | R3 reviewable planning step | L | below — **core done**; auto-approve toggle TODO |
 | **M7** | Parallelism (stretch) | isola P2 + per-run worktrees | XL | isola roadmap P2 |
 

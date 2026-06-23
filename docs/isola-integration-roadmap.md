@@ -11,10 +11,26 @@
 > - **P1/T2 — DONE** (claw): `src/sandbox.rs` `SandboxMode {Host, Isola}` + `resolve` /
 >   `isola_available` / `effective`; the bridge logs the mode at startup and warns+falls-back when
 >   isola is requested but not compiled in. 4 tests; gate green with the feature on **and** off.
-> - **P0/U2 (benchmark), P1/T3–T6 — TODO.** T3 (exec routing + the timeout→reap edge) and T6's
->   gated integration test need a host with `isola setup-host` run (AppArmor + `/etc/subuid`,
->   one-time `sudo`), which isn't available in the dev sandbox — so those land where a provisioned
->   host exists.
+> - **P1/T3 — DONE** (claw): `exec::ExecStrategy {Host, Isola}` + `bash_in`; `run_isola` execs via
+>   `exec_command_captured`. The wall-clock cap is enforced with **in-sandbox `timeout`** (exit 124
+>   → timeout note), which sidesteps the host-side-reap problem entirely. `CoderToolbox` carries the
+>   strategy; file tools still use the host workspace dir.
+> - **P1/T4 — DONE (with one deviation)** (claw): `build_toolbox` picks the strategy from
+>   `SandboxMode` (`exec_strategy_for`: sandbox name = workspace id, mount = workspace dir).
+>   **Deviation:** an unhealthy/missing sandbox is *reported* ("create it first"), not lazily
+>   auto-created — full inline provisioning (rootfs extract + plugin provision) was out of scope for
+>   this pass; create out-of-band with `isola create <workspace-id>`. Lazy auto-provision is a
+>   follow-up.
+> - **P1/T5 — DONE** (claw): `admin::delete_workspace` destroys the workspace's sandbox first
+>   (best-effort, feature-gated, idempotent) so rootfs dirs don't leak.
+> - **P1/T6 — DONE (compiles; host-gated)** (claw): an `#[ignore]` integration test asserts the
+>   safety contract (workspace write visible on host; stray `$HOME` write does **not** escape;
+>   in-sandbox timeout reaps). Compiles under `--features sandbox`; **runs only on a provisioned
+>   host** via `CLAW_TEST_SANDBOX=… CLAW_TEST_MOUNT=… cargo test --features sandbox -- --ignored`.
+> - **TODO:** **P0/U2** (warm-exec benchmark) and the **lazy auto-provision** deviation above; both
+>   need a host with `isola setup-host` run (AppArmor + `/etc/subuid`, one-time `sudo`), which the
+>   dev sandbox lacks. Live end-to-end verification (a real task's `bash` containing a stray write)
+>   likewise awaits a provisioned host.
 
 
 Turns the [isola spike](isola-sandbox-evaluation.md) verdict into a phased, PR-sized plan. Goal:
