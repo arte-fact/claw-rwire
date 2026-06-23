@@ -164,6 +164,8 @@ pub enum AgentEvent {
     ToolStarted { name: String, arguments: String },
     /// The current tool call finished (matched to the in-flight one for the run).
     ToolFinished { ok: bool },
+    /// A chunk of streamed reply text (Tier 2 — emitted only on the streaming path).
+    Text(String),
 }
 
 /// The sink `run_turn` calls with live events. Pass a no-op closure (`&mut |_| {}`) to disable.

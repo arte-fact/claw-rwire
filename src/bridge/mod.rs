@@ -1474,7 +1474,36 @@ fn live_progress(
                 },
             );
         }
+        AgentEvent::Text(chunk) => {
+            let task_id = ctx.task_id;
+            shared.update_shared_changed::<App>(
+                ChangeSet::from_fields(&[App::FIELD_LIVE_TEXT]),
+                move |app| match app.live_text.iter_mut().find(|t| t.task_id == task_id) {
+                    Some(buffer) => buffer.text.push_str(&chunk),
+                    None => {
+                        app.live_text.push(crate::state::LiveText {
+                            task_id,
+                            text: chunk,
+                        });
+                        // Bound it — a handful of concurrently-streaming tasks at most.
+                        if app.live_text.len() > 8 {
+                            app.live_text.remove(0);
+                        }
+                    }
+                },
+            );
+        }
     }
+}
+
+/// Clear a task's streamed-text buffer — its run is now recorded, so the persisted transcript
+/// (not the live typewriter) is the source of truth.
+pub(super) fn clear_live_text(shared: &SharedServerState, task_id: &str) {
+    let task_id = task_id.to_owned();
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_LIVE_TEXT]),
+        move |app| app.live_text.retain(|t| t.task_id != task_id),
+    );
 }
 
 /// A short neutral phrase for a tool call (the UI adds the ▷/✓/✗ prefix from the flags).

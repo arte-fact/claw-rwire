@@ -47,7 +47,13 @@ fn body(app: &App) -> ElementBuilder {
             .filter(|e| e.task_id == detail.id)
             .collect();
         live.reverse(); // ring is newest-first; show chronological
-        sections.push(live_card(&live));
+        let streaming = app
+            .live_text
+            .iter()
+            .find(|t| t.task_id == detail.id)
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        sections.push(live_card(&live, streaming));
     }
     // The persisted run chain (completed steps).
     let runs: Vec<ElementBuilder> = detail.runs.iter().map(run_card).collect();
@@ -107,18 +113,19 @@ fn header(detail: &TaskDetail) -> ElementBuilder {
         ])
 }
 
-/// The live tool-activity feed for a running task — what the agent is doing right now.
-fn live_card(events: &[&LiveEvent]) -> ElementBuilder {
+/// The live tool-activity feed for a running task — what the agent is doing right now, plus its
+/// reply as it streams in (the typewriter).
+fn live_card(events: &[&LiveEvent], streaming: &str) -> ElementBuilder {
     let mut rows = vec![
         el(El::Div)
             .st([St::TextXs, St::TextAccent, St::FontSemibold])
             .text("▶ Running — live activity"),
     ];
-    if events.is_empty() {
+    if events.is_empty() && streaming.is_empty() {
         rows.push(
             el(El::Div)
                 .st([St::TextXs, St::TextMuted])
-                .text("The agent is working… (tool activity will appear here)"),
+                .text("The agent is working… (activity will appear here)"),
         );
     }
     for event in events {
@@ -137,6 +144,19 @@ fn live_card(events: &[&LiveEvent]) -> ElementBuilder {
                     el(El::Span).st([St::TextMuted]).text(&event.time),
                     el(El::Span).st([St::TextHigh]).text(&event.action),
                 ]),
+        );
+    }
+    // The reply as it streams in (the typewriter), with a caret while it grows.
+    if !streaming.is_empty() {
+        rows.push(
+            el(El::Div)
+                .style(
+                    Style::new()
+                        .set("white-space", "pre-wrap")
+                        .set("word-break", "break-word"),
+                )
+                .st([St::TextXs, St::TextHigh, St::PtXs])
+                .text(&format!("{streaming}▌")),
         );
     }
     card(

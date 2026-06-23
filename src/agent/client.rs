@@ -10,8 +10,8 @@ use crate::db::resolution::ResolvedInference;
 use crate::tools::{ToolDef, Toolbox};
 
 use super::{
-    AgentError, AgentEvent, ChatMessage, Completion, EventSink, ToolCall, ToolInvocation,
-    TurnResult,
+    AgentError, AgentEvent, ChatMessage, Completion, EventSink, FunctionCall, ToolCall,
+    ToolInvocation, TurnResult,
 };
 
 /// Fail fast when the host is unreachable or the wrong scheme is configured.
@@ -23,6 +23,9 @@ const MAX_TOOL_ROUNDS: usize = 6;
 /// Whole-turn wall-clock budget across all rounds + tool calls. Once spent, the next
 /// round is asked to answer in text (no tools) so the turn always terminates.
 const RUN_BUDGET: Duration = Duration::from_secs(180);
+/// Minimum gap between streamed-text flushes — coalesces tokens so the UI re-renders a few
+/// times a second, not once per token.
+const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Run a full turn: send the conversation with the toolbox's tools, execute any calls
 /// the model makes, feed results back, and repeat until it answers in prose (or the
@@ -32,16 +35,29 @@ pub fn run_turn(
     messages: Vec<ChatMessage>,
     toolbox: &dyn Toolbox,
 ) -> Result<TurnResult, AgentError> {
-    run_turn_streamed(inf, messages, toolbox, &mut |_| {})
+    run_loop(inf, messages, toolbox, &mut |_| {}, false)
 }
 
-/// As [`run_turn`], but reports live progress through `sink` (tool calls as they run, and —
-/// later — streamed text) so callers can surface real-time agent activity.
+/// As [`run_turn`], but reports live progress through `sink` (tool calls as they run, and the
+/// reply text as it streams) so callers can surface real-time agent activity.
 pub fn run_turn_streamed(
+    inf: &ResolvedInference,
+    messages: Vec<ChatMessage>,
+    toolbox: &dyn Toolbox,
+    sink: EventSink,
+) -> Result<TurnResult, AgentError> {
+    run_loop(inf, messages, toolbox, sink, true)
+}
+
+/// The shared tool loop. `stream` selects the streaming completion (token-by-token text +
+/// `Text` events) vs the plain blocking one; tool events fire either way (to a no-op sink for
+/// non-streaming callers).
+fn run_loop(
     inf: &ResolvedInference,
     mut messages: Vec<ChatMessage>,
     toolbox: &dyn Toolbox,
     sink: EventSink,
+    stream: bool,
 ) -> Result<TurnResult, AgentError> {
     let defs = toolbox.defs();
     let mut invocations = Vec::new();
@@ -50,7 +66,7 @@ pub fn run_turn_streamed(
     for _ in 0..MAX_TOOL_ROUNDS {
         let within_budget = started.elapsed() < RUN_BUDGET;
         let tools: &[ToolDef] = if within_budget { &defs } else { &[] };
-        let completion = complete_turn(inf, &messages, tools)?;
+        let completion = complete(inf, &messages, tools, sink, stream)?;
 
         if completion.tool_calls.is_empty() || !within_budget {
             return Ok(TurnResult {
@@ -81,12 +97,27 @@ pub fn run_turn_streamed(
     }
 
     // Round cap reached with tools still pending — one final no-tools call for an answer.
-    let completion = complete_turn(inf, &messages, &[])?;
+    let completion = complete(inf, &messages, &[], sink, stream)?;
     Ok(TurnResult {
         invocations,
         reply: completion.content,
         prompt_tokens: completion.prompt_tokens,
     })
+}
+
+/// Pick the streaming or blocking completion for one round.
+fn complete(
+    inf: &ResolvedInference,
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+    sink: EventSink,
+    stream: bool,
+) -> Result<Completion, AgentError> {
+    if stream {
+        complete_turn_streamed(inf, messages, tools, sink)
+    } else {
+        complete_turn(inf, messages, tools)
+    }
 }
 
 /// One model round. Sends `tools` only when non-empty (an endpoint without tool support
@@ -118,6 +149,168 @@ fn complete_turn(
         }),
         Err(ureq::Error::Transport(transport)) => Err(AgentError::Http(transport.to_string())),
     }
+}
+
+/// One model round, **streamed**: the same request with `stream: true`, parsed token-by-token
+/// so reply text emits as `Text` events. Falls back to the blocking [`complete_turn`] if the
+/// endpoint doesn't actually stream (no SSE data), so tasks never break on an odd server.
+fn complete_turn_streamed(
+    inf: &ResolvedInference,
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+    sink: EventSink,
+) -> Result<Completion, AgentError> {
+    let url = format!("{}/chat/completions", inf.base_url.trim_end_matches('/'));
+    let mut request = http().post(&url).set("Content-Type", "application/json");
+    if let Some(key) = &inf.api_key {
+        request = request.set("Authorization", &format!("Bearer {key}"));
+    }
+    let mut body = json!({
+        "model": inf.model,
+        "messages": messages,
+        "stream": true,
+        "stream_options": { "include_usage": true },
+    });
+    if !tools.is_empty() {
+        body["tools"] = Value::Array(tools.iter().map(tool_wire).collect());
+    }
+    match request.send_json(body) {
+        Ok(response) => {
+            let (completion, saw_stream) = parse_stream(response.into_reader(), sink)?;
+            if saw_stream {
+                Ok(completion)
+            } else {
+                // The server ignored `stream` — do a normal blocking round instead.
+                complete_turn(inf, messages, tools)
+            }
+        }
+        Err(ureq::Error::Status(status, response)) => Err(AgentError::Api {
+            status,
+            body: truncate(&response.into_string().unwrap_or_default(), 500),
+        }),
+        Err(ureq::Error::Transport(transport)) => Err(AgentError::Http(transport.to_string())),
+    }
+}
+
+/// Accumulate an SSE stream into a [`Completion`], emitting reply text as `Text` events (batched
+/// ~[`FLUSH_INTERVAL`] to avoid render storms). The `bool` is whether it looked like a stream
+/// at all (any `data:` line) — `false` signals the caller to fall back to blocking.
+fn parse_stream(
+    reader: impl std::io::Read,
+    sink: EventSink,
+) -> Result<(Completion, bool), AgentError> {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(reader);
+    let mut content = String::new();
+    let mut tools: Vec<ToolAccum> = Vec::new();
+    let mut prompt_tokens = None;
+    let mut pending = String::new();
+    let mut last_flush = Instant::now();
+    let mut saw_stream = false;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|err| AgentError::Http(err.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        let Some(data) = line.trim().strip_prefix("data:") else {
+            continue;
+        };
+        saw_stream = true;
+        let data = data.trim();
+        if data == "[DONE]" {
+            break;
+        }
+        let Ok(chunk) = serde_json::from_str::<StreamChunk>(data) else {
+            continue;
+        };
+        if let Some(usage) = chunk.usage {
+            prompt_tokens = usage.prompt_tokens.or(prompt_tokens);
+        }
+        for choice in chunk.choices {
+            if let Some(text) = choice.delta.content {
+                content.push_str(&text);
+                pending.push_str(&text);
+                if last_flush.elapsed() >= FLUSH_INTERVAL {
+                    sink(AgentEvent::Text(std::mem::take(&mut pending)));
+                    last_flush = Instant::now();
+                }
+            }
+            for delta in choice.delta.tool_calls.unwrap_or_default() {
+                let slot = tool_slot(&mut tools, delta.index);
+                if let Some(id) = delta.id.filter(|id| !id.is_empty()) {
+                    slot.id = id;
+                }
+                if let Some(function) = delta.function {
+                    if let Some(name) = function.name.filter(|name| !name.is_empty()) {
+                        slot.name = name;
+                    }
+                    if let Some(arguments) = function.arguments {
+                        slot.arguments.push_str(&arguments);
+                    }
+                }
+            }
+        }
+    }
+    if !pending.is_empty() {
+        sink(AgentEvent::Text(pending));
+    }
+    let content = {
+        let trimmed = content.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    };
+    let tool_calls: Vec<ToolCall> = tools
+        .into_iter()
+        .enumerate()
+        .filter(|(_, accum)| !accum.name.is_empty())
+        .map(|(index, accum)| ToolCall {
+            id: if accum.id.is_empty() {
+                format!("call_{index}")
+            } else {
+                accum.id
+            },
+            kind: "function".to_owned(),
+            function: FunctionCall {
+                name: accum.name,
+                arguments: accum.arguments,
+            },
+        })
+        .collect();
+    // Same leaked-tool-call recovery as the blocking path (deepseek markup in the content).
+    if tool_calls.is_empty()
+        && let Some(text) = &content
+    {
+        let recovered = recover_leaked_tool_calls(text);
+        if !recovered.is_empty() {
+            return Ok((
+                Completion {
+                    content: leading_prose(text),
+                    tool_calls: recovered,
+                    prompt_tokens,
+                },
+                saw_stream,
+            ));
+        }
+    }
+    Ok((
+        Completion {
+            content,
+            tool_calls,
+            prompt_tokens,
+        },
+        saw_stream,
+    ))
+}
+
+/// Grow `tools` to cover `index` and return the slot to accumulate into.
+fn tool_slot(tools: &mut Vec<ToolAccum>, index: usize) -> &mut ToolAccum {
+    if index >= tools.len() {
+        tools.resize_with(index + 1, ToolAccum::default);
+    }
+    &mut tools[index]
 }
 
 /// Discover the model ids an endpoint advertises (`GET /v1/models`), sorted + deduped —
@@ -391,6 +584,56 @@ struct ResponseMessage {
 struct Usage {
     #[serde(default)]
     prompt_tokens: Option<u32>,
+}
+
+// ── Streaming (SSE) deltas ──────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct StreamChunk {
+    #[serde(default)]
+    choices: Vec<StreamChoice>,
+    #[serde(default)]
+    usage: Option<Usage>,
+}
+
+#[derive(Deserialize)]
+struct StreamChoice {
+    #[serde(default)]
+    delta: Delta,
+}
+
+#[derive(Deserialize, Default)]
+struct Delta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCallDelta>>,
+}
+
+#[derive(Deserialize)]
+struct ToolCallDelta {
+    #[serde(default)]
+    index: usize,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<FnDelta>,
+}
+
+#[derive(Deserialize, Default)]
+struct FnDelta {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+/// Accumulates a streamed tool call across its deltas (name first, arguments in pieces).
+#[derive(Default)]
+struct ToolAccum {
+    id: String,
+    name: String,
+    arguments: String,
 }
 
 #[derive(Deserialize)]

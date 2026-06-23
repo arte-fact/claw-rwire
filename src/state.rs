@@ -134,6 +134,14 @@ pub struct LiveEvent {
     pub ok: bool,
 }
 
+/// The streamed reply text for a currently-running task — grows token-by-token as the model
+/// types, shown in the task detail's Live card. Cleared when the run is recorded.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LiveText {
+    pub task_id: String,
+    pub text: String,
+}
+
 /// The linked context for a run's live events — resolved once when the run launches and carried
 /// on every `AgentProgress` so the bridge never re-queries per event (Tier 2 streams fast).
 #[derive(Debug, Clone)]
@@ -591,6 +599,8 @@ pub struct App {
     /// Live agent actions (tool calls in flight / just finished), newest first, capped — the
     /// real-time feed for the Activity board + a running task's detail.
     pub live_activity: Vec<LiveEvent>,
+    /// Streamed reply text per currently-running task (the typewriter), shown in the detail.
+    pub live_text: Vec<LiveText>,
     /// Recent operational log lines for the Logs viewer (newest first, capped).
     pub logs: Vec<LogLine>,
     /// Whether the mobile slide-in nav drawer is open. The desktop sidebar is always
