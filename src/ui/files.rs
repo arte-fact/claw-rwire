@@ -18,7 +18,8 @@ use crate::ui::widgets::{accent_submit, action_icon, icon_button, submit};
 /// route's, and a header is provided by the workspace shell.
 pub fn section() -> ElementBuilder {
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapLg])
+        .style(Style::new().min_height("0"))
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapMd])
         .append([error_banner(), panes()])
 }
 
@@ -40,28 +41,13 @@ fn error_banner(app: &App) -> ElementBuilder {
     }
 }
 
-/// Browser (left) + editor (right); stacks on mobile, side-by-side on `md+` with the
-/// editor given the larger share.
+/// One bordered block holding the tree (narrow, left) and the editor (right), separated by a
+/// single divider. Fills the available height; each pane scrolls internally. Stacks on mobile.
 fn panes() -> ElementBuilder {
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapLg, St::ItemsStart])
-        .md([St::FlexRow])
-        .append([
-            el(El::Div)
-                .style(Style::new().min_width("0").set("flex", "1 1 0"))
-                .st([St::WFull])
-                .append([browser()]),
-            el(El::Div)
-                .style(Style::new().min_width("0").set("flex", "1.6 1 0"))
-                .st([St::WFull])
-                .append([editor()]),
-        ])
-}
-
-/// A framed panel: header bar + body, used for both panes.
-fn panel(header: ElementBuilder, body: ElementBuilder) -> ElementBuilder {
-    el(El::Div)
+        .style(Style::new().min_height("0"))
         .st([
+            St::Flex1,
             St::DisplayFlex,
             St::FlexCol,
             St::BorderDefault,
@@ -69,6 +55,38 @@ fn panel(header: ElementBuilder, body: ElementBuilder) -> ElementBuilder {
             St::BgSurface,
             St::OverflowHidden,
         ])
+        .md([St::FlexRow])
+        .append([
+            // Tree pane: a narrow fixed width on md+, with the divider on its right edge.
+            el(El::Div)
+                .style(
+                    Style::new()
+                        .min_height("0")
+                        .min_width("0")
+                        .set("flex", "0 0 16rem"),
+                )
+                .st([St::DisplayFlex, St::FlexCol])
+                .md([St::BorderRDefault])
+                .append([browser()]),
+            // Editor pane: takes the remaining width.
+            el(El::Div)
+                .style(
+                    Style::new()
+                        .min_height("0")
+                        .min_width("0")
+                        .set("flex", "1 1 0"),
+                )
+                .st([St::DisplayFlex, St::FlexCol])
+                .append([editor()]),
+        ])
+}
+
+/// A borderless pane: a header bar (single bottom divider) above a body that fills the pane. The
+/// surrounding block (`panes`) supplies the outer border; this just structures one column.
+fn panel(header: ElementBuilder, body: ElementBuilder) -> ElementBuilder {
+    el(El::Div)
+        .style(Style::new().min_height("0"))
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol])
         .append([
             el(El::Div)
                 .st([
@@ -107,8 +125,14 @@ fn browser(app: &App) -> ElementBuilder {
     body_children.push(tree_inner(app));
 
     let body = el(El::Div)
-        .style(Style::new().min_height("0").set("max-height", "26rem"))
-        .st([St::DisplayFlex, St::FlexCol, St::OverflowYAuto, St::PSm])
+        .style(Style::new().min_height("0"))
+        .st([
+            St::Flex1,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::OverflowYAuto,
+            St::PSm,
+        ])
         .append(body_children);
     panel(header, body)
 }
@@ -443,8 +467,8 @@ fn editor(app: &App) -> ElementBuilder {
             .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::FlexShrink0])
             .append([mode_toggle(true)]);
         let body = el(El::Div)
-            .style(Style::new().min_height("0").set("max-height", "32rem"))
-            .st([St::OverflowYAuto, St::PMd])
+            .style(Style::new().min_height("0"))
+            .st([St::Flex1, St::OverflowYAuto, St::PMd])
             .append([rendered_view(open)]);
         return panel(header_row([filename, controls]), body);
     }
@@ -462,14 +486,8 @@ fn editor(app: &App) -> ElementBuilder {
         ]);
     el(El::Form)
         .on(Ev::Submit, save_file())
-        .st([
-            St::DisplayFlex,
-            St::FlexCol,
-            St::BorderDefault,
-            St::RoundedLg,
-            St::BgSurface,
-            St::OverflowHidden,
-        ])
+        .style(Style::new().min_height("0"))
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol])
         .append([
             el(El::Div)
                 .st([
@@ -487,6 +505,7 @@ fn editor(app: &App) -> ElementBuilder {
                 .attr("name", "content")
                 .attr("spellcheck", "false")
                 .st([
+                    St::Flex1,
                     St::WFull,
                     St::PMd,
                     St::BgApp,
@@ -498,8 +517,8 @@ fn editor(app: &App) -> ElementBuilder {
                     Style::new()
                         .set("outline", "none")
                         .set("border", "none")
-                        .set("resize", "vertical")
-                        .set("min-height", "24rem")
+                        .set("resize", "none")
+                        .min_height("0")
                         .set("white-space", "pre"),
                 )
                 .text(&open.content),
@@ -582,8 +601,9 @@ fn lang_for_path(path: &str) -> Option<&'static str> {
 /// A centered placeholder body for the editor panel (no file / not editable).
 fn placeholder(text: &str) -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().set("min-height", "26rem"))
+        .style(Style::new().min_height("0"))
         .st([
+            St::Flex1,
             St::DisplayFlex,
             St::ItemsCenter,
             St::JustifyCenter,
