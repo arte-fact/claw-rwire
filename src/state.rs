@@ -228,6 +228,8 @@ pub struct WorkspaceView {
     pub owner: Option<String>,
     pub members: Vec<String>,
     pub member_names: Vec<String>,
+    /// When set, delegated work skips the R3 plan-review gate (tasks queue directly).
+    pub auto_approve: bool,
 }
 
 /// One task card in a workspace's lane (projected from the `tasks` table). `agent` is the

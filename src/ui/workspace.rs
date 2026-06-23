@@ -173,8 +173,63 @@ pub fn dashboard(app: &App) -> ElementBuilder {
                     .st([St::DisplayFlex, St::FlexCol, St::GapXs])
                     .append(roster),
             ),
+            card("Delegation", auto_approve_toggle(workspace)),
             card("Brief", brief_editor(&workspace.id, &app.workspace_brief)),
         ])
+}
+
+/// The auto-approve toggle (R3): off = delegated work waits at the plan-review gate; on = the
+/// owner's tasks queue directly. Clicking flips it.
+fn auto_approve_toggle(workspace: &WorkspaceView) -> ElementBuilder {
+    let on = workspace.auto_approve;
+    let (label, hint, chip) = if on {
+        (
+            "Auto-approve · ON",
+            "Delegated work is queued directly — no plan review.",
+            St::BgAccent,
+        )
+    } else {
+        (
+            "Auto-approve · OFF",
+            "Delegated work waits for your approval in the plan gate (Review).",
+            St::BgApp,
+        )
+    };
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append([
+            el(El::Button)
+                .attr("type", "button")
+                .data("workspace", &workspace.id)
+                .data("on", if on { "1" } else { "0" })
+                .on(Ev::Click, toggle_auto_approve())
+                .style(Style::new().set("font", "inherit"))
+                .st([
+                    St::SelfStart,
+                    St::TextXs,
+                    St::PxSm,
+                    St::PyXs,
+                    St::RoundedSm,
+                    St::BorderDefault,
+                    chip,
+                    if on { St::TextOnAccent } else { St::TextHigh },
+                    St::CursorPointer,
+                ])
+                .text(label),
+            el(El::Div).st([St::TextXs, St::TextMuted]).text(hint),
+        ])
+}
+
+#[handler]
+fn toggle_auto_approve(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(id) = ctx.data("workspace") {
+        let currently_on = ctx.data("on") == Some("1");
+        bridge::send(Command::SetWorkspaceAutoApprove {
+            id: id.to_owned(),
+            on: !currently_on,
+        });
+    }
 }
 
 /// The inline `AGENT.md` editor on the Overview — the workspace's shared project brief.

@@ -113,6 +113,11 @@ pub enum Command {
         id: String,
         owner: Option<String>,
     },
+    /// Toggle a workspace's auto-approve flag — when on, delegated work skips the R3 plan gate.
+    SetWorkspaceAutoApprove {
+        id: String,
+        on: bool,
+    },
     /// Add / remove a member (the team) of a workspace.
     AddMember {
         id: String,
@@ -665,6 +670,9 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::RenameWorkspace { id, name } => admin::rename_workspace(conn, shared, &id, &name),
         Command::SetWorkspaceOwner { id, owner } => {
             admin::set_workspace_owner(conn, shared, &id, owner)
+        }
+        Command::SetWorkspaceAutoApprove { id, on } => {
+            admin::set_workspace_auto_approve(conn, shared, &id, on)
         }
         Command::AddMember { id, agent } => admin::add_member(conn, shared, &id, &agent),
         Command::RemoveMember { id, agent } => admin::remove_member(conn, shared, &id, &agent),

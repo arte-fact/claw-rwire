@@ -10,6 +10,9 @@ pub struct Workspace {
     pub id: String,
     pub name: String,
     pub owner: Option<String>,
+    /// When set, a delegated request skips the R3 plan gate and the owner's tasks queue directly
+    /// (no human review). Off by default — delegation produces a reviewable plan.
+    pub auto_approve: bool,
 }
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Workspace> {
@@ -17,10 +20,20 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Workspace> {
         id: row.get(0)?,
         name: row.get(1)?,
         owner: row.get(2)?,
+        auto_approve: row.get::<_, i64>(3)? != 0,
     })
 }
 
-const SELECT: &str = "SELECT id, name, owner_agent_id FROM workspaces";
+const SELECT: &str = "SELECT id, name, owner_agent_id, auto_approve FROM workspaces";
+
+/// Set (or clear) a workspace's auto-approve flag — when on, delegated work skips the plan gate.
+pub fn set_auto_approve(conn: &Connection, id: &str, on: bool) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE workspaces SET auto_approve = ?2 WHERE id = ?1",
+        params![id, i64::from(on)],
+    )?;
+    Ok(())
+}
 
 /// Create a workspace (idempotent on id — a re-create never renames an existing one). The
 /// `id` is the directory name under `<data>/workspaces/`.
@@ -181,6 +194,17 @@ mod tests {
         assert_eq!(ids, vec!["ws-1", "ws-2"]);
         // A re-create with a different name must not overwrite the existing one.
         assert_eq!(listed[0].name, "Project One");
+    }
+
+    #[test]
+    fn auto_approve_defaults_off_and_round_trips() {
+        let conn = seeded();
+        create(&conn, "ws-1", "One").expect("ws1");
+        assert!(!get(&conn, "ws-1").expect("get").unwrap().auto_approve);
+        set_auto_approve(&conn, "ws-1", true).expect("set on");
+        assert!(get(&conn, "ws-1").expect("get").unwrap().auto_approve);
+        set_auto_approve(&conn, "ws-1", false).expect("set off");
+        assert!(!get(&conn, "ws-1").expect("get").unwrap().auto_approve);
     }
 
     #[test]

@@ -12,9 +12,19 @@ use crate::workspace;
 
 use super::{Command, data_dir, log_line, now_hm, push_activity, run_system_prompt, send};
 
-/// Start a delegated request as a reviewable **Plan** task (R3): create the plan gate task, then
-/// run the owner's planning turn, which proposes tasks as held children of the plan.
+/// Start a delegated request. By default (R3) this is a reviewable **Plan** task: create the plan
+/// gate, then run the owner's planning turn, which proposes tasks as held children. A workspace
+/// with `auto_approve` set skips the gate — the planning turn queues tasks directly (pre-R3).
 pub fn ask(conn: &rusqlite::Connection, workspace: &str, request: &str, origin_chat: &str) {
+    let auto_approve = workspaces::get(conn, workspace)
+        .ok()
+        .flatten()
+        .is_some_and(|ws| ws.auto_approve);
+    if auto_approve {
+        // No plan id → the planning toolbox queues tasks directly, no gate.
+        launch_planning(conn, workspace, None, &direct_brief(request), origin_chat);
+        return;
+    }
     let Ok(plan_id) = crate::id::new_id() else {
         return log_line("orchestrate: could not mint a plan id".to_owned());
     };
@@ -28,7 +38,13 @@ pub fn ask(conn: &rusqlite::Connection, workspace: &str, request: &str, origin_c
     ) {
         return log_line(format!("orchestrate: create plan failed: {err}"));
     }
-    launch_planning(conn, workspace, &plan_id, &plan_brief(request), origin_chat);
+    launch_planning(
+        conn,
+        workspace,
+        Some(&plan_id),
+        &plan_brief(request),
+        origin_chat,
+    );
 }
 
 /// Re-plan a rejected-for-revision plan: re-run the owner's planning turn into the same plan task
@@ -38,7 +54,7 @@ pub fn replan(conn: &rusqlite::Connection, plan: &crate::db::tasks::Task, feedba
     launch_planning(
         conn,
         &plan.workspace_id,
-        &plan.id,
+        Some(&plan.id),
         &revise_brief(&plan.spec, feedback),
         origin,
     );
@@ -49,7 +65,7 @@ pub fn replan(conn: &rusqlite::Connection, plan: &crate::db::tasks::Task, feedba
 fn launch_planning(
     conn: &rusqlite::Connection,
     workspace: &str,
-    plan_id: &str,
+    plan_id: Option<&str>,
     brief_text: &str,
     origin_chat: &str,
 ) {
@@ -92,7 +108,7 @@ fn launch_planning(
         planning_conn,
         workspace,
         Some(origin_chat.to_owned()),
-        Some(plan_id.to_owned()),
+        plan_id.map(str::to_owned),
     );
 
     let workspace = workspace.to_owned();
@@ -107,6 +123,17 @@ fn launch_planning(
             result,
         });
     });
+}
+
+/// The owner's planning instruction for an auto-approve workspace — tasks queue directly (no
+/// review gate), so it's a plain "break it into tasks and confirm".
+fn direct_brief(request: &str) -> String {
+    format!(
+        "A request was delegated to you to plan for this workspace.\n\nRequest: {request}\n\n\
+         Break it into one or more tasks with create_task — assign a member by persona where it \
+         helps, chain dependent steps with blockers, and set a schedule for recurring work. Then \
+         confirm the plan in one or two sentences."
+    )
 }
 
 /// The owner's planning instruction for a fresh request.

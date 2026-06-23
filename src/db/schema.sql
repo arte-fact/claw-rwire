@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
   id             TEXT PRIMARY KEY,
   name           TEXT NOT NULL,
   owner_agent_id TEXT REFERENCES agent_groups(id),
+  auto_approve   INTEGER NOT NULL DEFAULT 0,  -- skip the R3 plan gate: queue the owner's tasks directly
   created_at     TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_owner

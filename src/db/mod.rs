@@ -82,7 +82,21 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_task_run_transcript_column(conn).map_err(DbError::Schema)?;
     add_task_control_columns(conn).map_err(DbError::Schema)?;
     add_task_plan_columns(conn).map_err(DbError::Schema)?;
+    add_workspace_auto_approve_column(conn).map_err(DbError::Schema)?;
     Ok(())
+}
+
+/// Add the `auto_approve` flag on `workspaces` (R3 auto-approve) to a DB that predates it. A fresh
+/// DB already has it from the schema, so the ALTER fails "duplicate column" — ignored.
+fn add_workspace_auto_approve_column(conn: &Connection) -> rusqlite::Result<()> {
+    match conn.execute(
+        "ALTER TABLE workspaces ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0",
+        [],
+    ) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 /// Add the reviewable-planning columns (`is_plan`/`plan_id` on `tasks`, R3) to a DB that predates

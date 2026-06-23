@@ -45,6 +45,7 @@ pub fn project_registry(conn: &rusqlite::Connection, shared: &SharedServerState)
                 owner: workspace.owner,
                 members,
                 member_names,
+                auto_approve: workspace.auto_approve,
             }
         })
         .collect();
@@ -203,6 +204,20 @@ pub fn set_workspace_owner(
     };
     if let Err(err) = result {
         return surface_error(shared, format!("set workspace owner: {err}"));
+    }
+    project_registry(conn, shared);
+}
+
+/// Toggle a workspace's auto-approve flag (R3): when on, delegated work skips the plan gate and
+/// the owner's tasks queue directly.
+pub fn set_workspace_auto_approve(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    id: &str,
+    on: bool,
+) {
+    if let Err(err) = workspaces::set_auto_approve(conn, id, on) {
+        return surface_error(shared, format!("set auto-approve: {err}"));
     }
     project_registry(conn, shared);
 }
