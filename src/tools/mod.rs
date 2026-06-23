@@ -11,6 +11,7 @@ mod validator;
 
 pub use coder::CoderToolbox;
 pub use concierge::{ConciergeToolbox, Delegate};
+pub use exec::ExecStrategy;
 pub use planning::PlanningToolbox;
 pub use validator::{ValidatorToolbox, parse_verdict};
 

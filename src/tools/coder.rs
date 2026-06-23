@@ -22,15 +22,19 @@ pub const EDIT: &str = "edit";
 /// Default line cap for `read`, matching rust-claw.
 const READ_LIMIT: usize = 2000;
 
-/// A toolbox bound to one workspace directory.
+/// A toolbox bound to one workspace directory. File tools always act on the host `workspace` dir;
+/// `bash` runs through `exec` (host, or the workspace's isola sandbox — R6).
 pub struct CoderToolbox {
     workspace: PathBuf,
+    exec: exec::ExecStrategy,
 }
 
 impl CoderToolbox {
+    /// Build with an explicit execution strategy — file tools always use the host `workspace`
+    /// dir; `bash` runs through `exec` (host, or the workspace's isola sandbox).
     #[must_use]
-    pub fn new(workspace: PathBuf) -> Self {
-        Self { workspace }
+    pub fn with_exec(workspace: PathBuf, exec: exec::ExecStrategy) -> Self {
+        Self { workspace, exec }
     }
 }
 
@@ -96,7 +100,7 @@ impl Toolbox for CoderToolbox {
         };
         match name {
             BASH => match str_arg(&args, "command") {
-                Ok(command) => ToolOutcome::text(exec::bash(&self.workspace, command)),
+                Ok(command) => ToolOutcome::text(exec::bash_in(&self.exec, command)),
                 Err(err) => ToolOutcome::error(err),
             },
             READ => outcome(self.read(&args)),
@@ -203,7 +207,8 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("claw-coder-{}-{}", std::process::id(), fastid()));
         std::fs::create_dir_all(&dir).expect("mkdir");
-        (CoderToolbox::new(dir.clone()), dir)
+        let exec = exec::ExecStrategy::Host { root: dir.clone() };
+        (CoderToolbox::with_exec(dir.clone(), exec), dir)
     }
 
     fn fastid() -> u64 {

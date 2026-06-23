@@ -1204,6 +1204,29 @@ fn warm_context_cache(inference: &resolution::ResolvedInference) {
 /// workspace work by definition) — the workspace file tools. Chat (concierge) runs pass
 /// `false`, so an unconfigured concierge stays web-only and delegates rather than writing
 /// files. Each source is wrapped in a [`FilteredToolbox`] so only enabled tools are callable.
+/// The execution strategy for a workspace's `bash` tool, from the resolved [`SandboxMode`]. In
+/// `Isola` mode the sandbox name is the workspace dir's final component (= the workspace id) and
+/// the mount is the workspace dir itself; otherwise host execution in that dir.
+fn exec_strategy_for(workspace: &Path) -> crate::tools::ExecStrategy {
+    use crate::sandbox::SandboxMode;
+    use crate::tools::ExecStrategy;
+    match SandboxMode::resolve(env("CLAW_SANDBOX").ok().as_deref()).effective() {
+        SandboxMode::Isola => {
+            let sandbox = workspace
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "claw".to_owned());
+            ExecStrategy::Isola {
+                sandbox,
+                mount: workspace.to_path_buf(),
+            }
+        }
+        SandboxMode::Host => ExecStrategy::Host {
+            root: workspace.to_path_buf(),
+        },
+    }
+}
+
 fn build_toolbox(
     selection: Option<Vec<String>>,
     workspace: Option<PathBuf>,
@@ -1235,7 +1258,8 @@ fn build_toolbox(
             .iter()
             .any(|tool| allowed.iter().any(|name| name == tool))
     {
-        let coder: Box<dyn Toolbox> = Box::new(CoderToolbox::new(workspace));
+        let exec = exec_strategy_for(&workspace);
+        let coder: Box<dyn Toolbox> = Box::new(CoderToolbox::with_exec(workspace, exec));
         boxes.push(Box::new(FilteredToolbox::new(coder, allowed.clone())));
     }
     // Web/MCP tools, only if connected and at least one of theirs is selected.

@@ -5,7 +5,7 @@
 //! writes to a full pipe buffer would deadlock (the child blocks on write, never exits, so
 //! the poll never sees it finish). Files have no such backpressure.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -17,11 +17,37 @@ pub const BASH_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_OUTPUT: usize = 32_000;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Run `command` via `bash -c` with `cwd = workspace`, returning `exit <code>\n<output>`
-/// (stdout then stderr, combined). On timeout the child is killed and a note returned.
+/// Where a `bash` command runs (R6). The host dir is always the workspace; `Isola` runs the
+/// command inside that workspace's sandbox (the dir is bind-mounted, so file writes are shared).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecStrategy {
+    /// Spawn `bash` directly on the host in `root` (the pre-R6 path).
+    Host { root: PathBuf },
+    /// Run `bash` inside the named isola sandbox; `mount` is the host workspace dir bind-mounted in.
+    Isola { sandbox: String, mount: PathBuf },
+}
+
+/// Run `command` through the chosen [`ExecStrategy`]: combined output + exit, workspace cwd, and
+/// the [`BASH_TIMEOUT`] wall-clock cap. Returns `exit <code>\n<output>` (stdout then stderr); on
+/// timeout the command is killed and a note returned.
 #[must_use]
-pub fn bash(workspace: &Path, command: &str) -> String {
-    run(workspace, command, BASH_TIMEOUT)
+pub fn bash_in(strategy: &ExecStrategy, command: &str) -> String {
+    match strategy {
+        ExecStrategy::Host { root } => run(root, command, BASH_TIMEOUT),
+        ExecStrategy::Isola { sandbox, mount } => {
+            #[cfg(feature = "sandbox")]
+            {
+                run_isola(sandbox, mount, command, BASH_TIMEOUT)
+            }
+            // Without the feature compiled in this arm is unreachable in practice (the bridge
+            // demotes Isola→Host), but keep it host-safe so the code builds either way.
+            #[cfg(not(feature = "sandbox"))]
+            {
+                let _ = sandbox;
+                run(mount, command, BASH_TIMEOUT)
+            }
+        }
+    }
 }
 
 fn run(workspace: &Path, command: &str, timeout: Duration) -> String {
@@ -132,6 +158,66 @@ fn cleanup(out_path: &Path, err_path: &Path) {
     let _ = std::fs::remove_file(err_path);
 }
 
+/// Run `command` inside the workspace's isola sandbox as the sandbox user, returning the same
+/// `exit <code>\n<output>` shape as the host path. The wall-clock cap is enforced *inside* the
+/// sandbox with `timeout`, so an over-running command is reaped by the sandbox itself (exit 124)
+/// — no host-side child to kill. A missing/unhealthy sandbox is reported rather than silently
+/// run on the host (which would defeat the isolation).
+#[cfg(feature = "sandbox")]
+fn run_isola(sandbox: &str, mount: &Path, command: &str, timeout: Duration) -> String {
+    use isola::sandbox::backend::create_backend;
+    let backend = create_backend();
+    if !backend.is_healthy(sandbox) {
+        return format!(
+            "error: sandbox {sandbox:?} is not ready — create it first (`isola create {sandbox}`); \
+             command not run"
+        );
+    }
+    let secs = timeout.as_secs().max(1);
+    // `timeout -k 5` sends TERM at the cap, then KILL 5s later if the command ignores it.
+    let wrapped = format!("timeout -k 5 {secs} bash -lc {}", single_quote(command));
+    let argv = vec!["bash".to_owned(), "-lc".to_owned(), wrapped];
+    match backend.exec_command_captured(sandbox, &argv, Some(mount), Vec::new()) {
+        Ok((124, output)) => {
+            let body = truncate_output(&output);
+            if body.is_empty() {
+                format!("timed out after {secs}s — command killed")
+            } else {
+                format!("timed out after {secs}s — command killed\n{body}")
+            }
+        }
+        Ok((code, output)) => {
+            let body = truncate_output(&output);
+            if body.is_empty() {
+                format!("exit {code}")
+            } else {
+                format!("exit {code}\n{body}")
+            }
+        }
+        Err(err) => format!("error: sandbox exec failed: {err}"),
+    }
+}
+
+/// Cap captured output the same way the host path does (the host path truncates as it reads from
+/// files; isola hands back one string, so cap it here).
+#[cfg(feature = "sandbox")]
+fn truncate_output(output: &str) -> String {
+    let trimmed = output.trim_end();
+    if trimmed.chars().count() > MAX_OUTPUT {
+        let head: String = trimmed.chars().take(MAX_OUTPUT).collect();
+        format!("{head}\n… (output truncated)")
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// POSIX single-quote a string for safe embedding in a `bash -lc` payload: wrap in `'…'`,
+/// rewriting any embedded `'` as `'\''`.
+#[cfg(feature = "sandbox")]
+fn single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +226,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("claw-exec-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         dir
+    }
+
+    fn bash(workspace: &Path, command: &str) -> String {
+        run(workspace, command, BASH_TIMEOUT)
     }
 
     #[test]
@@ -160,6 +250,12 @@ mod tests {
         let out = bash(&dir, "pwd");
         let real = dir.canonicalize().expect("canon");
         assert_eq!(out.trim(), format!("exit 0\n{}", real.display()));
+    }
+
+    #[test]
+    fn exec_strategy_host_runs_on_the_host() {
+        let strategy = ExecStrategy::Host { root: ws() };
+        assert_eq!(bash_in(&strategy, "echo hello"), "exit 0\nhello");
     }
 
     #[test]
