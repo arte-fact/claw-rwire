@@ -260,6 +260,9 @@ pub fn delete_workspace(conn: &rusqlite::Connection, shared: &SharedServerState,
     if let Err(err) = workspaces::delete(conn, id) {
         return surface_error(shared, format!("delete workspace: {err}"));
     }
+    // Destroy the workspace's isola sandbox, if any (R6 T5; best-effort, behind the feature) —
+    // before removing the dir, so the rootfs doesn't leak. Idempotent: "not found" is fine.
+    destroy_sandbox(id);
     // Remove the workspace directory (best-effort; absence is fine — it may never have run).
     let dir = workspace::dir_for(&super::data_dir(), id);
     if let Err(err) = std::fs::remove_dir_all(&dir)
@@ -270,6 +273,24 @@ pub fn delete_workspace(conn: &rusqlite::Connection, shared: &SharedServerState,
         ));
     }
     project_registry(conn, shared);
+}
+
+/// Best-effort teardown of a workspace's isola sandbox on delete (R6). No-op without the `sandbox`
+/// feature or when no sandbox exists for the workspace.
+fn destroy_sandbox(id: &str) {
+    #[cfg(feature = "sandbox")]
+    {
+        let backend = isola::sandbox::backend::create_backend();
+        if backend.is_healthy(id)
+            && let Err(err) = backend.destroy(id)
+        {
+            super::log_line(format!("admin: destroying sandbox '{id}' failed: {err}"));
+        }
+    }
+    #[cfg(not(feature = "sandbox"))]
+    {
+        let _ = id;
+    }
 }
 
 /// Read an agent's identity prompt into the open draft (mirrors `discover_models`). Called

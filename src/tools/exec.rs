@@ -269,4 +269,57 @@ mod tests {
         );
         assert!(out.starts_with("timed out after 1s"), "got: {out}");
     }
+
+    // Gated integration test (T6). Needs a host with `isola setup-host` run and a sandbox named by
+    // CLAW_TEST_SANDBOX whose mount is CLAW_TEST_MOUNT. Run with:
+    //   CLAW_TEST_SANDBOX=it CLAW_TEST_MOUNT=/tmp/claw-it \
+    //     cargo test --features sandbox -- --ignored isola_
+    #[cfg(feature = "sandbox")]
+    #[test]
+    #[ignore = "requires a provisioned isola host + CLAW_TEST_SANDBOX/CLAW_TEST_MOUNT"]
+    fn isola_runs_in_the_sandbox_isolates_writes_and_reaps() {
+        let sandbox = std::env::var("CLAW_TEST_SANDBOX").expect("set CLAW_TEST_SANDBOX");
+        let mount = PathBuf::from(std::env::var("CLAW_TEST_MOUNT").expect("set CLAW_TEST_MOUNT"));
+        std::fs::create_dir_all(&mount).expect("mkdir mount");
+        let strategy = ExecStrategy::Isola {
+            sandbox,
+            mount: mount.clone(),
+        };
+
+        // A write into the bind-mounted workspace is visible on the host.
+        let out = bash_in(&strategy, "echo hi > marker.txt && cat marker.txt");
+        assert!(out.contains("hi"), "expected command output, got: {out}");
+        assert!(
+            mount.join("marker.txt").exists(),
+            "a workspace write should be visible on the host"
+        );
+
+        // A stray write outside the workspace must NOT reach the real host home.
+        let home = std::env::var("HOME").expect("HOME");
+        let probe = Path::new(&home).join("claw-escape-probe");
+        let _ = std::fs::remove_file(&probe);
+        let _ = bash_in(
+            &strategy,
+            "echo pwned > \"$HOME/claw-escape-probe\" || true",
+        );
+        assert!(
+            !probe.exists(),
+            "a $HOME write inside the sandbox must not escape to the host"
+        );
+
+        // The wall-clock cap reaps an over-running command (in-sandbox `timeout`).
+        let timed = run_isola(
+            &match &strategy {
+                ExecStrategy::Isola { sandbox, .. } => sandbox.clone(),
+                ExecStrategy::Host { .. } => unreachable!(),
+            },
+            &mount,
+            "sleep 30",
+            Duration::from_secs(1),
+        );
+        assert!(
+            timed.starts_with("timed out after 1s"),
+            "expected a timeout note, got: {timed}"
+        );
+    }
 }
