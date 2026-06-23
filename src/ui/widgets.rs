@@ -4,6 +4,24 @@
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, HandlerSpec, St, el, icons};
 use rwire_components::Text;
+use rwire_markdown::{Markdown, ProseSize};
+
+/// Render model output as **compact** markdown. The markdown component's heading scale
+/// (`xl`/`2xl`) is far larger than the app's small UI text, so we shrink the size-scale CSS
+/// vars (`--T*`) on the wrapper: everything renders a notch down, headings only slightly above
+/// the body. One helper so chat, the task detail, and the review inbox stay consistent.
+pub fn markdown(text: String) -> ElementBuilder {
+    el(El::Div)
+        .style(
+            Style::new()
+                .set("--T6", "1.05rem") // h1
+                .set("--T5", "0.98rem") // h2
+                .set("--T4", "0.92rem") // h3 / lg
+                .set("--T3", "0.82rem") // base
+                .set("--T2", "0.82rem"), // sm — body (via ProseSize::Sm), inline code, pre
+        )
+        .append([Markdown::new(text).size(ProseSize::Sm).build()])
+}
 
 /// A page header: heading + muted subtitle on the left, an action on the right.
 pub fn page_header(

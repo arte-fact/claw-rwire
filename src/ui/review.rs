@@ -5,7 +5,6 @@
 use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
-use rwire_markdown::Markdown;
 
 use crate::bridge::{self, Command};
 use crate::state::{App, ReviewItem};
@@ -69,14 +68,8 @@ fn review_card(item: &ReviewItem) -> ElementBuilder {
                     .text("(no output produced)")
             } else {
                 el(El::Div)
-                    .st([
-                        St::TextSm,
-                        St::BgApp,
-                        St::BorderDefault,
-                        St::RoundedSm,
-                        St::PSm,
-                    ])
-                    .append([Markdown::new(item.output.clone()).build()])
+                    .st([St::BgApp, St::BorderDefault, St::RoundedSm, St::PSm])
+                    .append([crate::ui::widgets::markdown(item.output.clone())])
             },
             // Approve / Reject (clicks) + a link to the full run chain, then a Request-changes form.
             el(El::Div)

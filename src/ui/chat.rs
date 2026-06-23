@@ -8,7 +8,6 @@ use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, HandlerSpec, Pc, St, el, handler, icons, renderer};
 use rwire_components::{Spinner, SpinnerSize, Text};
-use rwire_markdown::Markdown;
 
 use crate::bridge::{self, Command};
 use crate::state::{App, ChatMessage, MessageRole, ToolCardView, TranscriptItem};
@@ -253,7 +252,7 @@ fn message_row(message: &ChatMessage) -> ElementBuilder {
             .st([St::TextDefault, St::TextBase])
             .style(Style::new().set("white-space", "pre-wrap"))
             .append([el(El::Span).text(&message.text)]),
-        MessageRole::Agent => el(El::Div).append([Markdown::new(message.text.clone()).build()]),
+        MessageRole::Agent => crate::ui::widgets::markdown(message.text.clone()),
     };
     let header = el(El::Div)
         .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])

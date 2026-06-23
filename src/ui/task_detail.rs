@@ -6,7 +6,6 @@
 use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
-use rwire_markdown::Markdown;
 
 use crate::bridge::{self, Command};
 use crate::state::{App, LiveEvent, RunView, TaskDetail};
@@ -32,12 +31,7 @@ fn body(app: &App) -> ElementBuilder {
         back_link(&detail.workspace_id),
         header(detail),
         // The spec (rendered as markdown — specs are usually written that way).
-        card(
-            "Spec",
-            el(El::Div)
-                .st([St::TextSm])
-                .append([Markdown::new(detail.spec.clone()).build()]),
-        ),
+        card("Spec", crate::ui::widgets::markdown(detail.spec.clone())),
     ];
     // Live activity for THIS task while it's running — the real-time tool feed.
     if running {
@@ -200,11 +194,7 @@ fn run_card(run: &RunView) -> ElementBuilder {
                 .text("(no output)"),
         );
     } else {
-        rows.push(
-            el(El::Div)
-                .st([St::TextSm])
-                .append([Markdown::new(run.output.clone()).build()]),
-        );
+        rows.push(crate::ui::widgets::markdown(run.output.clone()));
     }
     if let Some(feedback) = run.feedback.as_deref().filter(|f| !f.trim().is_empty()) {
         rows.push(
