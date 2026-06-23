@@ -35,8 +35,8 @@ pub fn tasks(app: &App) -> ElementBuilder {
     } else {
         kanban_board(app, &workspace.id)
     };
-    // The board (full width), the toolbar above it, and the create drawer (a left overlay that's
-    // hidden until opened — matching the System Map's entity-creation drawer).
+    // The board (full width), the toolbar above it, and the create drawer (a right-side overlay
+    // that's hidden until opened — matching the System Map's entity-creation drawer).
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
         .append([
@@ -81,11 +81,12 @@ fn new_task_button() -> ElementBuilder {
         ])
 }
 
-/// The create-task drawer: a left-side overlay (with backdrop) holding the create form. Hidden
-/// until `new_task_panel_open`; the backdrop / `Esc` close it via `on_close`.
+/// The create-task drawer: a right-side overlay (with backdrop) holding the create form, matching
+/// the System Map's entity drawer. Hidden until `new_task_panel_open`; the backdrop / close (X)
+/// dismiss it via `on_close`.
 fn new_task_drawer(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
     Drawer::new()
-        .position(DrawerPosition::Left)
+        .position(DrawerPosition::Right)
         .open(app.new_task_panel_open)
         .title("New task")
         .on_close(close_new_task())
@@ -333,13 +334,7 @@ fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
                 )
                 .st(input_st())
                 .focus([St::BorderAccent]),
-            el(El::Input)
-                .attr("name", "schedule")
-                .attr("placeholder", "Cron schedule — optional, e.g. 0 8 * * *")
-                .attr("autocomplete", "off")
-                .style(Style::new().set("font", "inherit"))
-                .st(input_st())
-                .focus([St::BorderAccent]),
+            schedule_field(None),
             retries_input(None),
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
@@ -352,6 +347,97 @@ fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
                     accent_submit(icons::Icon::Plus, "Queue task"),
                 ]),
         ])
+}
+
+/// Common recurrence presets — the friendly `Repeat` choices. Each value is the cron expression
+/// it maps to; `""` is one-off. A `"custom"` sentinel (added in the UI) defers to the cron box.
+const SCHEDULE_PRESETS: &[(&str, &str)] = &[
+    ("", "Don't repeat"),
+    ("0 * * * *", "Every hour"),
+    ("0 8 * * *", "Every day at 08:00"),
+    ("0 9 * * 1-5", "Weekdays at 09:00"),
+    ("0 8 * * 1", "Every Monday at 08:00"),
+    ("0 0 1 * *", "Monthly (1st, 00:00)"),
+];
+const SCHEDULE_CUSTOM: &str = "custom";
+
+/// Resolve the schedule from the `Repeat` select + the custom-cron box into a cron string (or
+/// `None` for one-off). A pure decision, unit-tested. Custom is used only when `Repeat = Custom`.
+fn resolve_schedule(preset: &str, custom: &str) -> Option<String> {
+    match preset {
+        SCHEDULE_CUSTOM => {
+            let custom = custom.trim();
+            (!custom.is_empty()).then(|| custom.to_owned())
+        }
+        "" => None,
+        cron => Some(cron.to_owned()),
+    }
+}
+
+/// The recurrence picker: a `Repeat` preset select plus a custom-cron box (used when `Custom` is
+/// chosen). `current` (a task's existing cron) preselects the matching preset, or `Custom` with the
+/// cron prefilled when it isn't one of the presets.
+fn schedule_field(current: Option<&str>) -> ElementBuilder {
+    let current = current.map(str::trim).filter(|c| !c.is_empty());
+    let is_preset = current.is_some_and(|c| SCHEDULE_PRESETS.iter().any(|(value, _)| *value == c));
+    let selected = match current {
+        None => "",
+        Some(c) if is_preset => c,
+        Some(_) => SCHEDULE_CUSTOM,
+    };
+    let mut options: Vec<ElementBuilder> = SCHEDULE_PRESETS
+        .iter()
+        .map(|(value, label)| option(value, label, selected == *value))
+        .collect();
+    options.push(option(
+        SCHEDULE_CUSTOM,
+        "Custom (cron)…",
+        selected == SCHEDULE_CUSTOM,
+    ));
+    let custom_value = if is_preset { "" } else { current.unwrap_or("") };
+    let custom = el(El::Input)
+        .attr("name", "schedule_custom")
+        .attr("value", custom_value)
+        .attr(
+            "placeholder",
+            "Custom cron, e.g. 0 8 * * * (used for “Custom”)",
+        )
+        .attr("autocomplete", "off")
+        .style(Style::new().set("font", "inherit"))
+        .st(input_st())
+        .focus([St::BorderAccent]);
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append([
+            labeled_field(
+                "Repeat",
+                el(El::Select)
+                    .attr("name", "schedule_preset")
+                    .st(input_st())
+                    .append(options),
+            ),
+            custom,
+        ])
+}
+
+/// A `<label>`-style row: a small caption above a control.
+fn labeled_field(label: &str, control: ElementBuilder) -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
+        .append([
+            el(El::Span).st([St::TextXs, St::TextMuted]).text(label),
+            control,
+        ])
+}
+
+/// An `<option>`, selected when `on`.
+fn option(value: &str, label: &str, on: bool) -> ElementBuilder {
+    let opt = el(El::Option).attr("value", value).text(label);
+    if on {
+        opt.bool_attr(rwire::At::Selected)
+    } else {
+        opt
+    }
 }
 
 /// The optional per-task auto-retry-budget input, prefilled with `value` (the task's current
@@ -579,14 +665,7 @@ fn edit_form(task: &TaskView, members: &[(String, String)]) -> ElementBuilder {
                 .st(input_st())
                 .focus([St::BorderAccent])
                 .text(&task.spec),
-            el(El::Input)
-                .attr("name", "schedule")
-                .attr("value", task.schedule.as_deref().unwrap_or(""))
-                .attr("placeholder", "Cron schedule — empty = one-shot")
-                .attr("autocomplete", "off")
-                .style(Style::new().set("font", "inherit"))
-                .st(input_st())
-                .focus([St::BorderAccent]),
+            schedule_field(task.schedule.as_deref()),
             el(El::Input)
                 .attr("name", "blockers")
                 .attr("value", &task.blockers.join(", "))
@@ -651,19 +730,23 @@ fn submit_task(app: &mut App, ctx: &EventContext) {
         .field("agent")
         .map(str::to_owned)
         .filter(|v| !v.is_empty());
-    let schedule = ctx
-        .field("schedule")
-        .map(str::to_owned)
-        .filter(|v| !v.trim().is_empty());
     bridge::send(Command::CreateTask {
         workspace,
         title,
         spec,
         agent,
-        schedule,
+        schedule: schedule_from(ctx),
         max_retries: parse_max_retries(ctx),
     });
     app.new_task_panel_open = false; // close the drawer once the task is queued
+}
+
+/// Resolve the schedule from the form's `Repeat` select + custom-cron box.
+fn schedule_from(ctx: &rwire::EventContext) -> Option<String> {
+    resolve_schedule(
+        ctx.field("schedule_preset").unwrap_or_default(),
+        ctx.field("schedule_custom").unwrap_or_default(),
+    )
 }
 
 /// Parse the optional `max_retries` form field: a non-negative integer, or `None` (blank /
@@ -712,10 +795,6 @@ fn save_edit(app: &mut App, ctx: &EventContext) {
         .field("agent")
         .map(str::to_owned)
         .filter(|v| !v.is_empty());
-    let schedule = ctx
-        .field("schedule")
-        .map(str::to_owned)
-        .filter(|v| !v.trim().is_empty());
     let blockers = ctx
         .field("blockers")
         .unwrap_or_default()
@@ -729,9 +808,31 @@ fn save_edit(app: &mut App, ctx: &EventContext) {
         title,
         spec,
         agent,
-        schedule,
+        schedule: schedule_from(ctx),
         max_retries: parse_max_retries(ctx),
         blockers,
     });
     app.editing_task = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SCHEDULE_CUSTOM, resolve_schedule};
+
+    #[test]
+    fn resolve_schedule_maps_presets_custom_and_one_off() {
+        // A preset value passes straight through as its cron.
+        assert_eq!(
+            resolve_schedule("0 8 * * *", "").as_deref(),
+            Some("0 8 * * *")
+        );
+        // "Don't repeat" → one-off, even if a stale custom value lingers.
+        assert_eq!(resolve_schedule("", "0 9 * * *"), None);
+        // Custom uses (trimmed) the cron box; blank custom → one-off.
+        assert_eq!(
+            resolve_schedule(SCHEDULE_CUSTOM, "  */5 * * * *  ").as_deref(),
+            Some("*/5 * * * *")
+        );
+        assert_eq!(resolve_schedule(SCHEDULE_CUSTOM, "   "), None);
+    }
 }
