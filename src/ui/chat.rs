@@ -245,12 +245,15 @@ fn message_row(message: &ChatMessage) -> ElementBuilder {
         MessageRole::Agent => ("claw", St::TextAccent),
     };
     let body = match message.role {
-        // `TextBase` to match the agent's Markdown prose (its wrapper is hardcoded to
-        // `TextBase`), so your turn and claw's reply read at the same size — the app's
-        // `TextSm` default would otherwise render your text a notch smaller.
+        // Match the agent's compact Markdown body (see `widgets::markdown`, which shrinks the
+        // prose to ~0.82rem) so your turn and claw's reply read at the same size.
         MessageRole::User => el(El::Div)
-            .st([St::TextDefault, St::TextBase])
-            .style(Style::new().set("white-space", "pre-wrap"))
+            .st([St::TextDefault])
+            .style(
+                Style::new()
+                    .set("white-space", "pre-wrap")
+                    .set("font-size", "0.82rem"),
+            )
             .append([el(El::Span).text(&message.text)]),
         MessageRole::Agent => crate::ui::widgets::markdown(message.text.clone()),
     };
