@@ -40,7 +40,7 @@ closing out**.
 | **M3** ✅ | Files | R1 file tree + view/edit editor | M | below — **done** |
 | **M4** ✅ | Review depth | R2 rich review (tools + diff + thread) | M–L | below — **done** |
 | **M5** 🟢 | Sandboxing | R6 isola P0 + P1 | L | below — **P1 T1-T6 + U1 done** (feature-gated, off by default); U2 bench + live verify need a provisioned host |
-| **M6** 🟡 | Delegation | R3 reviewable planning step | L | below — **core done**; auto-approve toggle TODO |
+| **M6** ✅ | Delegation | R3 reviewable planning step | L | below — **done** (core + auto-approve toggle) |
 | **M7** | Parallelism (stretch) | isola P2 + per-run worktrees | XL | isola roadmap P2 |
 
 M5 (isola) has no UI dependency and can proceed in parallel with M1–M4. M0 is mostly done already.
@@ -174,7 +174,7 @@ flag-off behaviour is byte-for-byte today's.
 
 ---
 
-## M6 — R3: the owner's planning step becomes a reviewable task — **core DONE**
+## M6 — R3: the owner's planning step becomes a reviewable task — **DONE**
 
 **Goal.** Delegation produces a **reviewable "Plan" task** in kanban column 1 instead of silently
 creating child tasks. **Decision: Option B** (held child tasks) + a per-workspace auto-approve
@@ -190,11 +190,13 @@ setting — see [reviewable-planning.md](reviewable-planning.md).
 | S5 | Review renders the proposed children with the verdict buttons (`ReviewItem.is_plan`/`proposed`). | **DONE** |
 | S6 | 3 plan-flow tests (held→released, reject cancels, scan skips a plan). 157 green. | **DONE** |
 
-**Remaining:** the **per-workspace auto-approve** setting (a `workspaces` flag + a Team-tab toggle
-that skips the gate, reverting to immediate task creation). Core is **gate-always** for now.
+**Auto-approve — DONE.** A per-workspace `auto_approve` flag (workspaces column + migration) with a
+**Delegation** toggle on the workspace Overview. When on, `orchestrate::ask` skips the gate and the
+owner's tasks queue directly (`launch_planning` takes `Option<plan_id>`; `None` = direct). Default
+off. DB round-trip test.
 
-**Not yet live-tested** — exercising it needs a real owner planning turn (an LLM call); the path is
-unit-tested and compiles. **154→157 tests, clippy/fmt clean.**
+**Live-tested.** The gated path was driven end-to-end in the browser (chat delegation → plan in
+Review → approve → child released & running). **163 tests, clippy/fmt clean.**
 
 **Done when.** Delegating work yields a reviewable plan card; approve queues children, revise
 re-plans, reject queues nothing — **done**; the auto-approve toggle lands next.
@@ -220,7 +222,7 @@ hard part). See the isola roadmap's P2.
 | 4 | **M3** R1 files tree/view ✅ | builds on M1 — done |
 | 5 | **M4** R2 rich review ✅ | builds on M1; feeds M6 — done |
 | — | **M5** R6 isola P0/P1 | **parallel** with 2–5 (no UI dep) |
-| 6 | **M6** R3 reviewable planning | largest; after M4; design doc first |
+| 6 | **M6** R3 reviewable planning ✅ | largest; done (incl. auto-approve toggle) |
 | 7 | **M7** parallelism | stretch; after M5 |
 
 **Cross-cutting:** check any new dependency through the Sonatype guide before adding (repo policy);
