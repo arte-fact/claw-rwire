@@ -142,8 +142,9 @@ deliberately — bundle size / correctness / license matter. Effort: **M**.
 
 ## R5 — New-task form in a side panel + refined UX
 
-> **Status: DONE** (roadmap M2) — `create_form` moved into a toggleable side panel; title/spec
-> required; per-task `max_retries` override added to the create + edit forms (the T5 fold-in).
+> **Status: DONE** (roadmap M2) — `create_form` moved into a real left overlay `Drawer` (the same
+> component the System Map uses for entity creation); title/spec required; per-task `max_retries`
+> override added to the create + edit forms (the T5 fold-in).
 
 **Problem.** The create-task form is a card pinned to the top of the Tasks view, eating vertical
 space above the board, and its UX is basic.

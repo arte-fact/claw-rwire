@@ -100,7 +100,7 @@ surface the `max_retries` override.
 | # | Subtask | Outcome |
 |---|---|---|
 | S1 | Panel state | `App.new_task_panel_open` + `toggle_new_task`; a "New task" button in the board toolbar (accented while open). |
-| S2 | Side panel | `create_form` moved into `new_task_panel` (a bordered aside, `flex 0 0 22rem`) rendered beside the board; board is full-width when closed. |
+| S2 | Side drawer | `create_form` rendered in a real left overlay `rwire_components::Drawer` (backdrop + header close), matching the System Map's entity-creation drawer; opened by the toolbar "New task" button, closed on submit/backdrop/X. |
 | S3 | Validation | title/spec are HTML-`required` (native inline gating); cron/assignee/empty still surface via the bridge error banner. |
 | S4 | T5 fold-in | `max_retries` plumbed end-to-end: `NewTask`/`create`, `update`, bridge `Create`/`Edit` structs, `CreateTask`/`UpdateTask` commands, and a shared `retries_input` in both forms. Blank = global default; negatives ignored. |
 | S5 | Tests | `create_persists_a_max_retries_override`, `update` round-trips `max_retries`. 147 tests green; clippy/fmt clean. |

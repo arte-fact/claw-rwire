@@ -10,6 +10,7 @@ use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 use crate::bridge::{self, Command};
 use crate::state::{App, TaskView, WorkspaceView};
 use crate::ui::widgets::accent_submit;
+use rwire_components::{Drawer, DrawerPosition};
 
 #[renderer]
 pub fn tasks(app: &App) -> ElementBuilder {
@@ -34,33 +35,32 @@ pub fn tasks(app: &App) -> ElementBuilder {
     } else {
         kanban_board(app, &workspace.id)
     };
-    // The board column (full width unless the create panel is open beside it).
-    let main = el(El::Div)
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg])
-        .style(Style::new().set("min-width", "0"))
-        .append([toolbar(app.tasks_list_view, app.new_task_panel_open), board]);
-    let mut row = vec![main];
-    if app.new_task_panel_open {
-        row.push(new_task_panel(app, workspace));
-    }
-    el(El::Div).st([St::DisplayFlex, St::GapLg]).append(row)
+    // The board (full width), the toolbar above it, and the create drawer (a left overlay that's
+    // hidden until opened — matching the System Map's entity-creation drawer).
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapLg])
+        .append([
+            toolbar(app.tasks_list_view),
+            board,
+            new_task_drawer(app, workspace),
+        ])
 }
 
-/// The board toolbar: the Board/List view switch and the "New task" toggle.
-fn toolbar(list: bool, panel_open: bool) -> ElementBuilder {
+/// The board toolbar: the Board/List view switch and the "New task" button.
+fn toolbar(list: bool) -> ElementBuilder {
     el(El::Div)
         .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
         .append([
             el(El::Div).st([St::Flex1]).append([view_toggle(list)]),
-            new_task_button(panel_open),
+            new_task_button(),
         ])
 }
 
-/// The "New task" button — toggles the side panel (accented while it's open).
-fn new_task_button(open: bool) -> ElementBuilder {
-    let btn = el(El::Button)
+/// The "New task" button — opens the create drawer.
+fn new_task_button() -> ElementBuilder {
+    el(El::Button)
         .attr("type", "button")
-        .on(Ev::Click, toggle_new_task())
+        .on(Ev::Click, open_new_task())
         .style(Style::new().set("font", "inherit"))
         .st([
             St::DisplayFlex,
@@ -70,49 +70,41 @@ fn new_task_button(open: bool) -> ElementBuilder {
             St::PxMd,
             St::PySm,
             St::RoundedSm,
+            St::BgAccent,
+            St::TextOnAccent,
+            St::BorderAccent,
             St::CursorPointer,
         ])
         .append([
             icons::icon(icons::Icon::Plus),
             el(El::Span).text("New task"),
-        ]);
-    if open {
-        btn.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
-    } else {
-        btn.st([St::BorderDefault, St::BgApp, St::TextMuted])
-            .hover([St::TextHigh])
-    }
-}
-
-/// The create-task side panel: the form in a bordered aside with a header + close button.
-fn new_task_panel(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
-    let header = el(El::Div)
-        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-        .append([
-            el(El::Span)
-                .st([St::Flex1, St::TextSm, St::TextHigh, St::FontSemibold])
-                .text("New task"),
-            crate::ui::widgets::icon_button(icons::Icon::Close, toggle_new_task(), false),
-        ]);
-    el(El::Div)
-        .style(Style::new().set("flex", "0 0 22rem").set("min-width", "0"))
-        .st([
-            St::BgSurface,
-            St::BorderDefault,
-            St::RoundedSm,
-            St::PMd,
-            St::DisplayFlex,
-            St::FlexCol,
-            St::GapMd,
         ])
-        .append([header, create_form(app, workspace)])
 }
 
-/// Toggle the create-task side panel (pure UI state).
+/// The create-task drawer: a left-side overlay (with backdrop) holding the create form. Hidden
+/// until `new_task_panel_open`; the backdrop / `Esc` close it via `on_close`.
+fn new_task_drawer(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
+    Drawer::new()
+        .position(DrawerPosition::Left)
+        .open(app.new_task_panel_open)
+        .title("New task")
+        .on_close(close_new_task())
+        .content(create_form(app, workspace))
+        .build()
+}
+
+/// Open the create drawer (pure UI state).
 #[handler]
-fn toggle_new_task(app: &mut App, ctx: &EventContext) {
+fn open_new_task(app: &mut App, ctx: &EventContext) {
     let _ = ctx;
-    app.new_task_panel_open = !app.new_task_panel_open;
+    app.new_task_panel_open = true;
+}
+
+/// Close the create drawer (backdrop / Cancel).
+#[handler]
+fn close_new_task(app: &mut App, ctx: &EventContext) {
+    let _ = ctx;
+    app.new_task_panel_open = false;
 }
 
 /// The flat list view (the original): cards with the inline edit drawer.
@@ -671,6 +663,7 @@ fn submit_task(app: &mut App, ctx: &EventContext) {
         schedule,
         max_retries: parse_max_retries(ctx),
     });
+    app.new_task_panel_open = false; // close the drawer once the task is queued
 }
 
 /// Parse the optional `max_retries` form field: a non-negative integer, or `None` (blank /
