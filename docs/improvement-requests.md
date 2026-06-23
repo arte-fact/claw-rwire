@@ -48,6 +48,11 @@ view/edit mode in `App` too so it survives re-renders. Effort: **M**. Splits cle
 
 ## R2 — Richer review surface: diff, full output, tool usage, rendered thread
 
+> **Status: DONE** (roadmap M4) — the Review inbox renders the producer's full run via the shared
+> `ui::run_chain` widget (tool transcript + rendered/highlighted output), and `edit` calls show a
+> coloured `old`→`new` line diff. Whole-file before/after diff (needs a pre-write snapshot) is
+> future work.
+
 **Problem.** The review inbox shows only a snippet of the producer's text, so a reviewer can't see
 *what actually changed* (files written, commands run) before approving.
 

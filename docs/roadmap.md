@@ -38,7 +38,7 @@ closing out**.
 | **M1** ✅ | Visual foundation | R4 syntax highlighting | M | below — **done** (in `../rwire`) |
 | **M2** ✅ | UX quick win | R5 create side panel (+ T5 field) | S–M | below — **done** |
 | **M3** ✅ | Files | R1 file tree + view/edit editor | M | below — **done** |
-| **M4** | Review depth | R2 rich review (tools + diff + thread) | M–L | below |
+| **M4** ✅ | Review depth | R2 rich review (tools + diff + thread) | M–L | below — **done** |
 | **M5** | Sandboxing | R6 isola P0 + P1 | L | [isola-integration-roadmap.md](isola-integration-roadmap.md) |
 | **M6** | Delegation | R3 reviewable planning step | L | below (design doc first) |
 | **M7** | Parallelism (stretch) | isola P2 + per-run worktrees | XL | isola roadmap P2 |
@@ -138,21 +138,24 @@ expands/collapses it in place and selects it as the create target (highlighted +
 
 ---
 
-## M4 — R2: richer review (tools + diff + rendered thread)
+## M4 — R2: richer review (tools + diff + rendered thread) — **DONE**
 
 **Goal.** The Review inbox shows the producer's **full run** — tool usage, rendered-Markdown output,
 and a **code diff** of changed files — not just a snippet + a "View run chain →" link
 (`review.rs:43`). Builds on M1 for code colour.
 
-| # | Subtask | Files | Notes |
-|---|---|---|---|
-| S1 | Extract the run-chain rendering (tool cards + md output) from `task_detail.rs` (`run_card`) into a shared widget | new `src/ui/run_chain.rs`, `src/ui/task_detail.rs` | both detail + review render through it |
-| S2 | `ReviewItem` carries the latest run's transcript (not just `output`); review card renders the shared widget | `src/state.rs`, `src/bridge/review.rs`, `src/ui/review.rs` | reuse `last_producer_output`'s run lookup |
-| S3 | **Code diff:** from the run's `write`/`edit` transcript entries, line-diff vs the current on-disk file; render as a coloured block (uses M1 colour) | new `src/diff.rs` (small) or vetted dep (Sonatype), `src/ui/run_chain.rs` | diff-vs-current for v1 (no before-snapshot) |
-| S4 | Tests: diff unit tests; `ReviewItem` projection includes the transcript | `diff.rs`, `bridge/review.rs` | |
+| # | Subtask | Status |
+|---|---|---|
+| S1 | Run-chain rendering extracted from `task_detail.rs` into a shared `ui::run_chain` module (used by detail + review). | **DONE** |
+| S2 | `ReviewItem` carries the latest producer `RunView` (with its tool transcript); the inbox renders it via `run_chain::run_card` instead of a text snippet. `bridge::tasks::latest_producer_run_view`. | **DONE** |
+| S3 | **Code diff:** `src/diff.rs` (LCS line diff); an `edit` tool call renders as a coloured `old_string`→`new_string` diff (added green / removed red / context muted) — straight from the transcript, no before-snapshot. Other tools keep the plain card. | **DONE** |
+| S4 | Tests: 4 diff unit tests (identity, change-in-context, add/remove, reassembly). | **DONE** |
 
-**Done when.** A parked task in Review shows tools, rendered output, and a diff per changed file;
-verdict buttons unchanged; gate green.
+**Done.** Review shows the producer's tools (with edit diffs), rendered/highlighted output, and the
+verdict; buttons unchanged; **154 tests, clippy/fmt clean.**
+
+**Note.** The diff is the *edit-call* diff (old→new from the transcript) — meaningful without a
+snapshot. A whole-file before/after diff would need capturing pre-write content (future work).
 
 ---
 
@@ -208,7 +211,7 @@ hard part). See the isola roadmap's P2.
 | 2 | **M1** R4 syntax highlight ✅ | foundation for M3/M4 — done |
 | 3 | **M2** R5 create panel ✅ | small win; carries task-control T5 — done |
 | 4 | **M3** R1 files tree/view ✅ | builds on M1 — done |
-| 5 | **M4** R2 rich review | builds on M1; feeds M6 |
+| 5 | **M4** R2 rich review ✅ | builds on M1; feeds M6 — done |
 | — | **M5** R6 isola P0/P1 | **parallel** with 2–5 (no UI dep) |
 | 6 | **M6** R3 reviewable planning | largest; after M4; design doc first |
 | 7 | **M7** parallelism | stretch; after M5 |
