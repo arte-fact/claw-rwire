@@ -14,6 +14,10 @@ anything "visual" (syntax colour, diffs, rendered views) is produced server-side
 
 ## R1 — File tree + a view/edit editor for clean Markdown reading
 
+> **Status: DONE** (roadmap M3) — editor has a View/Edit toggle (`.md` rendered via
+> `widgets::markdown`, code via `highlight_code`); the browser is an inline expandable tree
+> (folder = toggle + select-as-create-target, file = open). 150 tests, clippy/fmt clean.
+
 **Problem.** The Files view edits raw text only; reading a Markdown doc means looking at its
 source, and the left pane is a single-directory listing rather than a tree.
 

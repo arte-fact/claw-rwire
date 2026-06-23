@@ -37,7 +37,7 @@ closing out**.
 | **M0** | Close out task control | task-control T5 / T7 / T8 | M | [task-control-and-restart-plan.md](task-control-and-restart-plan.md) |
 | **M1** ✅ | Visual foundation | R4 syntax highlighting | M | below — **done** (in `../rwire`) |
 | **M2** ✅ | UX quick win | R5 create side panel (+ T5 field) | S–M | below — **done** |
-| **M3** | Files | R1 file tree + view/edit editor | M | below |
+| **M3** ✅ | Files | R1 file tree + view/edit editor | M | below — **done** |
 | **M4** | Review depth | R2 rich review (tools + diff + thread) | M–L | below |
 | **M5** | Sandboxing | R6 isola P0 + P1 | L | [isola-integration-roadmap.md](isola-integration-roadmap.md) |
 | **M6** | Delegation | R3 reviewable planning step | L | below (design doc first) |
@@ -115,7 +115,7 @@ per-task retry budget can be set and persists; gate green.
 
 ---
 
-## M3 — R1: file tree + view/edit editor
+## M3 — R1: file tree + view/edit editor — **DONE**
 
 **Goal.** A nested, expandable file tree and an editor that *renders* Markdown (view) with a toggle
 to raw (edit). Builds on M1 for nicer in-view code.
@@ -126,16 +126,15 @@ Current state: `src/ui/files.rs` shows a single dir (`App.files_entries`) and ed
 | # | Subtask | Status |
 |---|---|---|
 | S1 | Editor **View/Edit toggle** (`App.files_view_mode`): `.md` renders via `widgets::markdown`, code via `rwire_markdown::highlight_code` (lang by extension); Edit keeps the textarea + Save. Opens in View. | **DONE** — first consumer of M1's `highlight_code`; tests for `is_markdown`/`lang_for_path`. |
-| S2 | **Tree** read-model: expanded dir paths + a flattened node list (lazy children). | TODO — pending the interaction decision below. |
-| S3 | Render the nested tree in the browser pane (replace the flat listing; keep the breadcrumb). | TODO |
-| S4 | Tests: tree expand/collapse + path handling. | TODO |
+| S2 | **Tree** read-model (`files_tree`): the bridge owns per-workspace folder expansion (a process-global set) and projects a flattened, depth-tagged `FileNode` list — lazy, only expanded subtrees walked. | **DONE** |
+| S3 | Browser renders the inline tree: a folder row toggles+selects (create target, highlighted), a file row opens; create/rename/delete preserved (rename targets the entry's own parent). New `ToggleDir` command. | **DONE** |
+| S4 | `walk_tree` unit test (collapsed vs expanded, depth + ordering); `is_markdown`/`lang_for_path` tests (S1). | **DONE** |
 
-**Done when.** Opening a `.md` shows it rendered with a one-click flip to source (**done**); the
-browser is a collapsible tree; create/rename/delete unregressed; gate green.
+**Done.** `.md` renders with a one-click flip to source; the browser is a collapsible tree;
+create/rename/delete unregressed; **150 tests, clippy/fmt clean**.
 
-**Open decision (S2/S3).** Today the browser drills down one dir at a time and create/rename/delete
-target the single "current dir" (`files_path`). The tree needs an interaction model + a create
-target — see the question posed to the user.
+**Decision taken (S2/S3):** *inline tree, create in the selected folder* — clicking a folder
+expands/collapses it in place and selects it as the create target (highlighted + breadcrumb).
 
 ---
 
@@ -208,7 +207,7 @@ hard part). See the isola roadmap's P2.
 | 1 | **M0** task-control finish | already in flight; close it |
 | 2 | **M1** R4 syntax highlight ✅ | foundation for M3/M4 — done |
 | 3 | **M2** R5 create panel ✅ | small win; carries task-control T5 — done |
-| 4 | **M3** R1 files tree/view | builds on M1 |
+| 4 | **M3** R1 files tree/view ✅ | builds on M1 — done |
 | 5 | **M4** R2 rich review | builds on M1; feeds M6 |
 | — | **M5** R6 isola P0/P1 | **parallel** with 2–5 (no UI dep) |
 | 6 | **M6** R3 reviewable planning | largest; after M4; design doc first |
