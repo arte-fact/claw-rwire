@@ -1,5 +1,22 @@
 # Implementation roadmap — sandboxing claw execution with isola
 
+> **Progress (M5).**
+> - **P0/U1 — DONE** (isola repo, branch `feat/exec-command-captured`, rev `d1a3c8b`): isola now
+>   builds a **library** target (was binary-only) so claw can embed it, and `SandboxBackend` gained
+>   **`exec_command_captured`** — runs as the sandbox user and returns `(exit, combined stdout+stderr)`
+>   (Linux drains the capture pipe before reaping; Lima captures `limactl` output). isola gate green.
+> - **P1/T1 — DONE** (claw): optional `isola` dep (`../isola`, Linux-only) behind a `sandbox`
+>   feature, off by default. (Sonatype check: `isola` is a first-party path dep, not a published
+>   package, so the registry check is N/A; its transitive deps are standard — `nix`/`libc`/`clap`.)
+> - **P1/T2 — DONE** (claw): `src/sandbox.rs` `SandboxMode {Host, Isola}` + `resolve` /
+>   `isola_available` / `effective`; the bridge logs the mode at startup and warns+falls-back when
+>   isola is requested but not compiled in. 4 tests; gate green with the feature on **and** off.
+> - **P0/U2 (benchmark), P1/T3–T6 — TODO.** T3 (exec routing + the timeout→reap edge) and T6's
+>   gated integration test need a host with `isola setup-host` run (AppArmor + `/etc/subuid`,
+>   one-time `sudo`), which isn't available in the dev sandbox — so those land where a provisioned
+>   host exists.
+
+
 Turns the [isola spike](isola-sandbox-evaluation.md) verdict into a phased, PR-sized plan. Goal:
 run a workspace's **agent `bash` commands inside an isola sandbox** so the agent can't touch the
 host beyond its workspace — opt-in, with today's direct execution as the fallback. File tools stay
