@@ -77,11 +77,13 @@ fn start(conn: &rusqlite::Connection, shared: &SharedServerState, task: Task) {
 /// `TaskFinished`). The run role is `Producer` for a loop step (its validator runs next) or
 /// `Stage` for a plain step. The agent runs with the step's role preamble + chained context.
 fn launch_current(conn: &rusqlite::Connection, task: &Task) {
+    let epoch = tasks::bump_epoch(conn, &task.id).unwrap_or_default();
     let steps = pipeline::steps_for(conn, &task.workspace_id).unwrap_or_default();
     let Some(step) = steps.get(task.step_position.max(0) as usize).cloned() else {
         return send(Command::TaskFinished {
             id: task.id.clone(),
             role: RunRole::Stage,
+            epoch,
             result: Err("the pipeline has no step at this position".to_owned()),
         });
     };
@@ -108,7 +110,10 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             inference.agent_prompt.clone(),
             super::memory_layer(conn, &inference.agent_id),
         );
-        let prior = task_runs::list_for_task(conn, &task.id).unwrap_or_default();
+        // Scope context to the current attempt: a restart (a fresh attempt) must not inherit an
+        // earlier attempt's outputs as "work produced so far".
+        let prior =
+            task_runs::list_for_task_attempt(conn, &task.id, task.attempt).unwrap_or_default();
         let user = ChatMessage {
             role: MessageRole::User,
             text: step_context(&task.spec, &prior, &step.name),
@@ -118,7 +123,7 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
         let toolbox = build_toolbox(inference.tools.clone(), Some(workspace_dir), true);
         Ok((inference, messages, toolbox))
     })();
-    spawn_run(run_meta(conn, task), role, prepared);
+    spawn_run(run_meta(conn, task), role, epoch, prepared);
 }
 
 /// Launch a loop step's **validator** run: a read-only review of the producer's `output` that
@@ -159,7 +164,8 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
         ]));
         Ok((inference, messages, toolbox))
     })();
-    spawn_run(run_meta(conn, task), RunRole::Validator, prepared);
+    let epoch = tasks::bump_epoch(conn, &task.id).unwrap_or_default();
+    spawn_run(run_meta(conn, task), RunRole::Validator, epoch, prepared);
 }
 
 type Prepared = Result<(ResolvedInference, Vec<agent::ChatMessage>, Box<dyn Toolbox>), String>;
@@ -173,8 +179,9 @@ struct RunMeta {
 }
 
 /// Spawn the worker for a prepared run, or post the preparation failure straight back. The
-/// worker streams live tool events back via `AgentProgress` as the turn runs.
-fn spawn_run(meta: RunMeta, role: RunRole, prepared: Prepared) {
+/// worker streams live tool events back via `AgentProgress` as the turn runs. `epoch` is the
+/// dispatch guard captured at launch — the bridge drops the result if the task has moved on.
+fn spawn_run(meta: RunMeta, role: RunRole, epoch: i64, prepared: Prepared) {
     match prepared {
         Ok((inference, messages, toolbox)) => {
             let ctx = ProgressCtx {
@@ -199,6 +206,7 @@ fn spawn_run(meta: RunMeta, role: RunRole, prepared: Prepared) {
                 send(Command::TaskFinished {
                     id: ctx.task_id,
                     role,
+                    epoch,
                     result,
                 });
             });
@@ -206,6 +214,7 @@ fn spawn_run(meta: RunMeta, role: RunRole, prepared: Prepared) {
         Err(reason) => send(Command::TaskFinished {
             id: meta.task_id,
             role,
+            epoch,
             result: Err(reason),
         }),
     }
@@ -291,10 +300,15 @@ fn validator_context(spec: &str, output: &str) -> String {
     )
 }
 
-/// The most recent successful producer/stage output — the work an `approve` accepts, and what
-/// the review inbox shows.
+/// The most recent successful producer/stage output of the task's **current attempt** — the work
+/// an `approve` accepts, and what the review inbox shows.
 pub(super) fn last_producer_output(conn: &rusqlite::Connection, task_id: &str) -> String {
-    task_runs::list_for_task(conn, task_id)
+    let attempt = tasks::get(conn, task_id)
+        .ok()
+        .flatten()
+        .map(|task| task.attempt)
+        .unwrap_or(0);
+    task_runs::list_for_task_attempt(conn, task_id, attempt)
         .unwrap_or_default()
         .iter()
         .rev()
@@ -396,12 +410,16 @@ fn next_action(step_position: i64, step_count: usize, ok: bool) -> Next {
 }
 
 /// The next-run timestamp for a recurrent task that just succeeded, or `None` to finish it
-/// (non-recurrent, failed, or a missing/unparseable cron). Failures finish so a broken
-/// recurrent task doesn't hammer its lane every tick.
+/// (non-recurrent, failed, or a missing/unparseable cron).
 fn reschedule_at(task: &Task, status: TaskStatus) -> Option<String> {
     if !matches!(task.kind, crate::db::tasks::TaskKind::Recurrent) || status != TaskStatus::Done {
         return None;
     }
+    next_cron_slot(task)
+}
+
+/// The next fire of a recurrent task's cron schedule after now, or `None` (no/unparseable cron).
+fn next_cron_slot(task: &Task) -> Option<String> {
     let cron = crate::schedule::Cron::parse(task.schedule.as_deref()?)?;
     let next = cron.next_after(now_unix())?;
     Some(crate::schedule::to_rfc3339_millis(next))
@@ -416,6 +434,92 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// `settings` key for the global auto-retry budget (per-task `max_retries` overrides it).
+const RETRY_MAX_KEY: &str = "task.max_retries";
+/// `settings` key for the base backoff (seconds); the delay doubles each retry, capped.
+const RETRY_BASE_SECS_KEY: &str = "task.retry_base_secs";
+const DEFAULT_MAX_RETRIES: i64 = 2;
+const DEFAULT_RETRY_BASE_SECS: i64 = 30;
+/// Ceiling on a single backoff (1h) so the delay can't grow unbounded.
+const RETRY_BACKOFF_CAP_SECS: i64 = 3600;
+/// Bound the doubling shift so `1 << shift` can't overflow before the cap clamps it.
+const RETRY_BACKOFF_MAX_SHIFT: i64 = 16;
+
+/// What to do with a task after an **execution** failure (a run error, not a reviewer's verdict)
+/// — a pure decision, unit-tested. Retry within budget with exponential backoff; once spent, a
+/// recurrent task resumes its schedule and a one-shot fails terminally.
+#[derive(Debug, PartialEq, Eq)]
+enum FailNext {
+    Retry { backoff_secs: i64 },
+    ResumeCron,
+    Fail,
+}
+
+fn fail_next(auto_retries: i64, max_retries: i64, recurrent: bool, base_secs: i64) -> FailNext {
+    if auto_retries < max_retries {
+        let shift = auto_retries.clamp(0, RETRY_BACKOFF_MAX_SHIFT) as u32;
+        let backoff_secs = base_secs
+            .saturating_mul(1i64 << shift)
+            .min(RETRY_BACKOFF_CAP_SECS);
+        FailNext::Retry { backoff_secs }
+    } else if recurrent {
+        FailNext::ResumeCron
+    } else {
+        FailNext::Fail
+    }
+}
+
+/// An integer `settings` value, or `default` when unset / unparseable.
+fn setting_i64(conn: &rusqlite::Connection, key: &str, default: i64) -> i64 {
+    crate::db::settings::get_or(conn, key, &default.to_string())
+        .trim()
+        .parse()
+        .unwrap_or(default)
+}
+
+/// Route a failed run: auto-retry (bounded, backed off) at the same step, else resume a recurrent
+/// task's schedule, else finish it terminally. Reuses the `next_run` clock — the next tick picks
+/// the task up once the backoff elapses.
+fn retry_or_fail(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    task: &Task,
+    output: &str,
+) {
+    let max = task
+        .max_retries
+        .unwrap_or_else(|| setting_i64(conn, RETRY_MAX_KEY, DEFAULT_MAX_RETRIES));
+    let base = setting_i64(conn, RETRY_BASE_SECS_KEY, DEFAULT_RETRY_BASE_SECS);
+    let recurrent = matches!(task.kind, crate::db::tasks::TaskKind::Recurrent);
+    match fail_next(task.auto_retries, max, recurrent, base) {
+        FailNext::Retry { backoff_secs } => {
+            let next_run = crate::schedule::to_rfc3339_millis(now_unix() + backoff_secs);
+            if let Err(err) = tasks::note_retry(conn, &task.id, &next_run) {
+                log_line(format!("scheduler: retry {} failed: {err}", task.id));
+            }
+            super::tasks::project_if_active(conn, shared, &task.workspace_id);
+            super::tasks::refresh_detail_if_open(conn, shared, &task.id);
+            activity(
+                shared,
+                task,
+                ActivityKind::Started,
+                format!("retry {}/{max}", task.auto_retries + 1),
+            );
+        }
+        FailNext::ResumeCron => match next_cron_slot(task) {
+            Some(next_run) => {
+                if let Err(err) = tasks::reschedule(conn, &task.id, &next_run, Some(output)) {
+                    log_line(format!("scheduler: resume {} failed: {err}", task.id));
+                }
+                super::tasks::project_if_active(conn, shared, &task.workspace_id);
+                super::tasks::refresh_detail_if_open(conn, shared, &task.id);
+            }
+            None => terminal_finish(conn, shared, task, TaskStatus::Failed, output),
+        },
+        FailNext::Fail => terminal_finish(conn, shared, task, TaskStatus::Failed, output),
+    }
+}
+
 /// A run finished: record it in the chain, then route by what ran (`role`).
 /// - **Stage** → advance to the next step, or finish (done/failed) after the last.
 /// - **Producer** → on success, run the loop's validator; on failure, fail the task.
@@ -426,11 +530,17 @@ pub fn finished(
     shared: &SharedServerState,
     id: &str,
     role: RunRole,
+    epoch: i64,
     result: Result<agent::TurnResult, String>,
 ) {
     let Ok(Some(task)) = tasks::get(conn, id) else {
         return;
     };
+    // Dispatch guard: if the task was stopped / cancelled / restarted / re-dispatched since this
+    // worker launched, its `run_epoch` has moved on — drop this superseded run entirely.
+    if task.run_epoch != epoch {
+        return;
+    }
     let steps = pipeline::steps_for(conn, &task.workspace_id).unwrap_or_default();
     let step = steps.get(task.step_position.max(0) as usize).cloned();
     let (ok, output, invocations) = match result {
@@ -469,6 +579,7 @@ pub fn finished(
                 iteration: task.iteration,
                 ok,
                 transcript: transcript.as_deref(),
+                attempt: task.attempt,
             },
         );
     }
@@ -479,11 +590,12 @@ pub fn finished(
         RunRole::Stage => match next_action(task.step_position, steps.len(), ok) {
             Next::Advance(next_position) => advance_to(conn, shared, &task, next_position),
             _ if ok => terminal_finish(conn, shared, &task, TaskStatus::Done, &output),
-            _ => terminal_finish(conn, shared, &task, TaskStatus::Failed, &output),
+            // An execution failure on a plain stage: auto-retry (bounded), else terminal.
+            _ => retry_or_fail(conn, shared, &task, &output),
         },
         RunRole::Producer => {
             if !ok {
-                terminal_finish(conn, shared, &task, TaskStatus::Failed, &output);
+                retry_or_fail(conn, shared, &task, &output);
             } else if let Some(step) = &step {
                 if step.validator_kind.as_deref() == Some("human") {
                     // A human gate: park for the reviewer (the inbox) instead of an agent run.
@@ -685,6 +797,7 @@ pub fn human_verdict(
                 iteration: task.iteration,
                 ok: true,
                 transcript: None,
+                attempt: task.attempt,
             },
         );
     }
@@ -725,6 +838,35 @@ mod tests {
         assert_eq!(next_action(1, 2, true), Next::Done); // last step → done
         assert_eq!(next_action(0, 1, true), Next::Done); // single (default) stage → done
         assert_eq!(next_action(0, 3, false), Next::Fail); // failure ends regardless of position
+    }
+
+    #[test]
+    fn fail_next_retries_within_budget_then_resumes_or_fails() {
+        // Within budget: retry with exponentially growing backoff (base 30 → 30, 60, 120…).
+        assert_eq!(
+            fail_next(0, 2, false, 30),
+            FailNext::Retry { backoff_secs: 30 }
+        );
+        assert_eq!(
+            fail_next(1, 2, false, 30),
+            FailNext::Retry { backoff_secs: 60 }
+        );
+        // Budget spent: a one-shot fails terminally, a recurrent task resumes its schedule.
+        assert_eq!(fail_next(2, 2, false, 30), FailNext::Fail);
+        assert_eq!(fail_next(2, 2, true, 30), FailNext::ResumeCron);
+        // max_retries = 0 means no auto-retry at all.
+        assert_eq!(fail_next(0, 0, false, 30), FailNext::Fail);
+    }
+
+    #[test]
+    fn fail_next_caps_the_backoff() {
+        // The doubling is clamped at the 1h ceiling rather than growing unbounded.
+        assert_eq!(
+            fail_next(20, 99, false, 30),
+            FailNext::Retry {
+                backoff_secs: RETRY_BACKOFF_CAP_SECS
+            }
+        );
     }
 
     #[test]
@@ -774,6 +916,7 @@ mod tests {
             iteration: 0,
             ok: true,
             transcript: None,
+            attempt: 0,
         }];
         let ctx = step_context("make X", &prior, "Refine");
         assert!(ctx.contains("Task: make X"));

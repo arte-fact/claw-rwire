@@ -80,6 +80,27 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_agent_memory_paused_column(conn).map_err(DbError::Schema)?;
     add_task_pipeline_columns(conn).map_err(DbError::Schema)?;
     add_task_run_transcript_column(conn).map_err(DbError::Schema)?;
+    add_task_control_columns(conn).map_err(DbError::Schema)?;
+    Ok(())
+}
+
+/// Add the run-control columns (`run_epoch`/`auto_retries`/`max_retries`/`attempt` on `tasks`,
+/// `attempt` on `task_runs`) to a DB that predates them. A fresh DB already has them from the
+/// schema, so each ALTER fails "duplicate column" — treated as success.
+fn add_task_control_columns(conn: &Connection) -> rusqlite::Result<()> {
+    for column in [
+        "ALTER TABLE tasks ADD COLUMN run_epoch INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN auto_retries INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN max_retries INTEGER",
+        "ALTER TABLE tasks ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE task_runs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0",
+    ] {
+        match conn.execute(column, []) {
+            Ok(_) => {}
+            Err(err) if is_duplicate_column(&err) => {}
+            Err(err) => return Err(err),
+        }
+    }
     Ok(())
 }
 
@@ -290,5 +311,53 @@ mod tests {
         // Idempotent: a second migrate is a no-op.
         migrate(&conn).expect("migrate again");
         assert!(pk_of(&conn, "agent_workspaces", "workspace_id") > 0);
+    }
+
+    fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+        use rusqlite::OptionalExtension;
+        conn.query_row(
+            &format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"),
+            [column],
+            |_| Ok(()),
+        )
+        .optional()
+        .expect("table_info")
+        .is_some()
+    }
+
+    #[test]
+    fn migrate_adds_control_columns_to_an_old_tasks_table() {
+        // Start from the full schema, then downgrade tasks/task_runs to their pre-control shape.
+        let conn = Connection::open_in_memory().expect("db");
+        apply_schema(&conn).expect("schema");
+        conn.execute_batch(
+            "DROP TABLE task_runs;
+             DROP TABLE tasks;
+             CREATE TABLE tasks (
+               id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+               spec TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'oneshot',
+               status TEXT NOT NULL DEFAULT 'pending', step_position INTEGER NOT NULL DEFAULT 0,
+               iteration INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+             );
+             CREATE TABLE task_runs (
+               id TEXT PRIMARY KEY, task_id TEXT NOT NULL, position INTEGER NOT NULL,
+               role TEXT NOT NULL, iteration INTEGER NOT NULL DEFAULT 0,
+               ok INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
+             );",
+        )
+        .expect("downgrade");
+        for column in ["run_epoch", "auto_retries", "max_retries", "attempt"] {
+            assert!(!column_exists(&conn, "tasks", column), "pre: {column}");
+        }
+
+        migrate(&conn).expect("migrate");
+
+        for column in ["run_epoch", "auto_retries", "max_retries", "attempt"] {
+            assert!(column_exists(&conn, "tasks", column), "tasks.{column}");
+        }
+        assert!(column_exists(&conn, "task_runs", "attempt"));
+        // Idempotent: a second migrate over the now-current shape is a no-op.
+        migrate(&conn).expect("migrate again");
     }
 }

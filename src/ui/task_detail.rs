@@ -23,10 +23,8 @@ fn body(app: &App) -> ElementBuilder {
     let Some(detail) = &app.task_detail else {
         return el(El::Div).st([St::TextSm, St::TextMuted]).text("Loading…");
     };
-    let running = !matches!(
-        detail.status.as_str(),
-        "done" | "failed" | "rejected" | "cancelled"
-    ) && !detail.awaiting;
+    // Only a genuinely running task shows the live feed; a stopped/pending one is idle.
+    let running = detail.status == "running";
     let mut sections = vec![
         back_link(&detail.workspace_id),
         header(detail),
@@ -66,9 +64,11 @@ fn body(app: &App) -> ElementBuilder {
                 .text("No runs recorded."),
         ));
     }
-    // Gate actions when parked.
+    // Gate actions when parked at a human gate; otherwise the run-control bar.
     if detail.awaiting {
         sections.push(actions(&detail.id));
+    } else {
+        sections.push(control_bar(detail));
     }
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapMd])
@@ -230,6 +230,70 @@ fn verdict_chip(run: &RunView) -> ElementBuilder {
     el(El::Span)
         .st([St::TextXs, St::TextUppercase, St::TrackingWide, color])
         .text(text)
+}
+
+/// The run-control bar: Stop while live, Start/Restart when stopped, Restart when terminal.
+fn control_bar(detail: &TaskDetail) -> ElementBuilder {
+    let id = detail.id.as_str();
+    let buttons = match detail.status.as_str() {
+        "running" | "pending" => vec![
+            action_button("Stop", stop(), id, false),
+            action_button("Cancel", cancel(), id, false),
+        ],
+        "stopped" => vec![
+            action_button("Start", start(), id, true),
+            action_button("Restart", restart(), id, false),
+            action_button("Cancel", cancel(), id, false),
+        ],
+        // Terminal (done | failed | rejected | cancelled): a clean-slate Restart.
+        _ => vec![action_button("Restart", restart(), id, true)],
+    };
+    card(
+        "Controls",
+        el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+            .append(buttons),
+    )
+}
+
+#[handler]
+fn stop(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(task) = ctx.data("task") {
+        bridge::send(Command::StopTask {
+            id: task.to_owned(),
+        });
+    }
+}
+
+#[handler]
+fn start(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(task) = ctx.data("task") {
+        bridge::send(Command::StartTask {
+            id: task.to_owned(),
+        });
+    }
+}
+
+#[handler]
+fn restart(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(task) = ctx.data("task") {
+        bridge::send(Command::RestartTask {
+            id: task.to_owned(),
+        });
+    }
+}
+
+#[handler]
+fn cancel(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(task) = ctx.data("task") {
+        bridge::send(Command::CancelTask {
+            id: task.to_owned(),
+        });
+    }
 }
 
 /// The gate actions for a parked task: Approve / Request-changes(notes) / Reject.

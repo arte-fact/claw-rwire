@@ -301,13 +301,88 @@ fn input_st() -> [St; 8] {
     ]
 }
 
+/// The run-control buttons for a task card, by status: Stop while live, Start/Restart when
+/// stopped, Restart when terminal, Edit only when not running (editing a live run is a no-op).
+fn control_buttons(task: &TaskView) -> Vec<ElementBuilder> {
+    let icon = |glyph, on_click| {
+        crate::ui::widgets::icon_button(glyph, on_click, false).data("task", &task.id)
+    };
+    match task.status.as_str() {
+        "running" => vec![
+            icon(icons::Icon::Pause, stop_task()),
+            icon(icons::Icon::Close, cancel_task()),
+        ],
+        "pending" => vec![
+            icon(icons::Icon::Edit, edit_task()),
+            icon(icons::Icon::Pause, stop_task()),
+            icon(icons::Icon::Close, cancel_task()),
+        ],
+        "awaiting" => vec![
+            icon(icons::Icon::Pause, stop_task()),
+            icon(icons::Icon::Close, cancel_task()),
+        ],
+        "stopped" => vec![
+            icon(icons::Icon::Play, start_task()),
+            restart_button(&task.id),
+            icon(icons::Icon::Edit, edit_task()),
+            icon(icons::Icon::Close, cancel_task()),
+        ],
+        // Terminal (done | failed | rejected | cancelled): a clean-slate Restart.
+        _ => vec![restart_button(&task.id)],
+    }
+}
+
+/// A small text "Restart" button (there's no rotate glyph) carrying the task id.
+fn restart_button(task_id: &str) -> ElementBuilder {
+    el(El::Button)
+        .attr("type", "button")
+        .data("task", task_id)
+        .on(Ev::Click, restart_task())
+        .style(Style::new().set("font", "inherit"))
+        .st([
+            St::TextXs,
+            St::PxSm,
+            St::PyXs,
+            St::RoundedSm,
+            St::BorderDefault,
+            St::BgApp,
+            St::TextMuted,
+            St::CursorPointer,
+        ])
+        .hover([St::TextHigh])
+        .text("Restart")
+}
+
+#[handler]
+fn stop_task(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(id) = ctx.data("task") {
+        bridge::send(Command::StopTask { id: id.to_owned() });
+    }
+}
+
+#[handler]
+fn start_task(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(id) = ctx.data("task") {
+        bridge::send(Command::StartTask { id: id.to_owned() });
+    }
+}
+
+#[handler]
+fn restart_task(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(id) = ctx.data("task") {
+        bridge::send(Command::RestartTask { id: id.to_owned() });
+    }
+}
+
 fn task_card(
     task: &TaskView,
     members: &[(String, String)],
     open: bool,
     wid: &str,
 ) -> ElementBuilder {
-    let terminal = matches!(task.status.as_str(), "done" | "failed" | "cancelled");
     let mut head: Vec<ElementBuilder> = vec![
         // The title links to the task's detail view (its run chain).
         Link::route(&format!("/w/{wid}/tasks/{}", task.id))
@@ -323,15 +398,8 @@ fn task_card(
             .text(&task.title),
         status_badge(&task.status),
     ];
-    if !terminal {
-        head.push(
-            crate::ui::widgets::icon_button(icons::Icon::Edit, edit_task(), false)
-                .data("task", &task.id),
-        );
-        head.push(
-            crate::ui::widgets::icon_button(icons::Icon::Close, cancel_task(), false)
-                .data("task", &task.id),
-        );
+    for button in control_buttons(task) {
+        head.push(button);
     }
     let mut rows = vec![
         el(El::Div)
@@ -351,6 +419,12 @@ fn task_card(
             if let Some(next) = &task.next_run {
                 meta.push_str(&format!(" · next {next}"));
             }
+        }
+        if task.attempt > 0 {
+            meta.push_str(&format!(" · attempt {}", task.attempt + 1));
+        }
+        if let Some(next) = &task.next_retry {
+            meta.push_str(&format!(" · retry {} → {next}", task.auto_retries + 1));
         }
         if !task.blockers.is_empty() {
             meta.push_str(&format!(" · blocked by {}", task.blockers.join(", ")));

@@ -19,6 +19,8 @@ pub struct TaskRun {
     pub ok: bool,
     /// The run's full tool transcript (JSON array of `{name, arguments, result, ok}`), or `None`.
     pub transcript: Option<String>,
+    /// The task attempt (manual-restart generation) this run belongs to.
+    pub attempt: i64,
 }
 
 /// What a run produced, recorded after it finishes.
@@ -34,14 +36,15 @@ pub struct NewRun<'a> {
     pub iteration: i64,
     pub ok: bool,
     pub transcript: Option<&'a str>,
+    pub attempt: i64,
 }
 
 pub fn append(conn: &Connection, run: &NewRun) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO task_runs
            (id, task_id, position, role, agent_id, output, verdict, feedback, iteration, ok,
-            transcript, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+            transcript, attempt, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                  strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         params![
             run.id,
@@ -55,6 +58,7 @@ pub fn append(conn: &Connection, run: &NewRun) -> rusqlite::Result<()> {
             run.iteration,
             i64::from(run.ok),
             run.transcript,
+            run.attempt,
         ],
     )?;
     Ok(())
@@ -65,24 +69,44 @@ pub fn append(conn: &Connection, run: &NewRun) -> rusqlite::Result<()> {
 /// output" (the task's result) pick a wrong, often empty, run.
 pub fn list_for_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Vec<TaskRun>> {
     let mut stmt = conn.prepare(
-        "SELECT id, position, role, agent_id, output, verdict, feedback, iteration, ok, transcript
+        "SELECT id, position, role, agent_id, output, verdict, feedback, iteration, ok, \
+         transcript, attempt
            FROM task_runs WHERE task_id = ?1 ORDER BY created_at ASC, id ASC",
     )?;
-    let rows = stmt.query_map(params![task_id], |row| {
-        Ok(TaskRun {
-            id: row.get(0)?,
-            position: row.get(1)?,
-            role: row.get(2)?,
-            agent: row.get(3)?,
-            output: row.get(4)?,
-            verdict: row.get(5)?,
-            feedback: row.get(6)?,
-            iteration: row.get(7)?,
-            ok: row.get::<_, i64>(8)? != 0,
-            transcript: row.get(9)?,
-        })
-    })?;
+    let rows = stmt.query_map(params![task_id], from_row)?;
     rows.collect()
+}
+
+/// A task's runs for one **attempt** only, oldest first — the chained context the scheduler
+/// feeds the next step, so a restart (a fresh attempt) never inherits an earlier attempt's work.
+pub fn list_for_task_attempt(
+    conn: &Connection,
+    task_id: &str,
+    attempt: i64,
+) -> rusqlite::Result<Vec<TaskRun>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, position, role, agent_id, output, verdict, feedback, iteration, ok, \
+         transcript, attempt
+           FROM task_runs WHERE task_id = ?1 AND attempt = ?2 ORDER BY created_at ASC, id ASC",
+    )?;
+    let rows = stmt.query_map(params![task_id, attempt], from_row)?;
+    rows.collect()
+}
+
+fn from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskRun> {
+    Ok(TaskRun {
+        id: row.get(0)?,
+        position: row.get(1)?,
+        role: row.get(2)?,
+        agent: row.get(3)?,
+        output: row.get(4)?,
+        verdict: row.get(5)?,
+        feedback: row.get(6)?,
+        iteration: row.get(7)?,
+        ok: row.get::<_, i64>(8)? != 0,
+        transcript: row.get(9)?,
+        attempt: row.get(10)?,
+    })
 }
 
 #[cfg(test)]
@@ -127,6 +151,7 @@ mod tests {
                 iteration: 0,
                 ok: true,
                 transcript: Some(r#"[{"name":"write","arguments":"{}","result":"ok","ok":true}]"#),
+                attempt: 0,
             },
         )
         .expect("r1");
@@ -144,6 +169,7 @@ mod tests {
                 iteration: 0,
                 ok: true,
                 transcript: None,
+                attempt: 0,
             },
         )
         .expect("r2");
@@ -153,5 +179,33 @@ mod tests {
         assert_eq!(runs[1].position, 1);
         assert!(runs[0].transcript.as_deref().unwrap().contains("write"));
         assert_eq!(runs[1].transcript, None);
+    }
+
+    #[test]
+    fn list_for_task_attempt_scopes_to_one_attempt() {
+        let conn = seeded();
+        fn run<'a>(id: &'a str, attempt: i64) -> NewRun<'a> {
+            NewRun {
+                id,
+                task_id: "t1",
+                position: 0,
+                role: "stage",
+                agent: None,
+                output: Some(id),
+                verdict: None,
+                feedback: None,
+                iteration: 0,
+                ok: true,
+                transcript: None,
+                attempt,
+            }
+        }
+        append(&conn, &run("a0", 0)).expect("a0");
+        append(&conn, &run("a1", 1)).expect("a1");
+        // The full chain has both; the attempt-scoped read has only the matching attempt.
+        assert_eq!(list_for_task(&conn, "t1").expect("all").len(), 2);
+        let scoped = list_for_task_attempt(&conn, "t1", 1).expect("scoped");
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].output.as_deref(), Some("a1"));
     }
 }

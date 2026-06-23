@@ -8,6 +8,9 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+mod control;
+pub use control::*;
+
 /// A task's lifecycle status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
@@ -15,6 +18,9 @@ pub enum TaskStatus {
     Running,
     /// Parked at a human gate (or a loop's on-exhaust=human) — frees the lane, awaits the user.
     Awaiting,
+    /// Paused by the user — idle (frees the lane), invisible to the ready-scan, and editable.
+    /// The resting state from which Start / Restart / edit / ask-owner happen. Non-terminal.
+    Stopped,
     Done,
     Failed,
     /// A reviewer (agent or human) rejected the work — terminal.
@@ -28,6 +34,7 @@ impl TaskStatus {
             TaskStatus::Pending => "pending",
             TaskStatus::Running => "running",
             TaskStatus::Awaiting => "awaiting",
+            TaskStatus::Stopped => "stopped",
             TaskStatus::Done => "done",
             TaskStatus::Failed => "failed",
             TaskStatus::Rejected => "rejected",
@@ -35,10 +42,11 @@ impl TaskStatus {
         }
     }
 
-    fn from_str(value: &str) -> Self {
+    pub fn from_str(value: &str) -> Self {
         match value {
             "running" => TaskStatus::Running,
             "awaiting" => TaskStatus::Awaiting,
+            "stopped" => TaskStatus::Stopped,
             "done" => TaskStatus::Done,
             "failed" => TaskStatus::Failed,
             "rejected" => TaskStatus::Rejected,
@@ -92,11 +100,21 @@ pub struct Task {
     pub step_position: i64,
     /// The iteration within the current loop step (Phase F).
     pub iteration: i64,
+    /// The dispatch guard: a run's result is dropped unless its captured epoch still matches.
+    /// Bumped on every launch and on every stop / cancel / restart.
+    pub run_epoch: i64,
+    /// Auto-retries consumed since the last manual start/restart (capped by the retry budget).
+    pub auto_retries: i64,
+    /// Per-task auto-retry budget, or `None` to use the global default.
+    pub max_retries: Option<i64>,
+    /// The manual-restart generation — runs are stamped with it, so a restart's context excludes
+    /// earlier attempts.
+    pub attempt: i64,
 }
 
 const SELECT: &str = "SELECT id, workspace_id, agent_group_id, title, spec, kind, schedule, \
                       status, result, priority, origin_chat_id, next_run, step_position, \
-                      iteration FROM tasks";
+                      iteration, run_epoch, auto_retries, max_retries, attempt FROM tasks";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
@@ -114,6 +132,10 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         next_run: row.get(11)?,
         step_position: row.get(12)?,
         iteration: row.get(13)?,
+        run_epoch: row.get(14)?,
+        auto_retries: row.get(15)?,
+        max_retries: row.get(16)?,
+        attempt: row.get(17)?,
     })
 }
 
@@ -180,9 +202,16 @@ pub fn set_status(conn: &Connection, id: &str, status: TaskStatus) -> rusqlite::
     Ok(())
 }
 
-/// Cancel a task (a terminal status; it stays on the board as a record).
+/// Cancel a task (a terminal status; it stays on the board as a record). Bumps `run_epoch` so a
+/// still-running worker's late result is dropped rather than overwriting the cancellation.
 pub fn cancel(conn: &Connection, id: &str) -> rusqlite::Result<()> {
-    set_status(conn, id, TaskStatus::Cancelled)
+    conn.execute(
+        "UPDATE tasks SET status = 'cancelled', run_epoch = run_epoch + 1,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(())
 }
 
 /// Move a task to a pipeline step (Phase F); it stays `running` as it flows through the chain.

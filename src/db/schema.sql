@@ -219,15 +219,19 @@ CREATE TABLE IF NOT EXISTS tasks (
   spec            TEXT NOT NULL,                       -- the instruction the agent runs
   kind            TEXT NOT NULL DEFAULT 'oneshot',     -- oneshot | recurrent
   schedule        TEXT,                                -- cron (recurrent only)
-  status          TEXT NOT NULL DEFAULT 'pending',     -- pending|running|done|failed|cancelled
+  status          TEXT NOT NULL DEFAULT 'pending',     -- pending|running|awaiting|stopped|done|failed|rejected|cancelled
   origin_chat_id  TEXT,                                -- the chat to notify on completion
   created_by      TEXT,
   result          TEXT,                                -- last run output
-  next_run        TEXT,                                -- when a recurrent task is next due
+  next_run        TEXT,                                -- when a recurrent task is next due (also: retry backoff)
   last_run        TEXT,
   priority        INTEGER NOT NULL DEFAULT 0,
   step_position   INTEGER NOT NULL DEFAULT 0,          -- current pipeline step (Phase F)
   iteration       INTEGER NOT NULL DEFAULT 0,          -- iteration within a loop step (Phase F)
+  run_epoch       INTEGER NOT NULL DEFAULT 0,          -- dispatch guard: bumped on launch/stop/cancel/restart
+  auto_retries    INTEGER NOT NULL DEFAULT 0,          -- consumed auto-retries since the last manual start
+  max_retries     INTEGER,                             -- per-task auto-retry budget; NULL = global default
+  attempt         INTEGER NOT NULL DEFAULT 0,          -- manual-restart generation (isolates run-chain context)
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
@@ -275,6 +279,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   iteration   INTEGER NOT NULL DEFAULT 0,
   ok          INTEGER NOT NULL DEFAULT 1,
   transcript  TEXT,                         -- the run's tool calls, JSON (F / live transcript)
+  attempt     INTEGER NOT NULL DEFAULT 0,   -- the task.attempt this run belongs to (restart isolation)
   created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs ON task_runs(task_id, id);

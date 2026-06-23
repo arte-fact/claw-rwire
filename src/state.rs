@@ -254,6 +254,14 @@ pub struct TaskView {
     pub step_position: i64,
     /// The iteration within a loop step (shown on the card when > 0).
     pub iteration: i64,
+    /// Auto-retries consumed so far (shown on the card while a failed run is retrying).
+    pub auto_retries: i64,
+    /// The per-task auto-retry budget override, prefilled in the edit drawer (`None` = default).
+    pub max_retries: Option<i64>,
+    /// The manual-restart generation (shown as "attempt N" once > 0).
+    pub attempt: i64,
+    /// When a retry is scheduled next (`HH:MM`), if the task is holding on a backoff.
+    pub next_retry: Option<String>,
 }
 
 /// One workspace's lane at a glance, for the global dashboard's all-lanes view: the title of
@@ -383,6 +391,8 @@ pub struct RunView {
     pub ok: bool,
     /// The run's tool calls (from the persisted transcript) — the full story of what it did.
     pub tools: Vec<ToolCardView>,
+    /// The task attempt this run belongs to — the detail view groups runs by attempt.
+    pub attempt: i64,
 }
 
 /// A task's detail view: its spec, status, and the full run chain (the audit trail).

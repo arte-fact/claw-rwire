@@ -26,11 +26,20 @@ pub fn lane_views(conn: &rusqlite::Connection, workspace: &str) -> Vec<TaskView>
             status: task.status.as_str().to_owned(),
             recurrent: matches!(task.kind, tasks::TaskKind::Recurrent),
             schedule: task.schedule,
-            next_run: task.next_run.map(|ts| short_time(&ts)),
+            next_run: task.next_run.as_deref().map(short_time),
             result: task.result.map(|text| snippet(&text)),
             blockers: tasks::blockers_of(conn, &task.id).unwrap_or_default(),
             step_position: task.step_position,
             iteration: task.iteration,
+            auto_retries: task.auto_retries,
+            max_retries: task.max_retries,
+            attempt: task.attempt,
+            // A pending task holding on a future `next_run` after a failure is awaiting a retry.
+            next_retry: if task.status == TaskStatus::Pending && task.auto_retries > 0 {
+                task.next_run.as_deref().map(short_time)
+            } else {
+                None
+            },
         })
         .collect()
 }
@@ -99,6 +108,7 @@ fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::sta
                 iteration: run.iteration,
                 ok: run.ok,
                 tools: parse_transcript(run.transcript.as_deref()),
+                attempt: run.attempt,
             })
             .collect();
         crate::state::TaskDetail {
@@ -307,6 +317,11 @@ pub fn update(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str,
     let Ok(Some(task)) = tasks::get(conn, id) else {
         return;
     };
+    // Editing a running task is a no-op on the live run (its messages were built at dispatch) —
+    // refuse, so the user stops it first rather than silently editing nothing.
+    if task.status == TaskStatus::Running {
+        return surface(shared, "stop the task before editing it".to_owned());
+    }
     let schedule = edit
         .schedule
         .map(|s| s.trim().to_owned())
@@ -359,7 +374,49 @@ pub fn cancel(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str)
     if let Err(err) = tasks::cancel(conn, id) {
         return surface(shared, format!("cancel task: {err}"));
     }
-    load(conn, shared, &task.workspace_id);
+    reproject(conn, shared, id, &task.workspace_id);
+}
+
+/// Stop (pause) a task: park it `stopped`, abandon any in-flight run, and clear its live feed.
+pub fn stop(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+    let Ok(Some(task)) = tasks::get(conn, id) else {
+        return;
+    };
+    if let Err(err) = tasks::stop(conn, id) {
+        return surface(shared, format!("stop task: {err}"));
+    }
+    super::clear_live_text(shared, id);
+    reproject(conn, shared, id, &task.workspace_id);
+}
+
+/// Resume a stopped task — re-queue it to continue from its current step.
+pub fn resume(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+    let Ok(Some(task)) = tasks::get(conn, id) else {
+        return;
+    };
+    if let Err(err) = tasks::resume(conn, id) {
+        return surface(shared, format!("start task: {err}"));
+    }
+    reproject(conn, shared, id, &task.workspace_id);
+}
+
+/// Restart a task from a clean slate (step 0, fresh attempt) — from a stopped or terminal task.
+pub fn restart(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+    let Ok(Some(task)) = tasks::get(conn, id) else {
+        return;
+    };
+    if let Err(err) = tasks::restart(conn, id) {
+        return surface(shared, format!("restart task: {err}"));
+    }
+    reproject(conn, shared, id, &task.workspace_id);
+}
+
+/// Re-project after a run-control change: the active lane, the open detail (if it's this task),
+/// and the dashboard's all-lanes summary.
+fn reproject(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str, workspace: &str) {
+    load(conn, shared, workspace);
+    refresh_detail_if_open(conn, shared, id);
+    project_dashboard(conn, shared);
 }
 
 fn agent_names(conn: &rusqlite::Connection) -> Vec<(String, String)> {

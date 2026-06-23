@@ -223,6 +223,19 @@ pub enum Command {
     CancelTask {
         id: String,
     },
+    /// Stop (pause) a task → `stopped`: frees the lane and abandons any in-flight run.
+    StopTask {
+        id: String,
+    },
+    /// Start (resume) a stopped task → `pending`: continues from the current step.
+    StartTask {
+        id: String,
+    },
+    /// Restart a task → `pending` from a clean slate (step 0, fresh attempt). Works from a
+    /// stopped or terminal task.
+    RestartTask {
+        id: String,
+    },
     /// Periodic scheduler scan: launch the next ready task in each idle workspace lane.
     SchedulerTick,
     /// A live agent event during a task run (a tool call starting/finishing, or streamed text),
@@ -233,9 +246,12 @@ pub enum Command {
     },
     /// A worker thread's finished task run, posted back for the bridge to persist + project.
     /// `role` tells the engine whether a stage / producer / validator just ran (Phase F).
+    /// `epoch` is the dispatch guard captured at launch — a result whose epoch no longer matches
+    /// the task's `run_epoch` (stopped / cancelled / restarted / re-dispatched) is dropped.
     TaskFinished {
         id: String,
         role: RunRole,
+        epoch: i64,
         result: Result<agent::TurnResult, String>,
     },
     /// The concierge delegated a request to a workspace owner (the `ask` tool): run the
@@ -684,11 +700,17 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             },
         ),
         Command::CancelTask { id } => tasks::cancel(conn, shared, &id),
+        Command::StopTask { id } => tasks::stop(conn, shared, &id),
+        Command::StartTask { id } => tasks::resume(conn, shared, &id),
+        Command::RestartTask { id } => tasks::restart(conn, shared, &id),
         Command::SchedulerTick => scheduler::tick(conn, shared),
         Command::AgentProgress { ctx, event } => live_progress(shared, ctx, event),
-        Command::TaskFinished { id, role, result } => {
-            scheduler::finished(conn, shared, &id, role, result)
-        }
+        Command::TaskFinished {
+            id,
+            role,
+            epoch,
+            result,
+        } => scheduler::finished(conn, shared, &id, role, epoch, result),
         Command::Ask {
             workspace,
             request,
