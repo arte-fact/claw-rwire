@@ -123,15 +123,19 @@ to raw (edit). Builds on M1 for nicer in-view code.
 Current state: `src/ui/files.rs` shows a single dir (`App.files_entries`) and edits raw text in a
 `Textarea` (`editor` at `files.rs:420`, `OpenFile` content). No tree, no view mode.
 
-| # | Subtask | Files | Notes |
-|---|---|---|---|
-| S1 | Editor **view/edit toggle**: `App.files_editor_mode` (`View`/`Edit`); `.md` opens in `widgets::markdown` view, toggle to the `Textarea`; non-md opens in edit | `src/ui/files.rs`, `src/state.rs` | Save still uses `WriteFile` |
-| S2 | **Tree** read-model: `App` holds expanded dir paths + their entries; expanding a folder issues `ListDir` for it and merges results | `src/state.rs`, `src/bridge/files.rs` | stay lazy — load children on expand only |
-| S3 | Render the nested tree in the browser pane (replace the flat listing; keep the breadcrumb) | `src/ui/files.rs:91` (`browser`) | |
-| S4 | Tests: tree expand/collapse + path handling (reuse `workspace::path` guards) | `bridge/files.rs` / `state` | |
+| # | Subtask | Status |
+|---|---|---|
+| S1 | Editor **View/Edit toggle** (`App.files_view_mode`): `.md` renders via `widgets::markdown`, code via `rwire_markdown::highlight_code` (lang by extension); Edit keeps the textarea + Save. Opens in View. | **DONE** — first consumer of M1's `highlight_code`; tests for `is_markdown`/`lang_for_path`. |
+| S2 | **Tree** read-model: expanded dir paths + a flattened node list (lazy children). | TODO — pending the interaction decision below. |
+| S3 | Render the nested tree in the browser pane (replace the flat listing; keep the breadcrumb). | TODO |
+| S4 | Tests: tree expand/collapse + path handling. | TODO |
 
-**Done when.** Opening a `.md` shows it rendered with a one-click flip to source; the browser is a
-collapsible tree; create/rename/delete unregressed; gate green.
+**Done when.** Opening a `.md` shows it rendered with a one-click flip to source (**done**); the
+browser is a collapsible tree; create/rename/delete unregressed; gate green.
+
+**Open decision (S2/S3).** Today the browser drills down one dir at a time and create/rename/delete
+target the single "current dir" (`files_path`). The tree needs an interaction model + a create
+target — see the question posed to the user.
 
 ---
 
