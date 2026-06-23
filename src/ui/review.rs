@@ -5,6 +5,7 @@
 use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire_markdown::Markdown;
 
 use crate::bridge::{self, Command};
 use crate::state::{App, ReviewItem};
@@ -61,27 +62,22 @@ fn review_card(item: &ReviewItem) -> ElementBuilder {
                         .text(&item.workspace),
                     el(El::Span).text(&format!("· {}", item.spec)),
                 ]),
-            // The work to review.
-            el(El::Div)
-                .style(
-                    Style::new()
-                        .set("white-space", "pre-wrap")
-                        .set("word-break", "break-word")
-                        .set("font", "inherit"),
-                )
-                .st([
-                    St::TextXs,
-                    St::TextHigh,
-                    St::BgApp,
-                    St::BorderDefault,
-                    St::RoundedSm,
-                    St::PSm,
-                ])
-                .text(if item.output.trim().is_empty() {
-                    "(no output produced)"
-                } else {
-                    &item.output
-                }),
+            // The work to review (rendered as markdown).
+            if item.output.trim().is_empty() {
+                el(El::Div)
+                    .st([St::TextXs, St::TextMuted, St::PSm])
+                    .text("(no output produced)")
+            } else {
+                el(El::Div)
+                    .st([
+                        St::TextSm,
+                        St::BgApp,
+                        St::BorderDefault,
+                        St::RoundedSm,
+                        St::PSm,
+                    ])
+                    .append([Markdown::new(item.output.clone()).build()])
+            },
             // Approve / Reject (clicks) + a link to the full run chain, then a Request-changes form.
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])

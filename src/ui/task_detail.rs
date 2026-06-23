@@ -6,6 +6,7 @@
 use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire_markdown::Markdown;
 
 use crate::bridge::{self, Command};
 use crate::state::{App, LiveEvent, RunView, TaskDetail};
@@ -30,13 +31,12 @@ fn body(app: &App) -> ElementBuilder {
     let mut sections = vec![
         back_link(&detail.workspace_id),
         header(detail),
-        // The spec.
+        // The spec (rendered as markdown — specs are usually written that way).
         card(
             "Spec",
             el(El::Div)
-                .style(Style::new().set("white-space", "pre-wrap"))
-                .st([St::TextSm, St::TextHigh])
-                .text(&detail.spec),
+                .st([St::TextSm])
+                .append([Markdown::new(detail.spec.clone()).build()]),
         ),
     ];
     // Live activity for THIS task while it's running — the real-time tool feed.
@@ -192,21 +192,20 @@ fn run_card(run: &RunView) -> ElementBuilder {
     for tool in &run.tools {
         rows.push(crate::ui::chat::tool_card(tool));
     }
-    let shown = if run.output.trim().is_empty() {
-        "(no output)"
+    // The run's reply, rendered as markdown (code blocks, lists, headings).
+    if run.output.trim().is_empty() {
+        rows.push(
+            el(El::Div)
+                .st([St::TextXs, St::TextMuted])
+                .text("(no output)"),
+        );
     } else {
-        &run.output
-    };
-    rows.push(
-        el(El::Div)
-            .style(
-                Style::new()
-                    .set("white-space", "pre-wrap")
-                    .set("word-break", "break-word"),
-            )
-            .st([St::TextXs, St::TextMuted])
-            .text(shown),
-    );
+        rows.push(
+            el(El::Div)
+                .st([St::TextSm])
+                .append([Markdown::new(run.output.clone()).build()]),
+        );
+    }
     if let Some(feedback) = run.feedback.as_deref().filter(|f| !f.trim().is_empty()) {
         rows.push(
             el(El::Div)
