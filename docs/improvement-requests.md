@@ -85,6 +85,11 @@ edits). Recommend the latter for v1. Depends on R4 to colour code inside the dif
 
 ## R3 — The owner's planning step is a first-class, reviewable task (kanban column 1)
 
+> **Status: core DONE** (roadmap M6) — delegation now creates a reviewable **Plan** task; the owner
+> proposes tasks as **held children** (Option B); the Review inbox shows the breakdown with
+> Approve (release) / Request-changes (re-plan) / Reject (cancel). Per-workspace **auto-approve**
+> toggle is the remaining piece. See [reviewable-planning.md](reviewable-planning.md).
+
 **Problem.** The workspace owner's role — analyse a delegated request and create + assign the
 tasks — happens invisibly and is **not reviewable**. The user can't see or approve the proposed
 breakdown before the child tasks start running.

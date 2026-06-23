@@ -40,7 +40,7 @@ closing out**.
 | **M3** ✅ | Files | R1 file tree + view/edit editor | M | below — **done** |
 | **M4** ✅ | Review depth | R2 rich review (tools + diff + thread) | M–L | below — **done** |
 | **M5** | Sandboxing | R6 isola P0 + P1 | L | [isola-integration-roadmap.md](isola-integration-roadmap.md) |
-| **M6** | Delegation | R3 reviewable planning step | L | below (design doc first) |
+| **M6** 🟡 | Delegation | R3 reviewable planning step | L | below — **core done**; auto-approve toggle TODO |
 | **M7** | Parallelism (stretch) | isola P2 + per-run worktrees | XL | isola roadmap P2 |
 
 M5 (isola) has no UI dependency and can proceed in parallel with M1–M4. M0 is mostly done already.
@@ -174,23 +174,30 @@ flag-off behaviour is byte-for-byte today's.
 
 ---
 
-## M6 — R3: the owner's planning step becomes a reviewable task
+## M6 — R3: the owner's planning step becomes a reviewable task — **core DONE**
 
 **Goal.** Delegation produces a **reviewable "Plan" task** in kanban column 1 instead of silently
-creating child tasks (`orchestrate::ask` → `PlanningToolbox.create_task` today). The largest item —
-**write a design doc first** (it reshapes delegation). Benefits from M4's review surface.
+creating child tasks. **Decision: Option B** (held child tasks) + a per-workspace auto-approve
+setting — see [reviewable-planning.md](reviewable-planning.md).
 
-| # | Subtask | Files | Notes |
-|---|---|---|---|
-| S0 | Design doc: breakdown-**as-data** (bridge creates cards on approve) vs **held/`stopped`** child tasks released on approve | `docs/` | decide before building; data route is cleaner |
-| S1 | Planning turn **proposes** a structured breakdown (titles/specs/assignees/blockers/schedule) as output, not direct `create_task` | `src/bridge/orchestrate.rs`, `src/tools/planning.rs` | |
-| S2 | Model the plan as a task in column 1 that parks `Awaiting` (human gate) carrying the proposal | `src/bridge/scheduler.rs` (`park_awaiting`/gate), `src/db/tasks/*` | reuse the Phase-F human gate |
-| S3 | On **approve** → create + queue children; **revise** → re-plan with feedback; **reject** → nothing | `scheduler::human_verdict`/`route_verdict` | composes with task-control (`stopped`, `attempt`) |
-| S4 | UI: plan card shows the proposed breakdown; review surface (M4) renders it for approval | `src/ui/review.rs`, board | |
-| S5 | Tests across the new path | | |
+| # | Subtask | Status |
+|---|---|---|
+| S0 | Design doc + A/B decision | **DONE** — chose B (held children) + auto-approve. |
+| S1 | `is_plan`/`plan_id` columns + migration; `create_child` (held), `create_plan`, `children_of_plan`, `release_plan`, `cancel_plan_children`; `next_ready` skips plans. | **DONE** |
+| S2 | `PlanningToolbox` plan mode: `create_task` proposes **held** children of the plan. | **DONE** |
+| S3 | `orchestrate::ask` creates the Plan gate task (column 1) + runs the owner planning turn; `replan` re-proposes on revise (shared `launch_planning`). | **DONE** |
+| S4 | `scheduler::human_verdict` routes a plan verdict: **approve** releases children, **reject** cancels them, **revise** re-plans. | **DONE** |
+| S5 | Review renders the proposed children with the verdict buttons (`ReviewItem.is_plan`/`proposed`). | **DONE** |
+| S6 | 3 plan-flow tests (held→released, reject cancels, scan skips a plan). 157 green. | **DONE** |
 
-**Done when.** Delegating work yields a reviewable plan card; the breakdown is visible before any
-child runs; approve queues children, revise re-plans, reject queues nothing; gate green.
+**Remaining:** the **per-workspace auto-approve** setting (a `workspaces` flag + a Team-tab toggle
+that skips the gate, reverting to immediate task creation). Core is **gate-always** for now.
+
+**Not yet live-tested** — exercising it needs a real owner planning turn (an LLM call); the path is
+unit-tested and compiles. **154→157 tests, clippy/fmt clean.**
+
+**Done when.** Delegating work yields a reviewable plan card; approve queues children, revise
+re-plans, reject queues nothing — **done**; the auto-approve toggle lands next.
 
 ---
 

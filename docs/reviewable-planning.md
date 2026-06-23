@@ -5,6 +5,35 @@
 > gate in front of that: the owner *proposes* a breakdown, the user **approves / revises / rejects**
 > it, and only on approval are the child tasks created and queued.
 
+## DECISION (chosen)
+
+**Option B — held child tasks**, plus a **per-workspace auto-approve** setting. (The doc below also
+describes Option A, which was *not* chosen; kept for context.)
+
+**Chosen flow:**
+```
+concierge ask ─► Command::Ask ─► orchestrate::ask
+   if workspace.auto_approve  ─► run owner planning turn, create children PENDING (today's behaviour)
+   else (default):
+     mint plan_id; create a PLAN task (is_plan=1) in column 1
+     run owner planning turn ─► create_task ×N create children STOPPED (held), plan_id = <plan id>
+     ─► PLAN task parks AWAITING (the gate); Review shows the held children (the breakdown)
+          ├─ approve ─► release: held children STOPPED→PENDING; plan task → done
+          ├─ reject  ─► cancel the held children; plan task → rejected
+          └─ revise  ─► cancel held children, re-run planning with feedback; re-park
+```
+
+**Key implementation notes (B):**
+- `tasks` gains `plan_id TEXT` (child → its plan) and `is_plan INTEGER DEFAULT 0` (the gate task).
+- Held children are created with status `stopped` (the M0 state) so they sit out of the scheduler;
+  `next_ready` must also **skip `is_plan` tasks** (the plan card never "runs" as pipeline work).
+- `auto_approve` is a per-workspace flag (a `workspaces` column, default 0 = always gate). Its
+  toggle lives on the workspace Team tab. Core lands gate-always first; the toggle follows.
+- Review of a plan task renders its **held children** (not a producer run): the proposed cards
+  (title · assignee · blockers · schedule) with the existing Approve / Request-changes / Reject.
+
+---
+
 ## Current flow (what we're changing)
 
 ```
