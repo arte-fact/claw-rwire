@@ -36,7 +36,7 @@ closing out**.
 |---|---|---|---|---|
 | **M0** | Close out task control | task-control T5 / T7 / T8 | M | [task-control-and-restart-plan.md](task-control-and-restart-plan.md) |
 | **M1** ✅ | Visual foundation | R4 syntax highlighting | M | below — **done** (in `../rwire`) |
-| **M2** | UX quick win | R5 create side panel (+ T5 field) | S–M | below |
+| **M2** ✅ | UX quick win | R5 create side panel (+ T5 field) | S–M | below — **done** |
 | **M3** | Files | R1 file tree + view/edit editor | M | below |
 | **M4** | Review depth | R2 rich review (tools + diff + thread) | M–L | below |
 | **M5** | Sandboxing | R6 isola P0 + P1 | L | [isola-integration-roadmap.md](isola-integration-roadmap.md) |
@@ -92,18 +92,22 @@ unchanged; gate green.
 
 ---
 
-## M2 — R5: new-task creation in a side panel (+ task-control T5 field)
+## M2 — R5: new-task creation in a side panel (+ task-control T5 field) — **DONE**
 
 **Goal.** Move task creation out of the always-on top card into a side panel, refine the form, and
 surface the `max_retries` override.
 
-| # | Subtask | Files | Notes |
-|---|---|---|---|
-| S1 | `App` UI state `new_task_panel_open: bool` + toggle handler; "New task" button | `src/state.rs`, `src/ui/workspace_tasks.rs` | pure UI state, no bridge round-trip |
-| S2 | Move `create_form` (`workspace_tasks.rs:239`) into a side-panel/drawer component; board uses full width otherwise | `src/ui/workspace_tasks.rs` | reuse a drawer pattern |
-| S3 | Refine UX: grouped fields, **inline validation** (title+spec required, cron validated as in `bridge::tasks::create`), assignee + schedule | `src/ui/workspace_tasks.rs` | surface errors, don't silently drop |
-| S4 | **T5 fold-in:** `max_retries` field in create + edit; carry it through `CreateTask`/`UpdateTask` → `tasks::Edit` → `tasks::update`/`create` | `src/bridge/mod.rs`, `src/bridge/tasks.rs`, `src/db/tasks/*` | `TaskView.max_retries` already projected |
-| S5 | Tests: create/update validation incl. `max_retries` round-trip | `bridge/tasks.rs` / `db/tasks` | |
+| # | Subtask | Outcome |
+|---|---|---|
+| S1 | Panel state | `App.new_task_panel_open` + `toggle_new_task`; a "New task" button in the board toolbar (accented while open). |
+| S2 | Side panel | `create_form` moved into `new_task_panel` (a bordered aside, `flex 0 0 22rem`) rendered beside the board; board is full-width when closed. |
+| S3 | Validation | title/spec are HTML-`required` (native inline gating); cron/assignee/empty still surface via the bridge error banner. |
+| S4 | T5 fold-in | `max_retries` plumbed end-to-end: `NewTask`/`create`, `update`, bridge `Create`/`Edit` structs, `CreateTask`/`UpdateTask` commands, and a shared `retries_input` in both forms. Blank = global default; negatives ignored. |
+| S5 | Tests | `create_persists_a_max_retries_override`, `update` round-trips `max_retries`. 147 tests green; clippy/fmt clean. |
+
+**Note.** The *global* defaults editor (`task.max_retries` / `task.retry_base_secs` on the Prompts/
+Settings view) is the remaining half of T5 — left under **M0**; the engine already reads those
+settings with code defaults (2 / 30s).
 
 **Done when.** "New task" opens a side panel; submit queues + closes; validation shows inline; a
 per-task retry budget can be set and persists; gate green.
@@ -198,7 +202,7 @@ hard part). See the isola roadmap's P2.
 |---|---|---|
 | 1 | **M0** task-control finish | already in flight; close it |
 | 2 | **M1** R4 syntax highlight ✅ | foundation for M3/M4 — done |
-| 3 | **M2** R5 create panel | small win; carries task-control T5 |
+| 3 | **M2** R5 create panel ✅ | small win; carries task-control T5 — done |
 | 4 | **M3** R1 files tree/view | builds on M1 |
 | 5 | **M4** R2 rich review | builds on M1; feeds M6 |
 | — | **M5** R6 isola P0/P1 | **parallel** with 2–5 (no UI dep) |
