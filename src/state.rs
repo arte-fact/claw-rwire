@@ -561,6 +561,8 @@ pub struct App {
     pub pipeline_columns: Vec<String>,
     /// Tasks tab view: `true` = the flat list (mobile-friendly), `false` = the kanban board.
     pub tasks_list_view: bool,
+    /// Whether the "New task" side panel is open. Pure UI state, toggled by the New-task button.
+    pub new_task_panel_open: bool,
     /// The id of the task whose inline edit drawer is open (retitle / reassign / schedule /
     /// blockers), or `None`. Pure UI state, toggled by the card's edit button.
     pub editing_task: Option<String>,

@@ -124,6 +124,7 @@ impl PlanningToolbox {
                 spec: spec.trim(),
                 schedule,
                 origin_chat: self.origin_chat.as_deref(),
+                max_retries: None,
             },
         ) {
             return ToolOutcome::error(format!("error: create_task failed: {err}"));
@@ -373,6 +374,7 @@ mod tests {
                 spec: "s",
                 schedule: None,
                 origin_chat: None,
+                max_retries: None,
             },
         )
         .expect("foreign task");

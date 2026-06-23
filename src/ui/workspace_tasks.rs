@@ -10,7 +10,6 @@ use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 use crate::bridge::{self, Command};
 use crate::state::{App, TaskView, WorkspaceView};
 use crate::ui::widgets::accent_submit;
-use crate::ui::workspace::card;
 
 #[renderer]
 pub fn tasks(app: &App) -> ElementBuilder {
@@ -35,13 +34,85 @@ pub fn tasks(app: &App) -> ElementBuilder {
     } else {
         kanban_board(app, &workspace.id)
     };
+    // The board column (full width unless the create panel is open beside it).
+    let main = el(El::Div)
+        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapLg])
+        .style(Style::new().set("min-width", "0"))
+        .append([toolbar(app.tasks_list_view, app.new_task_panel_open), board]);
+    let mut row = vec![main];
+    if app.new_task_panel_open {
+        row.push(new_task_panel(app, workspace));
+    }
+    el(El::Div).st([St::DisplayFlex, St::GapLg]).append(row)
+}
+
+/// The board toolbar: the Board/List view switch and the "New task" toggle.
+fn toolbar(list: bool, panel_open: bool) -> ElementBuilder {
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapLg])
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
         .append([
-            card("New task", create_form(app, workspace)),
-            view_toggle(app.tasks_list_view),
-            board,
+            el(El::Div).st([St::Flex1]).append([view_toggle(list)]),
+            new_task_button(panel_open),
         ])
+}
+
+/// The "New task" button — toggles the side panel (accented while it's open).
+fn new_task_button(open: bool) -> ElementBuilder {
+    let btn = el(El::Button)
+        .attr("type", "button")
+        .on(Ev::Click, toggle_new_task())
+        .style(Style::new().set("font", "inherit"))
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::TextXs,
+            St::PxMd,
+            St::PySm,
+            St::RoundedSm,
+            St::CursorPointer,
+        ])
+        .append([
+            icons::icon(icons::Icon::Plus),
+            el(El::Span).text("New task"),
+        ]);
+    if open {
+        btn.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
+    } else {
+        btn.st([St::BorderDefault, St::BgApp, St::TextMuted])
+            .hover([St::TextHigh])
+    }
+}
+
+/// The create-task side panel: the form in a bordered aside with a header + close button.
+fn new_task_panel(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
+    let header = el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+        .append([
+            el(El::Span)
+                .st([St::Flex1, St::TextSm, St::TextHigh, St::FontSemibold])
+                .text("New task"),
+            crate::ui::widgets::icon_button(icons::Icon::Close, toggle_new_task(), false),
+        ]);
+    el(El::Div)
+        .style(Style::new().set("flex", "0 0 22rem").set("min-width", "0"))
+        .st([
+            St::BgSurface,
+            St::BorderDefault,
+            St::RoundedSm,
+            St::PMd,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapMd,
+        ])
+        .append([header, create_form(app, workspace)])
+}
+
+/// Toggle the create-task side panel (pure UI state).
+#[handler]
+fn toggle_new_task(app: &mut App, ctx: &EventContext) {
+    let _ = ctx;
+    app.new_task_panel_open = !app.new_task_panel_open;
 }
 
 /// The flat list view (the original): cards with the inline edit drawer.
@@ -254,12 +325,14 @@ fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
                 .attr("name", "title")
                 .attr("placeholder", "Task title")
                 .attr("autocomplete", "off")
+                .attr("required", "required")
                 .style(Style::new().set("font", "inherit"))
                 .st(input_st())
                 .focus([St::BorderAccent]),
             el(El::Textarea)
                 .attr("name", "spec")
                 .attr("rows", "3")
+                .attr("required", "required")
                 .at_str(rwire::At::Placeholder, "What should the agent do?")
                 .style(
                     Style::new()
@@ -275,6 +348,7 @@ fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
                 .style(Style::new().set("font", "inherit"))
                 .st(input_st())
                 .focus([St::BorderAccent]),
+            retries_input(None),
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
@@ -286,6 +360,24 @@ fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
                     accent_submit(icons::Icon::Plus, "Queue task"),
                 ]),
         ])
+}
+
+/// The optional per-task auto-retry-budget input, prefilled with `value` (the task's current
+/// override) when editing. Blank = use the global default.
+fn retries_input(value: Option<i64>) -> ElementBuilder {
+    let field = el(El::Input)
+        .attr("name", "max_retries")
+        .attr("type", "number")
+        .attr("min", "0")
+        .attr("placeholder", "Auto-retries on failure — blank = default")
+        .attr("autocomplete", "off")
+        .style(Style::new().set("font", "inherit"))
+        .st(input_st())
+        .focus([St::BorderAccent]);
+    match value {
+        Some(n) => field.attr("value", &n.to_string()),
+        None => field,
+    }
 }
 
 fn input_st() -> [St; 8] {
@@ -511,6 +603,7 @@ fn edit_form(task: &TaskView, members: &[(String, String)]) -> ElementBuilder {
                 .style(Style::new().set("font", "inherit"))
                 .st(input_st())
                 .focus([St::BorderAccent]),
+            retries_input(task.max_retries),
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
@@ -576,7 +669,18 @@ fn submit_task(app: &mut App, ctx: &EventContext) {
         spec,
         agent,
         schedule,
+        max_retries: parse_max_retries(ctx),
     });
+}
+
+/// Parse the optional `max_retries` form field: a non-negative integer, or `None` (blank /
+/// non-numeric) to fall back to the global default.
+fn parse_max_retries(ctx: &rwire::EventContext) -> Option<i64> {
+    ctx.field("max_retries")
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|n| *n >= 0)
 }
 
 #[handler]
@@ -633,6 +737,7 @@ fn save_edit(app: &mut App, ctx: &EventContext) {
         spec,
         agent,
         schedule,
+        max_retries: parse_max_retries(ctx),
         blockers,
     });
     app.editing_task = None;

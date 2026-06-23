@@ -148,6 +148,8 @@ pub struct NewTask<'a> {
     pub spec: &'a str,
     pub schedule: Option<&'a str>,
     pub origin_chat: Option<&'a str>,
+    /// Per-task auto-retry budget override, or `None` to use the global default.
+    pub max_retries: Option<i64>,
 }
 
 pub fn create(conn: &Connection, task: &NewTask) -> rusqlite::Result<()> {
@@ -159,8 +161,8 @@ pub fn create(conn: &Connection, task: &NewTask) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO tasks
            (id, workspace_id, agent_group_id, title, spec, kind, schedule, status,
-            origin_chat_id, priority, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, 0,
+            origin_chat_id, max_retries, priority, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9, 0,
                  strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         params![
             task.id,
@@ -171,6 +173,7 @@ pub fn create(conn: &Connection, task: &NewTask) -> rusqlite::Result<()> {
             kind.as_str(),
             task.schedule,
             task.origin_chat,
+            task.max_retries,
         ],
     )?;
     Ok(())
@@ -348,8 +351,8 @@ pub fn set_blockers(conn: &Connection, task_id: &str, blockers: &[String]) -> ru
     Ok(())
 }
 
-/// Update a task's editable fields (title / spec / assignee / schedule); `kind` is recomputed
-/// from the new schedule. Leaves status / result / next_run untouched.
+/// Update a task's editable fields (title / spec / assignee / schedule / retry budget); `kind` is
+/// recomputed from the new schedule. Leaves status / result / next_run untouched.
 pub fn update(
     conn: &Connection,
     id: &str,
@@ -357,6 +360,7 @@ pub fn update(
     spec: &str,
     agent: Option<&str>,
     schedule: Option<&str>,
+    max_retries: Option<i64>,
 ) -> rusqlite::Result<()> {
     let kind = if schedule.is_some() {
         TaskKind::Recurrent
@@ -366,9 +370,9 @@ pub fn update(
     conn.execute(
         "UPDATE tasks
             SET title = ?2, spec = ?3, agent_group_id = ?4, schedule = ?5, kind = ?6,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                max_retries = ?7, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
           WHERE id = ?1",
-        params![id, title, spec, agent, schedule, kind.as_str()],
+        params![id, title, spec, agent, schedule, kind.as_str(), max_retries],
     )?;
     Ok(())
 }
@@ -413,6 +417,7 @@ mod tests {
             spec: "do the thing",
             schedule: None,
             origin_chat: None,
+            max_retries: None,
         }
     }
 
@@ -424,6 +429,24 @@ mod tests {
         assert_eq!(t.status, TaskStatus::Pending);
         assert_eq!(t.kind, TaskKind::OneShot);
         assert_eq!(t.workspace_id, "ws");
+        assert_eq!(
+            t.max_retries, None,
+            "no override → the global default applies"
+        );
+    }
+
+    #[test]
+    fn create_persists_a_max_retries_override() {
+        let conn = seeded();
+        create(
+            &conn,
+            &NewTask {
+                max_retries: Some(5),
+                ..task("t1")
+            },
+        )
+        .expect("create");
+        assert_eq!(get(&conn, "t1").expect("get").unwrap().max_retries, Some(5));
     }
 
     #[test]
@@ -526,18 +549,19 @@ mod tests {
             "new spec",
             None,
             Some("0 9 * * *"),
+            Some(5),
         )
         .expect("update");
         let t = get(&conn, "t1").expect("get").unwrap();
         assert_eq!(t.title, "New title");
         assert_eq!(t.spec, "new spec");
         assert_eq!(t.kind, TaskKind::Recurrent, "a schedule makes it recurrent");
-        // Clearing the schedule flips it back to one-shot.
-        update(&conn, "t1", "New title", "new spec", None, None).expect("update2");
-        assert_eq!(
-            get(&conn, "t1").expect("get").unwrap().kind,
-            TaskKind::OneShot
-        );
+        assert_eq!(t.max_retries, Some(5), "the retry budget round-trips");
+        // Clearing the schedule flips it back to one-shot; clearing max_retries restores default.
+        update(&conn, "t1", "New title", "new spec", None, None, None).expect("update2");
+        let t = get(&conn, "t1").expect("get").unwrap();
+        assert_eq!(t.kind, TaskKind::OneShot);
+        assert_eq!(t.max_retries, None);
     }
 
     #[test]

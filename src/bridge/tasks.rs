@@ -240,24 +240,29 @@ pub fn project_dashboard(conn: &rusqlite::Connection, shared: &SharedServerState
     );
 }
 
-/// Create a task in `workspace`, assigned to `agent` (a member; `None` = the owner), then
+/// The create form's fields — the task the user is queuing from the New-task panel.
+pub struct Create {
+    pub workspace: String,
+    pub title: String,
+    pub spec: String,
+    pub agent: Option<String>,
+    pub schedule: Option<String>,
+    pub max_retries: Option<i64>,
+}
+
+/// Create a task in its workspace, assigned to `agent` (a member; `None` = the owner), then
 /// re-project the lane.
-pub fn create(
-    conn: &rusqlite::Connection,
-    shared: &SharedServerState,
-    workspace: &str,
-    title: &str,
-    spec: &str,
-    agent: Option<String>,
-    schedule: Option<String>,
-) {
-    let title = title.trim();
-    let spec = spec.trim();
+pub fn create(conn: &rusqlite::Connection, shared: &SharedServerState, new: Create) {
+    let title = new.title.trim();
+    let spec = new.spec.trim();
     if title.is_empty() || spec.is_empty() {
         return surface(shared, "a task needs a title and a spec".to_owned());
     }
+    // A negative retry budget is meaningless — treat it as "use the global default".
+    let max_retries = new.max_retries.filter(|n| *n >= 0);
     // A schedule, if given, must be a valid cron expression (else it would never fire).
-    let schedule = schedule
+    let schedule = new
+        .schedule
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
     if let Some(cron) = &schedule
@@ -270,9 +275,9 @@ pub fn create(
     };
     // A named assignee must be a member of the workspace; `None` stores NULL and defaults to
     // the owner at run time.
-    let agent = agent.filter(|value| !value.trim().is_empty());
+    let agent = new.agent.filter(|value| !value.trim().is_empty());
     if let Some(a) = &agent {
-        let members = workspaces::members_of(conn, workspace).unwrap_or_default();
+        let members = workspaces::members_of(conn, &new.workspace).unwrap_or_default();
         if !members.iter().any(|m| m == a) {
             return surface(
                 shared,
@@ -284,17 +289,18 @@ pub fn create(
         conn,
         &NewTask {
             id: &id,
-            workspace_id: workspace,
+            workspace_id: &new.workspace,
             agent: agent.as_deref(),
             title,
             spec,
             schedule: schedule.as_deref(),
             origin_chat: None,
+            max_retries,
         },
     ) {
         return surface(shared, format!("create task: {err}"));
     }
-    load(conn, shared, workspace);
+    load(conn, shared, &new.workspace);
 }
 
 /// An edit-drawer change to a task — the fields the user can rewrite from the board.
@@ -304,6 +310,8 @@ pub struct Edit {
     pub agent: Option<String>,
     pub schedule: Option<String>,
     pub blockers: Vec<String>,
+    /// Per-task auto-retry budget (`None` = use the global default).
+    pub max_retries: Option<i64>,
 }
 
 /// Apply an [`Edit`] to a task, validating the assignee is a member, the schedule is valid
@@ -357,7 +365,16 @@ pub fn update(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str,
             }
         }
     }
-    if let Err(err) = tasks::update(conn, id, title, spec, agent.as_deref(), schedule.as_deref()) {
+    let max_retries = edit.max_retries.filter(|n| *n >= 0);
+    if let Err(err) = tasks::update(
+        conn,
+        id,
+        title,
+        spec,
+        agent.as_deref(),
+        schedule.as_deref(),
+        max_retries,
+    ) {
         return surface(shared, format!("update task: {err}"));
     }
     if let Err(err) = tasks::set_blockers(conn, id, &valid) {

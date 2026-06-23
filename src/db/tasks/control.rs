@@ -104,6 +104,7 @@ mod tests {
                 spec: "do the thing",
                 schedule: None,
                 origin_chat: None,
+                max_retries: None,
             },
         )
         .expect("create");

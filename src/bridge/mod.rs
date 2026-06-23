@@ -208,15 +208,18 @@ pub enum Command {
         spec: String,
         agent: Option<String>,
         schedule: Option<String>,
+        /// Per-task auto-retry budget (`None` = the global default).
+        max_retries: Option<i64>,
     },
     /// Apply the edit drawer's changes to a task (title / spec / assignee / schedule /
-    /// blockers), then re-project the lane.
+    /// max-retries / blockers), then re-project the lane.
     UpdateTask {
         id: String,
         title: String,
         spec: String,
         agent: Option<String>,
         schedule: Option<String>,
+        max_retries: Option<i64>,
         blockers: Vec<String>,
     },
     /// Cancel a task (its lane re-projects).
@@ -679,13 +682,26 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             spec,
             agent,
             schedule,
-        } => tasks::create(conn, shared, &workspace, &title, &spec, agent, schedule),
+            max_retries,
+        } => tasks::create(
+            conn,
+            shared,
+            tasks::Create {
+                workspace,
+                title,
+                spec,
+                agent,
+                schedule,
+                max_retries,
+            },
+        ),
         Command::UpdateTask {
             id,
             title,
             spec,
             agent,
             schedule,
+            max_retries,
             blockers,
         } => tasks::update(
             conn,
@@ -696,6 +712,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
                 spec,
                 agent,
                 schedule,
+                max_retries,
                 blockers,
             },
         ),
