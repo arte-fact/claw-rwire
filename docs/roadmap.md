@@ -101,7 +101,7 @@ surface the `max_retries` override.
 |---|---|---|
 | S1 | Panel state | `App.new_task_panel_open` + `toggle_new_task`; a "New task" button in the board toolbar (accented while open). |
 | S2 | Side drawer | `create_form` rendered in a real **right-side** overlay `rwire_components::Drawer` (backdrop + header close), matching the System Map's entity-creation drawer; opened by the toolbar "New task" button, closed on submit/backdrop/X. |
-| S2b | Schedule picker | Replaced the raw cron box with a friendly **Repeat** preset select (hourly / daily 08:00 / weekdays / weekly / monthly / Don't repeat) + a **Custom (cron)** override box; `resolve_schedule` (pure, unit-tested) maps the pair to a cron string. Shared by create + edit (edit preselects the matching preset, else Custom with the cron prefilled). |
+| S2b | Schedule input | Still the raw cron text box for now — a preset-picker attempt was reverted as poor UX; a better recurrence input is deferred (revisit alongside R5 polish). |
 | S3 | Validation | title/spec are HTML-`required` (native inline gating); cron/assignee/empty still surface via the bridge error banner. |
 | S4 | T5 fold-in | `max_retries` plumbed end-to-end: `NewTask`/`create`, `update`, bridge `Create`/`Edit` structs, `CreateTask`/`UpdateTask` commands, and a shared `retries_input` in both forms. Blank = global default; negatives ignored. |
 | S5 | Tests | `create_persists_a_max_retries_override`, `update` round-trips `max_retries`. 147 tests green; clippy/fmt clean. |
