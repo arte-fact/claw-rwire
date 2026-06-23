@@ -2,9 +2,11 @@
 //! and the verdict/feedback. Used by both the task-detail run chain and the Review inbox so each
 //! shows the full story of what an agent run did, not just a text snippet.
 
+use rwire::style::Style;
 use rwire::{El, ElementBuilder, St, el};
 
-use crate::state::RunView;
+use crate::diff::{DiffKind, line_diff};
+use crate::state::{RunView, ToolCardView};
 
 /// One run as a card: a role label + agent + verdict chip, the tool cards (what it actually did),
 /// the output as Markdown, and any reviewer feedback.
@@ -30,8 +32,9 @@ pub fn run_card(run: &RunView) -> ElementBuilder {
             ]),
     ];
     // The tool transcript — the full story of what the run did (files, commands, results).
+    // An `edit` is shown as a coloured diff; everything else as a plain tool card.
     for tool in &run.tools {
-        rows.push(crate::ui::chat::tool_card(tool));
+        rows.push(tool_view(tool));
     }
     // The run's reply, rendered as markdown (code blocks, lists, headings).
     if run.output.trim().is_empty() {
@@ -61,6 +64,62 @@ pub fn run_card(run: &RunView) -> ElementBuilder {
             St::GapXs,
         ])
         .append(rows)
+}
+
+/// Render one tool call: an `edit` becomes a coloured old→new diff; anything else falls back to
+/// the shared tool card.
+fn tool_view(tool: &ToolCardView) -> ElementBuilder {
+    if tool.name == "edit"
+        && let Some(diff) = edit_diff(tool)
+    {
+        return diff;
+    }
+    crate::ui::chat::tool_card(tool)
+}
+
+/// An `edit` tool call rendered as a labelled line diff of its `old_string` → `new_string`.
+fn edit_diff(tool: &ToolCardView) -> Option<ElementBuilder> {
+    let args: serde_json::Value = serde_json::from_str(&tool.arguments).ok()?;
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("a file");
+    let old = args.get("old_string").and_then(|v| v.as_str())?;
+    let new = args.get("new_string").and_then(|v| v.as_str())?;
+    let mut rows = vec![
+        el(El::Div)
+            .st([St::TextXs, St::TextMuted, St::FontMono])
+            .text(&format!("edit {path}")),
+    ];
+    for line in line_diff(old, new) {
+        let (prefix, color) = match line.kind {
+            DiffKind::Added => ('+', St::TextSuccess),
+            DiffKind::Removed => ('-', St::TextError),
+            DiffKind::Equal => (' ', St::TextMuted),
+        };
+        rows.push(
+            el(El::Div)
+                .style(
+                    Style::new()
+                        .set("white-space", "pre-wrap")
+                        .set("word-break", "break-word"),
+                )
+                .st([St::FontMono, St::TextXs, color])
+                .text(&format!("{prefix} {}", line.text)),
+        );
+    }
+    Some(
+        el(El::Div)
+            .st([
+                St::BgCode,
+                St::BorderDefault,
+                St::RoundedSm,
+                St::PSm,
+                St::DisplayFlex,
+                St::FlexCol,
+            ])
+            .append(rows),
+    )
 }
 
 fn verdict_chip(run: &RunView) -> ElementBuilder {
