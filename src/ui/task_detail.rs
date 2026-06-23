@@ -8,7 +8,7 @@ use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
 
 use crate::bridge::{self, Command};
-use crate::state::{App, LiveEvent, RunView, TaskDetail};
+use crate::state::{App, LiveEvent, TaskDetail};
 use crate::ui::workspace::card;
 
 pub fn page() -> ElementBuilder {
@@ -48,7 +48,11 @@ fn body(app: &App) -> ElementBuilder {
         sections.push(live_card(&live, streaming));
     }
     // The persisted run chain (completed steps).
-    let runs: Vec<ElementBuilder> = detail.runs.iter().map(run_card).collect();
+    let runs: Vec<ElementBuilder> = detail
+        .runs
+        .iter()
+        .map(crate::ui::run_chain::run_card)
+        .collect();
     if !runs.is_empty() {
         sections.push(card(
             "Run chain",
@@ -159,77 +163,6 @@ fn live_card(events: &[&LiveEvent], streaming: &str) -> ElementBuilder {
             .st([St::DisplayFlex, St::FlexCol, St::GapXs])
             .append(rows),
     )
-}
-
-fn run_card(run: &RunView) -> ElementBuilder {
-    // Label: the role, plus the iteration for a loop run and the verdict for a validator.
-    let mut label = match run.role.as_str() {
-        "validator" => "Review".to_owned(),
-        "producer" => "Produce".to_owned(),
-        _ => "Stage".to_owned(),
-    };
-    if run.iteration > 0 {
-        label.push_str(&format!(" · iter {}", run.iteration + 1));
-    }
-    let mut rows = vec![
-        el(El::Div)
-            .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-            .append([
-                el(El::Span)
-                    .st([St::Flex1, St::TextXs, St::TextHigh, St::FontSemibold])
-                    .text(&label),
-                el(El::Span).st([St::TextXs, St::TextLow]).text(&run.agent),
-                verdict_chip(run),
-            ]),
-    ];
-    // The tool transcript — the full story of what the run did (files, commands, results).
-    for tool in &run.tools {
-        rows.push(crate::ui::chat::tool_card(tool));
-    }
-    // The run's reply, rendered as markdown (code blocks, lists, headings).
-    if run.output.trim().is_empty() {
-        rows.push(
-            el(El::Div)
-                .st([St::TextXs, St::TextMuted])
-                .text("(no output)"),
-        );
-    } else {
-        rows.push(crate::ui::widgets::markdown(run.output.clone()));
-    }
-    if let Some(feedback) = run.feedback.as_deref().filter(|f| !f.trim().is_empty()) {
-        rows.push(
-            el(El::Div)
-                .st([St::TextXs, St::TextAccent])
-                .text(&format!("feedback: {feedback}")),
-        );
-    }
-    el(El::Div)
-        .st([
-            St::BgApp,
-            St::BorderDefault,
-            St::RoundedSm,
-            St::PSm,
-            St::DisplayFlex,
-            St::FlexCol,
-            St::GapXs,
-        ])
-        .append(rows)
-}
-
-fn verdict_chip(run: &RunView) -> ElementBuilder {
-    let (text, color) = match run.verdict.as_deref() {
-        Some("pass") => ("pass", St::TextAccent),
-        Some("revise") => ("revise", St::TextMuted),
-        Some("reject") => ("reject", St::TextLow),
-        _ if !run.ok => ("failed", St::TextLow),
-        _ => ("", St::TextLow),
-    };
-    if text.is_empty() {
-        return el(El::Span);
-    }
-    el(El::Span)
-        .st([St::TextXs, St::TextUppercase, St::TrackingWide, color])
-        .text(text)
 }
 
 /// The run-control bar: Stop while live, Start/Restart when stopped, Restart when terminal.

@@ -31,6 +31,7 @@ pub fn load_inbox(conn: &rusqlite::Connection, shared: &SharedServerState) {
                 .unwrap_or_else(|| task.workspace_id.clone());
             ReviewItem {
                 output: super::scheduler::last_producer_output(conn, &task.id),
+                run: super::tasks::latest_producer_run_view(conn, &task.id),
                 task_id: task.id,
                 title: task.title,
                 workspace_id: task.workspace_id,

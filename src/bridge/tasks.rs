@@ -84,6 +84,48 @@ fn parse_transcript(json: Option<&str>) -> Vec<crate::state::ToolCardView> {
         .collect()
 }
 
+/// Map one persisted run to its view-model — agent id resolved to a name, transcript parsed into
+/// tool cards. Shared by the detail run chain and the Review inbox.
+fn run_view(
+    names: &[(String, String)],
+    run: crate::db::task_runs::TaskRun,
+) -> crate::state::RunView {
+    crate::state::RunView {
+        agent: run.agent.as_ref().map_or_else(
+            || "you".to_owned(),
+            |id| {
+                names
+                    .iter()
+                    .find(|(i, _)| i == id)
+                    .map_or_else(|| id.clone(), |(_, n)| n.clone())
+            },
+        ),
+        role: run.role,
+        output: run.output.unwrap_or_default(),
+        verdict: run.verdict,
+        feedback: run.feedback,
+        iteration: run.iteration,
+        ok: run.ok,
+        tools: parse_transcript(run.transcript.as_deref()),
+        attempt: run.attempt,
+    }
+}
+
+/// The producer's latest successful run (current attempt) as a view-model — the work the Review
+/// inbox shows, with its tool transcript. `None` if no such run was recorded.
+pub(super) fn latest_producer_run_view(
+    conn: &rusqlite::Connection,
+    task_id: &str,
+) -> Option<crate::state::RunView> {
+    let task = tasks::get(conn, task_id).ok().flatten()?;
+    let run = crate::db::task_runs::list_for_task_attempt(conn, task_id, task.attempt)
+        .ok()?
+        .into_iter()
+        .rev()
+        .find(|run| run.ok && (run.role == "stage" || run.role == "producer"))?;
+    Some(run_view(&agent_names(conn), run))
+}
+
 /// Build one task's detail (spec + the full run chain). `None` if the task is gone.
 fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::state::TaskDetail> {
     let names = agent_names(conn);
@@ -91,25 +133,7 @@ fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::sta
         let runs = crate::db::task_runs::list_for_task(conn, task_id)
             .unwrap_or_default()
             .into_iter()
-            .map(|run| crate::state::RunView {
-                agent: run.agent.as_ref().map_or_else(
-                    || "you".to_owned(),
-                    |id| {
-                        names
-                            .iter()
-                            .find(|(i, _)| i == id)
-                            .map_or_else(|| id.clone(), |(_, n)| n.clone())
-                    },
-                ),
-                role: run.role,
-                output: run.output.unwrap_or_default(),
-                verdict: run.verdict,
-                feedback: run.feedback,
-                iteration: run.iteration,
-                ok: run.ok,
-                tools: parse_transcript(run.transcript.as_deref()),
-                attempt: run.attempt,
-            })
+            .map(|run| run_view(&names, run))
             .collect();
         crate::state::TaskDetail {
             id: task.id,

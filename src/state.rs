@@ -373,8 +373,11 @@ pub struct ReviewItem {
     pub workspace_id: String,
     pub workspace: String,
     pub spec: String,
-    /// The producer's latest output — the work to review.
+    /// The producer's latest output — the work to review (fallback when `run` is absent).
     pub output: String,
+    /// The producer's latest run — its tool transcript + output, so the inbox shows the full
+    /// story (what files/commands), not just a snippet. `None` if no run was recorded yet.
+    pub run: Option<RunView>,
 }
 
 /// One run in a task's chain, for the detail view's transcript (Phase F-4).

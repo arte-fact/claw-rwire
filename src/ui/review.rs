@@ -61,15 +61,13 @@ fn review_card(item: &ReviewItem) -> ElementBuilder {
                         .text(&item.workspace),
                     el(El::Span).text(&format!("· {}", item.spec)),
                 ]),
-            // The work to review (rendered as markdown).
-            if item.output.trim().is_empty() {
-                el(El::Div)
+            // The work to review: the producer's full run (tools + rendered output) when we have
+            // it, else a plain note.
+            match &item.run {
+                Some(run) => crate::ui::run_chain::run_card(run),
+                None => el(El::Div)
                     .st([St::TextXs, St::TextMuted, St::PSm])
-                    .text("(no output produced)")
-            } else {
-                el(El::Div)
-                    .st([St::BgApp, St::BorderDefault, St::RoundedSm, St::PSm])
-                    .append([crate::ui::widgets::markdown(item.output.clone())])
+                    .text("(no output produced)"),
             },
             // Approve / Reject (clicks) + a link to the full run chain, then a Request-changes form.
             el(El::Div)

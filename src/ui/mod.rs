@@ -15,6 +15,7 @@ mod files;
 mod logs;
 mod prompts;
 mod review;
+mod run_chain;
 mod system_map;
 mod task_detail;
 mod widgets;
