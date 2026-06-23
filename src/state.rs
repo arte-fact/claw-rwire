@@ -594,6 +594,9 @@ pub struct App {
     pub files_entries: Vec<FileEntry>,
     /// Files view: the file open in the editor pane, if any.
     pub files_open: Option<OpenFile>,
+    /// Files view: editor mode — `true` = rendered View (Markdown / highlighted code), `false` =
+    /// raw Edit (the textarea). Reset to View each time a file opens. Pure UI state.
+    pub files_view_mode: bool,
     /// Files view: which inline create prompt is open (`"file"` / `"folder"`), if any.
     pub files_creating: Option<String>,
     /// Files view: the controlled name input in the inline create prompt.

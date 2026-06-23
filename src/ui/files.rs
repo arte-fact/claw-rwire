@@ -440,11 +440,29 @@ fn editor(app: &App) -> ElementBuilder {
         );
     }
 
-    // The editor panel IS a form, so the header's Save (a submit button) reads the body's
-    // textarea. Keyed by path so switching files yields a fresh, re-seeded textarea.
+    if app.files_view_mode {
+        // View mode: render Markdown, or syntax-highlight code, for clean reading.
+        let controls = el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::FlexShrink0])
+            .append([mode_toggle(true)]);
+        let body = el(El::Div)
+            .style(Style::new().min_height("0").set("max-height", "32rem"))
+            .st([St::OverflowYAuto, St::PMd])
+            .append([rendered_view(open)]);
+        return panel(header_row([filename, controls]), body);
+    }
+
+    // Edit mode: the editor panel IS a form, so the header's Save (a submit button) reads the
+    // body's textarea. Keyed by path so switching files yields a fresh, re-seeded textarea.
     let field_id = format!("editor-{}", open.path);
     let lines = open.content.lines().count().max(1);
     let chars = open.content.chars().count();
+    let controls = el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::FlexShrink0])
+        .append([
+            mode_toggle(false),
+            accent_submit(icons::Icon::Check, "Save"),
+        ]);
     el(El::Form)
         .on(Ev::Submit, save_file())
         .st([
@@ -466,10 +484,7 @@ fn editor(app: &App) -> ElementBuilder {
                     St::PySm,
                     St::BorderBSubtle,
                 ])
-                .append([header_row([
-                    filename,
-                    accent_submit(icons::Icon::Check, "Save"),
-                ])]),
+                .append([header_row([filename, controls])]),
             el(El::Textarea)
                 .id(&field_id)
                 .attr("name", "content")
@@ -502,6 +517,69 @@ fn editor(app: &App) -> ElementBuilder {
                 ])
                 .text(&format!("{lines} lines · {chars} chars")),
         ])
+}
+
+/// The rendered body for View mode: a Markdown render for `.md`, else syntax-highlighted code
+/// (flat text for an unrecognised extension).
+fn rendered_view(open: &crate::state::OpenFile) -> ElementBuilder {
+    if is_markdown(&open.path) {
+        crate::ui::widgets::markdown(open.content.clone())
+    } else {
+        rwire_markdown::highlight_code(&open.content, lang_for_path(&open.path))
+    }
+}
+
+/// The View | Edit switch (immediate-apply chips). `view` is the current mode.
+fn mode_toggle(view: bool) -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapXs])
+        .append([
+            mode_chip("View", true, view),
+            mode_chip("Edit", false, !view),
+        ])
+}
+
+fn mode_chip(label: &str, view: bool, active: bool) -> ElementBuilder {
+    let chip = el(El::Button)
+        .attr("type", "button")
+        .data("view", if view { "1" } else { "0" })
+        .on(Ev::Click, set_files_view())
+        .style(Style::new().set("font", "inherit"))
+        .st([
+            St::TextXs,
+            St::PxSm,
+            St::PyXs,
+            St::RoundedSm,
+            St::BorderDefault,
+            St::CursorPointer,
+        ])
+        .text(label);
+    if active {
+        chip.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
+    } else {
+        chip.st([St::BgApp, St::TextMuted]).hover([St::TextHigh])
+    }
+}
+
+/// Whether `path` is a Markdown file (rendered as prose in View mode).
+fn is_markdown(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown")
+}
+
+/// The highlighter language for a file extension (for View-mode code rendering), or `None` to
+/// render flat. Markdown is handled separately (rendered as prose, not highlighted).
+fn lang_for_path(path: &str) -> Option<&'static str> {
+    let ext = path.rsplit_once('.').map(|(_, ext)| ext)?;
+    match ext.to_ascii_lowercase().as_str() {
+        "rs" => Some("rust"),
+        "sql" => Some("sql"),
+        "json" => Some("json"),
+        "sh" | "bash" => Some("bash"),
+        "toml" => Some("toml"),
+        "yaml" | "yml" => Some("yaml"),
+        _ => None,
+    }
 }
 
 /// A centered placeholder body for the editor panel (no file / not editable).
@@ -578,11 +656,18 @@ fn navigate(app: &mut App, ctx: &EventContext) {
 #[handler]
 fn open_file(app: &mut App, ctx: &EventContext) {
     if let (Some(workspace), Some(path)) = (app.files_workspace.clone(), ctx.data("path")) {
+        app.files_view_mode = true; // open in View mode (read-first); toggle to Edit to change it
         bridge::send(Command::OpenFile {
             workspace,
             path: path.to_owned(),
         });
     }
+}
+
+/// Switch the editor between rendered View (`data-view=1`) and raw Edit (`0`).
+#[handler]
+fn set_files_view(app: &mut App, ctx: &EventContext) {
+    app.files_view_mode = ctx.data("view") == Some("1");
 }
 
 #[handler]
@@ -699,4 +784,29 @@ fn save_file(app: &mut App, ctx: &EventContext) {
         path,
         content,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_markdown, lang_for_path};
+
+    #[test]
+    fn markdown_is_detected_case_insensitively() {
+        assert!(is_markdown("docs/README.md"));
+        assert!(is_markdown("notes.MARKDOWN"));
+        assert!(!is_markdown("src/main.rs"));
+        assert!(!is_markdown("noext"));
+    }
+
+    #[test]
+    fn lang_for_path_maps_known_extensions() {
+        assert_eq!(lang_for_path("src/main.rs"), Some("rust"));
+        assert_eq!(lang_for_path("db/schema.SQL"), Some("sql"));
+        assert_eq!(lang_for_path("Cargo.toml"), Some("toml"));
+        assert_eq!(lang_for_path("ci.yml"), Some("yaml"));
+        assert_eq!(lang_for_path("run.sh"), Some("bash"));
+        // Unknown / extensionless → flat (None).
+        assert_eq!(lang_for_path("data.bin"), None);
+        assert_eq!(lang_for_path("Makefile"), None);
+    }
 }
