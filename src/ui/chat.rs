@@ -344,10 +344,14 @@ fn composer(app: &App) -> ElementBuilder {
 }
 
 fn message_input(field_id: &str) -> ElementBuilder {
-    el(El::Input)
+    // A textarea so messages can be multiline. `field-sizing: content` auto-grows it to the
+    // text (starting at one row), capped at `max-height` where it scrolls. Enter inserts a
+    // newline; Send submits (rwire's `EventContext` exposes no key info, so Enter-to-send +
+    // Shift-Enter-newline isn't possible — the Send button is the submit affordance).
+    el(El::Textarea)
         .id(field_id)
         .attr("name", "message")
-        .attr("type", "text")
+        .attr("rows", "1")
         .attr("autocomplete", "off")
         .at_str(rwire::At::Placeholder, "Message claw…")
         .st([St::WFull, St::TextDefault])
@@ -357,7 +361,11 @@ fn message_input(field_id: &str) -> ElementBuilder {
                 .set("border", "none")
                 .set("outline", "none")
                 .set("font", "inherit")
-                .set("padding", "0.25rem"),
+                .set("padding", "0.25rem")
+                .set("resize", "none")
+                .set("field-sizing", "content")
+                .set("max-height", "40vh")
+                .set("overflow-y", "auto"),
         )
 }
 
