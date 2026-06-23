@@ -35,7 +35,7 @@ closing out**.
 | M | Theme | Items | Effort | Detail |
 |---|---|---|---|---|
 | **M0** | Close out task control | task-control T5 / T7 / T8 | M | [task-control-and-restart-plan.md](task-control-and-restart-plan.md) |
-| **M1** | Visual foundation | R4 syntax highlighting | M | below |
+| **M1** ✅ | Visual foundation | R4 syntax highlighting | M | below — **done** (in `../rwire`) |
 | **M2** | UX quick win | R5 create side panel (+ T5 field) | S–M | below |
 | **M3** | Files | R1 file tree + view/edit editor | M | below |
 | **M4** | Review depth | R2 rich review (tools + diff + thread) | M–L | below |
@@ -62,17 +62,22 @@ The run-control feature (Stop/Start/Restart, auto-retry, attempt isolation) is i
 
 ---
 
-## M1 — R4: syntax highlighting (visual foundation)
+## M1 — R4: syntax highlighting (visual foundation) — **DONE**
 
 **Goal.** Fenced code blocks render with token colours everywhere `widgets::markdown` is used
 (chat, task detail, review, files). Server-side only — no JS/build step.
 
-| # | Subtask | Files | Notes |
-|---|---|---|---|
-| S1 | Choose the tokenizer: a vetted dep **or** a small in-house lexer for Rust/SQL/JSON/bash/Markdown | — | **Run the Sonatype check** before adding any dep; in-house keeps the no-build-step constraint trivially |
-| S2 | `highlight(code, lang) -> Vec<(TokenKind, &str)>` + render to coloured `el(El::Span)` runs; unknown lang → today's plain `pre` | new `src/ui/highlight.rs`, `src/ui/widgets.rs:13` (`markdown`) | keep `highlight.rs` under the file cap |
-| S3 | Map `TokenKind` → theme style tokens so colours respect light/dark | `src/ui/widgets.rs` / theme | reuse existing `St::` text tokens where possible |
-| S4 | Tests: lexer per language; a Rust block yields keyword/string/comment spans; unknown lang stays plain | `highlight.rs` tests | |
+**Implemented in `../rwire` (branch `feat/code-highlighting`), not claw** — the highlighting lives
+in the framework's markdown renderer, so every rwire app (claw included) gets it transparently with
+**zero claw changes**. It also needed **zero theming changes**: the `St::TextSuccess`/`TextWarning`
+tokens and the `--o`/`--p` (green/amber) theme vars already existed.
+
+| # | Subtask | Outcome |
+|---|---|---|
+| S1 | Tokenizer | In-house, **zero-dep** table-driven lexer at `rwire-markdown/src/highlight.rs` (Rust/JSON/bash/SQL; unknown → `None` fallback). Hard invariant: tokens reassemble the input exactly. |
+| S2 | Render | `TagEnd::CodeBlock` in `parser.rs` builds coloured `<span>`s from the tokens (`highlight_span`), or flat text when the language is unknown/blank. |
+| S3 | Colours | Mapped to existing `St` tokens: keyword→`TextAccent`, string→`TextSuccess`, number→`TextWarning`, comment→`TextMuted`, plain→inherit. No new tokens/vars. |
+| S4 | Tests | 10 tokenizer tests (round-trip, escapes, unicode, case-insensitive SQL, fallbacks) + 2 parser integration tests. rwire-markdown gate green; claw's 146 tests green against the updated dep. |
 
 **Done when.** A ```` ```rust ```` block renders coloured in chat and task detail; unknown languages
 unchanged; gate green.
@@ -184,7 +189,7 @@ hard part). See the isola roadmap's P2.
 | Order | Milestone | Why here |
 |---|---|---|
 | 1 | **M0** task-control finish | already in flight; close it |
-| 2 | **M1** R4 syntax highlight | foundation for M3/M4 |
+| 2 | **M1** R4 syntax highlight ✅ | foundation for M3/M4 — done |
 | 3 | **M2** R5 create panel | small win; carries task-control T5 |
 | 4 | **M3** R1 files tree/view | builds on M1 |
 | 5 | **M4** R2 rich review | builds on M1; feeds M6 |

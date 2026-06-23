@@ -112,6 +112,11 @@ route is cleaner and avoids half-created plans. This composes with the run-contr
 
 ## R4 — Syntax highlighting for code display
 
+> **Status: DONE** (roadmap M1) — implemented in `../rwire` (`feat/code-highlighting`): a zero-dep
+> lexer in `rwire-markdown/src/highlight.rs` feeding coloured spans in the code-block renderer,
+> mapped to existing `St` colour tokens. Lights up in claw transparently (chat, task detail,
+> review, files) with no claw or theming changes.
+
 **Problem.** Fenced code blocks render as plain monospace; no language colouring, in chat, task
 output, the review thread, or the file viewer.
 
