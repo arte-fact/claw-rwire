@@ -29,9 +29,20 @@ pub fn load_inbox(conn: &rusqlite::Connection, shared: &SharedServerState) {
                 .flatten()
                 .map(|ws| ws.name)
                 .unwrap_or_else(|| task.workspace_id.clone());
+            // A plan task shows its proposed children; an ordinary task shows its producer run.
+            let (run, proposed) = if task.is_plan {
+                (None, super::tasks::proposed_tasks(conn, &task.id))
+            } else {
+                (
+                    super::tasks::latest_producer_run_view(conn, &task.id),
+                    Vec::new(),
+                )
+            };
             ReviewItem {
                 output: super::scheduler::last_producer_output(conn, &task.id),
-                run: super::tasks::latest_producer_run_view(conn, &task.id),
+                run,
+                is_plan: task.is_plan,
+                proposed,
                 task_id: task.id,
                 title: task.title,
                 workspace_id: task.workspace_id,

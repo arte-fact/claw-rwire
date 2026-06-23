@@ -378,6 +378,21 @@ pub struct ReviewItem {
     /// The producer's latest run — its tool transcript + output, so the inbox shows the full
     /// story (what files/commands), not just a snippet. `None` if no run was recorded yet.
     pub run: Option<RunView>,
+    /// Whether this is a reviewable **Plan** task (R3) — the inbox shows its proposed tasks.
+    pub is_plan: bool,
+    /// For a plan: the proposed (held) child tasks the user is approving.
+    pub proposed: Vec<ProposedTask>,
+}
+
+/// One proposed task in a plan under review (R3) — shown as a card in the Review inbox.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProposedTask {
+    pub title: String,
+    pub spec: String,
+    /// The assignee's display name, or `None` for the owner.
+    pub agent: Option<String>,
+    /// Cron schedule for a recurring proposed task, if any.
+    pub schedule: Option<String>,
 }
 
 /// One run in a task's chain, for the detail view's transcript (Phase F-4).

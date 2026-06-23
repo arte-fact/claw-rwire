@@ -778,6 +778,10 @@ pub fn human_verdict(
     if task.status != TaskStatus::Awaiting {
         return; // not at a gate (already resolved) — ignore a stale click
     }
+    // A reviewable Plan task (R3) gates its held children rather than a pipeline run.
+    if task.is_plan {
+        return plan_verdict(conn, shared, &task, decision, feedback);
+    }
     let steps = pipeline::steps_for(conn, &task.workspace_id).unwrap_or_default();
     let Some(step) = steps.get(task.step_position.max(0) as usize).cloned() else {
         return;
@@ -814,6 +818,62 @@ pub fn human_verdict(
         );
     }
     super::review::project_count(conn, shared);
+}
+
+/// Apply a verdict to a reviewable **Plan** task (R3): approve releases its held children (they
+/// start running), reject cancels them, and request-changes re-runs the owner's planning turn with
+/// the feedback (re-proposing into the same plan).
+fn plan_verdict(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    task: &Task,
+    decision: &str,
+    feedback: &str,
+) {
+    match decision {
+        "pass" => {
+            if let Err(err) = tasks::release_plan(conn, &task.id) {
+                log_line(format!("scheduler: release plan {} failed: {err}", task.id));
+            }
+            let _ = tasks::finish(conn, &task.id, TaskStatus::Done, Some("approved"));
+            activity(
+                shared,
+                task,
+                ActivityKind::Finished,
+                "plan approved".to_owned(),
+            );
+        }
+        "reject" => {
+            if let Err(err) = tasks::cancel_plan_children(conn, &task.id) {
+                log_line(format!("scheduler: cancel plan {} failed: {err}", task.id));
+            }
+            let _ = tasks::finish(conn, &task.id, TaskStatus::Rejected, Some(feedback));
+            activity(
+                shared,
+                task,
+                ActivityKind::Failed,
+                "plan rejected".to_owned(),
+            );
+        }
+        _ => {
+            // revise: discard the current proposal and re-plan with the feedback; the plan stays
+            // at the gate for another review.
+            if let Err(err) = tasks::cancel_plan_children(conn, &task.id) {
+                log_line(format!("scheduler: clear plan {} failed: {err}", task.id));
+            }
+            super::orchestrate::replan(conn, task, feedback);
+            activity(
+                shared,
+                task,
+                ActivityKind::Started,
+                "re-planning".to_owned(),
+            );
+        }
+    }
+    super::tasks::project_if_active(conn, shared, &task.workspace_id);
+    super::tasks::refresh_detail_if_open(conn, shared, &task.id);
+    super::review::project_count(conn, shared);
+    super::review::load_inbox(conn, shared);
 }
 
 fn activity(shared: &SharedServerState, task: &Task, kind: ActivityKind, detail: String) {

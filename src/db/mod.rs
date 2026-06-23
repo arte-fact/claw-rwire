@@ -81,6 +81,23 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_task_pipeline_columns(conn).map_err(DbError::Schema)?;
     add_task_run_transcript_column(conn).map_err(DbError::Schema)?;
     add_task_control_columns(conn).map_err(DbError::Schema)?;
+    add_task_plan_columns(conn).map_err(DbError::Schema)?;
+    Ok(())
+}
+
+/// Add the reviewable-planning columns (`is_plan`/`plan_id` on `tasks`, R3) to a DB that predates
+/// them. A fresh DB already has them from the schema, so each ALTER fails "duplicate column" — ok.
+fn add_task_plan_columns(conn: &Connection) -> rusqlite::Result<()> {
+    for column in [
+        "ALTER TABLE tasks ADD COLUMN is_plan INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN plan_id TEXT",
+    ] {
+        match conn.execute(column, []) {
+            Ok(_) => {}
+            Err(err) if is_duplicate_column(&err) => {}
+            Err(err) => return Err(err),
+        }
+    }
     Ok(())
 }
 

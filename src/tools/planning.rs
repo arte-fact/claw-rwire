@@ -38,6 +38,9 @@ pub struct PlanningToolbox {
     /// The chat the delegation came from — stamped on created tasks so the concierge can
     /// notify there on completion.
     origin_chat: Option<String>,
+    /// When set (R3 review mode), `create_task` creates **held children** of this plan task rather
+    /// than queuing them directly — the user approves the plan before they run.
+    plan_id: Option<String>,
 }
 
 impl PlanningToolbox {
@@ -46,11 +49,13 @@ impl PlanningToolbox {
         conn: Connection,
         workspace: impl Into<String>,
         origin_chat: Option<String>,
+        plan_id: Option<String>,
     ) -> Self {
         Self {
             conn: Mutex::new(conn),
             workspace: workspace.into(),
             origin_chat,
+            plan_id,
         }
     }
 
@@ -114,25 +119,34 @@ impl PlanningToolbox {
         let Ok(new_id) = id::new_id() else {
             return ToolOutcome::error("error: could not mint a task id");
         };
-        if let Err(err) = tasks::create(
-            conn,
-            &NewTask {
-                id: &new_id,
-                workspace_id: &self.workspace,
-                agent: agent_id.as_deref(),
-                title: title.trim(),
-                spec: spec.trim(),
-                schedule,
-                origin_chat: self.origin_chat.as_deref(),
-                max_retries: None,
-            },
-        ) {
+        let new = NewTask {
+            id: &new_id,
+            workspace_id: &self.workspace,
+            agent: agent_id.as_deref(),
+            title: title.trim(),
+            spec: spec.trim(),
+            schedule,
+            origin_chat: self.origin_chat.as_deref(),
+            max_retries: None,
+        };
+        // In review mode, create a held child of the plan (released on approval); otherwise queue
+        // it directly.
+        let created = match &self.plan_id {
+            Some(plan_id) => tasks::create_child(conn, &new, plan_id),
+            None => tasks::create(conn, &new),
+        };
+        if let Err(err) = created {
             return ToolOutcome::error(format!("error: create_task failed: {err}"));
         }
         for blocker in &blockers {
             let _ = tasks::add_blocker(conn, &new_id, blocker);
         }
-        ToolOutcome::text(format!("queued #{new_id}: {}", title.trim()))
+        let verb = if self.plan_id.is_some() {
+            "proposed"
+        } else {
+            "queued"
+        };
+        ToolOutcome::text(format!("{verb} #{new_id}: {}", title.trim()))
     }
 
     fn list(&self, conn: &Connection) -> ToolOutcome {
@@ -302,7 +316,7 @@ mod tests {
     }
 
     fn toolbox() -> PlanningToolbox {
-        PlanningToolbox::new(seeded(), "ws", None)
+        PlanningToolbox::new(seeded(), "ws", None, None)
     }
 
     #[test]
@@ -378,14 +392,14 @@ mod tests {
             },
         )
         .expect("foreign task");
-        let tb = PlanningToolbox::new(conn, "ws", None);
+        let tb = PlanningToolbox::new(conn, "ws", None, None);
         let out = tb.call(CANCEL_TASK, r#"{"id":"x1"}"#);
         assert!(!out.ok, "must refuse a task from another workspace");
     }
 
     #[test]
     fn create_task_stamps_the_origin_chat_for_notification() {
-        let tb = PlanningToolbox::new(seeded(), "ws", Some("chat-9".to_owned()));
+        let tb = PlanningToolbox::new(seeded(), "ws", Some("chat-9".to_owned()), None);
         assert!(tb.call(CREATE_TASK, r#"{"title":"T","spec":"s"}"#).ok);
         // Read the stamped origin_chat back through the toolbox's own connection.
         let conn = tb.conn.lock().expect("conn");

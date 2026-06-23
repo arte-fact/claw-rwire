@@ -84,6 +84,31 @@ pub fn note_retry(conn: &Connection, id: &str, next_run: &str) -> rusqlite::Resu
     Ok(())
 }
 
+/// Approve a plan (R3): release its held children — `stopped` → `pending` — so the scheduler
+/// picks them up.
+pub fn release_plan(conn: &Connection, plan_id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        &format!(
+            "UPDATE tasks SET status = 'pending', updated_at = {NOW}
+              WHERE plan_id = ?1 AND status = 'stopped'"
+        ),
+        params![plan_id],
+    )?;
+    Ok(())
+}
+
+/// Reject a plan (R3): cancel its held/queued children so nothing runs.
+pub fn cancel_plan_children(conn: &Connection, plan_id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        &format!(
+            "UPDATE tasks SET status = 'cancelled', run_epoch = run_epoch + 1, updated_at = {NOW}
+              WHERE plan_id = ?1 AND status IN ('stopped', 'pending')"
+        ),
+        params![plan_id],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{NewTask, TaskStatus, create, get, next_ready, set_status};
@@ -192,5 +217,68 @@ mod tests {
         let task = get(&conn, "t1").expect("get").unwrap();
         assert_eq!(task.status, TaskStatus::Cancelled);
         assert_eq!(task.run_epoch, 1);
+    }
+
+    fn child<'a>(id: &'a str) -> NewTask<'a> {
+        NewTask {
+            id,
+            workspace_id: "ws",
+            agent: None,
+            title: id,
+            spec: "s",
+            schedule: None,
+            origin_chat: None,
+            max_retries: None,
+        }
+    }
+
+    #[test]
+    fn held_children_are_stopped_invisible_then_released_to_pending() {
+        let conn = seeded();
+        super::super::create_plan(&conn, "plan1", "ws", "Plan: x", "do x", None).expect("plan");
+        super::super::create_child(&conn, &child("c1"), "plan1").expect("c1");
+        super::super::create_child(&conn, &child("c2"), "plan1").expect("c2");
+        // Both children are held (stopped) and tagged with the plan.
+        let c1 = get(&conn, "c1").expect("get").unwrap();
+        assert_eq!(c1.status, TaskStatus::Stopped);
+        assert_eq!(c1.plan_id.as_deref(), Some("plan1"));
+        assert_eq!(
+            super::super::children_of_plan(&conn, "plan1")
+                .expect("kids")
+                .len(),
+            2
+        );
+        // Approve → released to pending.
+        super::release_plan(&conn, "plan1").expect("release");
+        assert_eq!(
+            get(&conn, "c1").expect("get").unwrap().status,
+            TaskStatus::Pending
+        );
+        assert_eq!(
+            get(&conn, "c2").expect("get").unwrap().status,
+            TaskStatus::Pending
+        );
+    }
+
+    #[test]
+    fn reject_cancels_a_plans_held_children() {
+        let conn = seeded();
+        super::super::create_plan(&conn, "plan1", "ws", "Plan", "s", None).expect("plan");
+        super::super::create_child(&conn, &child("c1"), "plan1").expect("c1");
+        super::cancel_plan_children(&conn, "plan1").expect("cancel");
+        assert_eq!(
+            get(&conn, "c1").expect("get").unwrap().status,
+            TaskStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn next_ready_skips_a_plan_task() {
+        let conn = seeded();
+        // A plan task forced pending must still be skipped by the scheduler scan.
+        super::super::create_plan(&conn, "plan1", "ws", "Plan", "s", None).expect("plan");
+        set_status(&conn, "plan1", TaskStatus::Pending).expect("pending");
+        // `t1` (seeded, pending) is the only runnable task; the plan is never picked.
+        assert_eq!(next_ready(&conn, "ws").expect("scan").unwrap().id, "t1");
     }
 }

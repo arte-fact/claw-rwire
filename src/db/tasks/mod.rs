@@ -110,11 +110,17 @@ pub struct Task {
     /// The manual-restart generation — runs are stamped with it, so a restart's context excludes
     /// earlier attempts.
     pub attempt: i64,
+    /// A reviewable "Plan" gate task (R3): it carries no pipeline work; its held children await a
+    /// human verdict in the Review inbox.
+    pub is_plan: bool,
+    /// For a held child of a plan (R3): the id of the plan task it belongs to.
+    pub plan_id: Option<String>,
 }
 
 const SELECT: &str = "SELECT id, workspace_id, agent_group_id, title, spec, kind, schedule, \
                       status, result, priority, origin_chat_id, next_run, step_position, \
-                      iteration, run_epoch, auto_retries, max_retries, attempt FROM tasks";
+                      iteration, run_epoch, auto_retries, max_retries, attempt, is_plan, plan_id \
+                      FROM tasks";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
@@ -136,6 +142,8 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         auto_retries: row.get(15)?,
         max_retries: row.get(16)?,
         attempt: row.get(17)?,
+        is_plan: row.get::<_, i64>(18)? != 0,
+        plan_id: row.get(19)?,
     })
 }
 
@@ -177,6 +185,66 @@ pub fn create(conn: &Connection, task: &NewTask) -> rusqlite::Result<()> {
         ],
     )?;
     Ok(())
+}
+
+/// Create a **held child** of a plan (R3): identical to [`create`] but parked `stopped` and tagged
+/// with `plan_id`, so it sits out of the scheduler until the plan is approved (which releases it).
+pub fn create_child(conn: &Connection, task: &NewTask, plan_id: &str) -> rusqlite::Result<()> {
+    let kind = if task.schedule.is_some() {
+        TaskKind::Recurrent
+    } else {
+        TaskKind::OneShot
+    };
+    conn.execute(
+        "INSERT INTO tasks
+           (id, workspace_id, agent_group_id, title, spec, kind, schedule, status,
+            origin_chat_id, max_retries, plan_id, priority, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'stopped', ?8, ?9, ?10, 0,
+                 strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        params![
+            task.id,
+            task.workspace_id,
+            task.agent,
+            task.title,
+            task.spec,
+            kind.as_str(),
+            task.schedule,
+            task.origin_chat,
+            task.max_retries,
+            plan_id,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Create a reviewable **plan gate task** (R3): `is_plan`, parked `awaiting` for the user. It does
+/// no pipeline work — it just holds its proposed children until approved.
+pub fn create_plan(
+    conn: &Connection,
+    id: &str,
+    workspace_id: &str,
+    title: &str,
+    spec: &str,
+    origin_chat: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO tasks
+           (id, workspace_id, title, spec, kind, status, origin_chat_id, is_plan, priority,
+            created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, 'oneshot', 'awaiting', ?5, 1, 0,
+                 strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        params![id, workspace_id, title, spec, origin_chat],
+    )?;
+    Ok(())
+}
+
+/// The held children proposed by a plan (R3), oldest first.
+pub fn children_of_plan(conn: &Connection, plan_id: &str) -> rusqlite::Result<Vec<Task>> {
+    let mut stmt = conn.prepare(&format!(
+        "{SELECT} WHERE plan_id = ?1 ORDER BY created_at ASC, id ASC"
+    ))?;
+    let rows = stmt.query_map(params![plan_id], from_row)?;
+    rows.collect()
 }
 
 pub fn get(conn: &Connection, id: &str) -> rusqlite::Result<Option<Task>> {
@@ -256,7 +324,7 @@ pub fn running_in(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Opt
 pub fn next_ready(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Option<Task>> {
     conn.query_row(
         &format!(
-            "{SELECT} WHERE workspace_id = ?1 AND status = 'pending'
+            "{SELECT} WHERE workspace_id = ?1 AND status = 'pending' AND is_plan = 0
                AND (next_run IS NULL OR next_run <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                AND NOT EXISTS (
                  SELECT 1 FROM task_blockers b JOIN tasks bt ON bt.id = b.blocked_by

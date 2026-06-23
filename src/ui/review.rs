@@ -61,14 +61,8 @@ fn review_card(item: &ReviewItem) -> ElementBuilder {
                         .text(&item.workspace),
                     el(El::Span).text(&format!("· {}", item.spec)),
                 ]),
-            // The work to review: the producer's full run (tools + rendered output) when we have
-            // it, else a plain note.
-            match &item.run {
-                Some(run) => crate::ui::run_chain::run_card(run),
-                None => el(El::Div)
-                    .st([St::TextXs, St::TextMuted, St::PSm])
-                    .text("(no output produced)"),
-            },
+            // The work to review: a plan shows its proposed tasks; an ordinary task its full run.
+            work_to_review(item),
             // Approve / Reject (clicks) + a link to the full run chain, then a Request-changes form.
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
@@ -100,6 +94,61 @@ fn review_card(item: &ReviewItem) -> ElementBuilder {
                 ]),
         ]);
     card(&item.title, body)
+}
+
+/// The reviewable work: a plan's proposed task list (R3), else the producer's full run.
+fn work_to_review(item: &ReviewItem) -> ElementBuilder {
+    if item.is_plan {
+        return proposed_view(&item.proposed);
+    }
+    match &item.run {
+        Some(run) => crate::ui::run_chain::run_card(run),
+        None => el(El::Div)
+            .st([St::TextXs, St::TextMuted, St::PSm])
+            .text("(no output produced)"),
+    }
+}
+
+/// The proposed tasks of a plan, as a small list of cards (title · assignee · schedule · spec).
+fn proposed_view(proposed: &[crate::state::ProposedTask]) -> ElementBuilder {
+    if proposed.is_empty() {
+        return el(El::Div)
+            .st([St::TextXs, St::TextMuted, St::PSm])
+            .text("(no tasks proposed)");
+    }
+    let cards: Vec<ElementBuilder> = proposed
+        .iter()
+        .map(|p| {
+            let mut meta = p.agent.clone().unwrap_or_else(|| "owner".to_owned());
+            if let Some(schedule) = &p.schedule {
+                meta.push_str(&format!(" · ⟳ {schedule}"));
+            }
+            el(El::Div)
+                .st([
+                    St::BgApp,
+                    St::BorderDefault,
+                    St::RoundedSm,
+                    St::PSm,
+                    St::DisplayFlex,
+                    St::FlexCol,
+                    St::GapXs,
+                ])
+                .append([
+                    el(El::Div)
+                        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+                        .append([
+                            el(El::Span)
+                                .st([St::Flex1, St::TextSm, St::TextHigh, St::FontSemibold])
+                                .text(&p.title),
+                            el(El::Span).st([St::TextXs, St::TextLow]).text(&meta),
+                        ]),
+                    el(El::Div).st([St::TextXs, St::TextMuted]).text(&p.spec),
+                ])
+        })
+        .collect();
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append(cards)
 }
 
 /// The accented Approve button, carrying the task id for the click handler.

@@ -111,6 +111,26 @@ fn run_view(
     }
 }
 
+/// A plan's proposed (held) child tasks as view-models for the Review inbox (R3).
+pub(super) fn proposed_tasks(
+    conn: &rusqlite::Connection,
+    plan_id: &str,
+) -> Vec<crate::state::ProposedTask> {
+    let names = agent_names(conn);
+    tasks::children_of_plan(conn, plan_id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|task| crate::state::ProposedTask {
+            title: task.title,
+            spec: task.spec,
+            agent: task
+                .agent
+                .and_then(|id| names.iter().find(|(i, _)| *i == id).map(|(_, n)| n.clone())),
+            schedule: task.schedule,
+        })
+        .collect()
+}
+
 /// The producer's latest successful run (current attempt) as a view-model — the work the Review
 /// inbox shows, with its tool transcript. `None` if no such run was recorded.
 pub(super) fn latest_producer_run_view(
