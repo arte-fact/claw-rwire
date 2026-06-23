@@ -68,16 +68,24 @@ The run-control feature (Stop/Start/Restart, auto-retry, attempt isolation) is i
 (chat, task detail, review, files). Server-side only — no JS/build step.
 
 **Implemented in `../rwire` (branch `feat/code-highlighting`), not claw** — the highlighting lives
-in the framework's markdown renderer, so every rwire app (claw included) gets it transparently with
-**zero claw changes**. It also needed **zero theming changes**: the `St::TextSuccess`/`TextWarning`
-tokens and the `--o`/`--p` (green/amber) theme vars already existed.
+in the framework, so every rwire app (claw included) gets it transparently with **zero claw
+changes**. It also needed **zero theming changes**: the `St::TextSuccess`/`TextWarning` tokens and
+the `--o`/`--p` (green/amber) theme vars already existed.
+
+**Decision (with the user): in-house lexer, no syntect.** The Files editor (R1) targets the
+**project stack** (Rust/SQL/JSON/shell/TOML/YAML), so the zero-dep lexer is proportionate; syntect's
+breadth wasn't worth its build-step + dep weight + fixed-(non-theme)-colour cost. Crucially, the
+highlighter is **reusable for plain code files, not just markdown** — `highlight_code` is public.
 
 | # | Subtask | Outcome |
 |---|---|---|
-| S1 | Tokenizer | In-house, **zero-dep** table-driven lexer at `rwire-markdown/src/highlight.rs` (Rust/JSON/bash/SQL; unknown → `None` fallback). Hard invariant: tokens reassemble the input exactly. |
-| S2 | Render | `TagEnd::CodeBlock` in `parser.rs` builds coloured `<span>`s from the tokens (`highlight_span`), or flat text when the language is unknown/blank. |
+| S1 | Tokenizer | In-house, **zero-dep** table-driven lexer at `rwire-markdown/src/highlight.rs` (Rust/JSON/bash/SQL/TOML/YAML; unknown → flat fallback). Hard invariant: tokens reassemble the input exactly. |
+| S2 | Render | Public `code::highlight_code(code, lang) -> ElementBuilder` builds the styled block with coloured spans; the markdown parser **and** standalone callers (the R1 file viewer) share this one path. |
 | S3 | Colours | Mapped to existing `St` tokens: keyword→`TextAccent`, string→`TextSuccess`, number→`TextWarning`, comment→`TextMuted`, plain→inherit. No new tokens/vars. |
-| S4 | Tests | 10 tokenizer tests (round-trip, escapes, unicode, case-insensitive SQL, fallbacks) + 2 parser integration tests. rwire-markdown gate green; claw's 146 tests green against the updated dep. |
+| S4 | Tests | 12 tokenizer tests (round-trip, escapes, unicode, case-insensitive SQL, TOML/YAML, fallbacks) + parser & `code` integration tests. rwire-markdown gate green (58 tests); claw's 146 green against the updated dep. |
+
+**R1 hook:** claw's Files editor (M3) will call `rwire_markdown::highlight_code(content, lang)`
+with the language inferred from the file extension — no markdown round-trip.
 
 **Done when.** A ```` ```rust ```` block renders coloured in chat and task detail; unknown languages
 unchanged; gate green.
