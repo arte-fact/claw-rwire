@@ -345,14 +345,15 @@ fn composer(app: &App) -> ElementBuilder {
 
 fn message_input(field_id: &str) -> ElementBuilder {
     // A textarea so messages can be multiline. `field-sizing: content` auto-grows it to the
-    // text (starting at one row), capped at `max-height` where it scrolls. Enter inserts a
-    // newline; Send submits (rwire's `EventContext` exposes no key info, so Enter-to-send +
-    // Shift-Enter-newline isn't possible — the Send button is the submit affordance).
+    // text (starting at one row), capped at `max-height` where it scrolls. `data-enter-submit`
+    // opts into rwire's runtime behavior: Enter submits the form (→ the Submit handler), and
+    // Shift+Enter inserts a newline — the standard chat convention.
     el(El::Textarea)
         .id(field_id)
         .attr("name", "message")
         .attr("rows", "1")
         .attr("autocomplete", "off")
+        .data("enter-submit", "1")
         .at_str(rwire::At::Placeholder, "Message claw…")
         .st([St::WFull, St::TextDefault])
         .style(
@@ -376,10 +377,18 @@ fn actions_row() -> ElementBuilder {
         .append([composer_tools(), send_button()])
 }
 
-/// Left-side slot for future composer actions (attach, tools, model picker). Empty for
-/// now — new buttons drop in here without disturbing the layout.
+/// Left-side slot for composer actions (attach, tools, model picker) — for now a muted hint
+/// of the keyboard convention. New buttons drop in here without disturbing the layout.
 fn composer_tools() -> ElementBuilder {
-    el(El::Div).st([St::DisplayFlex, St::ItemsCenter, St::GapXs])
+    el(El::Div)
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapXs,
+            St::TextXs,
+            St::TextLow,
+        ])
+        .append([el(El::Span).text("⏎ send · ⇧⏎ newline")])
 }
 
 fn send_button() -> ElementBuilder {
