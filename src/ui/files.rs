@@ -57,13 +57,13 @@ fn panes() -> ElementBuilder {
         ])
         .md([St::FlexRow])
         .append([
-            // Tree pane: a narrow fixed width on md+, with the divider on its right edge.
+            // Tree pane: a fixed, comfortable width on md+, with the divider on its right edge.
             el(El::Div)
                 .style(
                     Style::new()
                         .min_height("0")
                         .min_width("0")
-                        .set("flex", "0 0 16rem"),
+                        .set("flex", "0 0 22rem"),
                 )
                 .st([St::DisplayFlex, St::FlexCol])
                 .md([St::BorderRDefault])
