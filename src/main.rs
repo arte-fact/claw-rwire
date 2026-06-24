@@ -74,6 +74,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .capsule_config(CapsuleConfig::new())
         .theme(app_theme());
 
+    // Dev convenience: a stable session token (CLAW_DEV_SESSION) survives server restarts, so a
+    // `cargo watch` rebuild keeps an open tab logged in and on its current route instead of
+    // bouncing it to the login form. Leave unset in production (sessions stay ephemeral).
+    if let Some(token) = std::env::var("CLAW_DEV_SESSION")
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+    {
+        println!("Auth: dev session enabled — login persists across restarts (CLAW_DEV_SESSION)");
+        server = server.dev_session(token);
+    }
+
     bridge::spawn(server.shared_state(), central_db);
 
     server.run().await
