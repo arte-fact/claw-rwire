@@ -68,7 +68,7 @@ several sub-swaps (Button / Input / Select / Card / …); list them so partial p
 
 - [ ] **`widgets.rs`** (shared helpers — highest leverage) — `accent_submit`/`icon_button`/`action`/`action_icon` → `Button`. _Blocked: owner's uncommitted token migration; coordinate first._
 - [x] **`workspace_workflow.rs`** — [x] `Alert` (lock notices) · [x] `Button` (add/move/delete via `icon_btn`/`add_btn`) · [x] `Input`/`Textarea`/`Select` (step form fields, pre-selection confirmed). [ ] submit + ✕-close stay raw (Button has no submit-type method; `icon_only` is uncommitted) · [ ] `labeled`→`FormField` deferred. _Gate-green (fmt/clippy/168 tests) **+ visually verified** (step editor renders all fields with correct pre-filled/selected values)._
-- [ ] **`workspace.rs`** — `Card` (Team/Overview blocks) · `Input`/`Select` (name/owner) · `Textarea` (brief) · `Button` (delete) · `Tag`/`Avatar` (member chips)
+- [~] **`workspace.rs`** — [x] `Card` (all Team/Overview blocks via `card()`) · [x] `Input` (name) · [x] `Select` (owner, pre-selection confirmed). [ ] member toggle-chips + auto-approve toggle stay raw (state-styled buttons) · [ ] brief editor stays raw (custom `FontMono` + min-height) · [ ] delete uses shared `widgets::action` (migrate with widgets.rs). _Gate-green + visually verified._
 - [ ] **`prompts.rs`** — `Button` · `Textarea` · `Select`
 - [ ] **`system_map/agents.rs`** — `Button` · `Input`/`Select`
 - [ ] **`system_map/mod.rs`** — `Button`

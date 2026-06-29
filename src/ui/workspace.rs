@@ -6,8 +6,8 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{At, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
-use rwire_components::{Avatar, AvatarSize, Text, Tooltip};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire_components::{Avatar, AvatarSize, Card, Input, Select, Text, Tooltip};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, WorkspaceView};
@@ -332,50 +332,24 @@ pub fn team(app: &App) -> ElementBuilder {
         ])
 }
 
-fn field_st() -> [St; 8] {
-    [
-        St::WFull,
-        St::PxSm,
-        St::PySm,
-        St::BorderDefault,
-        St::RoundedSm,
-        St::BgApp,
-        St::TextHigh,
-        St::OutlineNone,
-    ]
-}
-
 fn name_field(name: &str) -> ElementBuilder {
-    el(El::Input)
-        .attr("name", "wsname")
-        .attr("value", name)
-        .attr("autocomplete", "off")
+    Input::text()
+        .name("wsname")
+        .value(name.to_owned())
+        .build()
+        .at(At::Autocomplete, Av::Off)
         .on(Ev::Change, rename())
-        .style(Style::new().set("font", "inherit"))
-        .st(field_st())
-        .focus([St::BorderAccent])
 }
 
 fn owner_field(app: &App, owner: Option<&str>) -> ElementBuilder {
-    let none = el(El::Option).attr("value", "").text("— no owner —");
-    let mut options = vec![if owner.is_none() {
-        none.bool_attr(At::Selected)
-    } else {
-        none
-    }];
+    let mut field = Select::new()
+        .name("owner")
+        .value(owner.unwrap_or("").to_owned())
+        .option("", "— no owner —");
     for agent in &app.agents {
-        let option = el(El::Option).attr("value", &agent.id).text(&agent.name);
-        options.push(if owner == Some(agent.id.as_str()) {
-            option.bool_attr(At::Selected)
-        } else {
-            option
-        });
+        field = field.option(agent.id.clone(), agent.name.clone());
     }
-    el(El::Select)
-        .attr("name", "owner")
-        .on(Ev::Change, set_owner())
-        .st(field_st())
-        .append(options)
+    field.build().on(Ev::Change, set_owner())
 }
 
 /// One toggle-chip per agent: on = a member (the owner's chip is on + can't be toggled off).
@@ -514,17 +488,8 @@ fn confirm_delete(app: &mut App) {
 
 /// A titled card block (label + body), reusing the dashboard surface styling.
 pub(crate) fn card(label: &str, body: ElementBuilder) -> ElementBuilder {
-    el(El::Div)
-        .st([
-            St::BgSurface,
-            St::BorderDefault,
-            St::RoundedSm,
-            St::PMd,
-            St::DisplayFlex,
-            St::FlexCol,
-            St::GapSm,
-        ])
-        .append([
+    Card::new()
+        .children([
             el(El::Div)
                 .st([
                     St::TextXs,
@@ -535,4 +500,5 @@ pub(crate) fn card(label: &str, body: ElementBuilder) -> ElementBuilder {
                 .text(label),
             body,
         ])
+        .build()
 }
