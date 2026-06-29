@@ -4,11 +4,12 @@
 //! the operator's input. Picking an endpoint fetches its `/v1/models` into a dropdown.
 
 use rwire::style::Style;
-use rwire::{At, El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
 
-use super::{action, badge, card, drawer_form, labeled, row_head, select_st, submit, text_input};
+use super::{action, badge, card, drawer_form, labeled, row_head, submit, text_input};
 use crate::bridge::{self, Command};
 use crate::state::{AgentDraft, AgentView, App, Editing};
+use rwire_components::{Select, Textarea};
 
 #[renderer]
 pub fn column(app: &App) -> ElementBuilder {
@@ -137,49 +138,29 @@ fn tool_chip(name: &str, on: bool) -> ElementBuilder {
 fn prompt_field(draft: &AgentDraft) -> ElementBuilder {
     labeled(
         "Identity / persona",
-        el(El::Textarea)
-            .attr("name", "prompt")
-            .attr("rows", "6")
-            .at_str(
-                At::Placeholder,
+        Textarea::new()
+            .name("prompt")
+            .rows(6)
+            .placeholder(
                 "Who this agent is — persona + instructions. Layer 2 of 4 (role · identity · \
                  brief · memory); see the Prompts view for the assembled result. The shared \
                  project brief lives in the workspace's AGENT.md.",
             )
-            .on(Ev::Change, prompt_changed())
-            .st(select_st())
-            .style(
-                Style::new()
-                    .set("font", "inherit")
-                    .set("resize", "vertical")
-                    .set("min-height", "8rem"),
-            )
-            .focus([St::BorderAccent])
-            .text(&draft.prompt),
+            .value(draft.prompt.clone())
+            .build()
+            .on(Ev::Change, prompt_changed()),
     )
 }
 
 fn endpoint_select(app: &App, selected: Option<&str>) -> ElementBuilder {
-    let mut options: Vec<ElementBuilder> =
-        vec![el(El::Option).attr("value", "").text("— no endpoint —")];
+    let mut field = Select::new()
+        .name("endpoint")
+        .value(selected.unwrap_or("").to_owned())
+        .option("", "— no endpoint —");
     for endpoint in &app.endpoints {
-        let option = el(El::Option)
-            .attr("value", &endpoint.name)
-            .text(&endpoint.name);
-        options.push(if selected == Some(endpoint.name.as_str()) {
-            option.bool_attr(At::Selected)
-        } else {
-            option
-        });
+        field = field.option(endpoint.name.clone(), endpoint.name.clone());
     }
-    labeled(
-        "Endpoint",
-        el(El::Select)
-            .attr("name", "endpoint")
-            .on(Ev::Change, endpoint_changed())
-            .st(select_st())
-            .append(options),
-    )
+    labeled("Endpoint", field.build().on(Ev::Change, endpoint_changed()))
 }
 
 fn model_field(app: &App, draft: &AgentDraft) -> ElementBuilder {
@@ -195,23 +176,14 @@ fn model_field(app: &App, draft: &AgentDraft) -> ElementBuilder {
     if !draft.model.is_empty() && !models.iter().any(|m| m == &draft.model) {
         models.insert(0, draft.model.clone());
     }
-    let mut options = vec![el(El::Option).attr("value", "").text("— select model —")];
+    let mut field = Select::new()
+        .name("model")
+        .value(draft.model.clone())
+        .option("", "— select model —");
     for model in &models {
-        let option = el(El::Option).attr("value", model).text(model);
-        options.push(if draft.model == *model {
-            option.bool_attr(At::Selected)
-        } else {
-            option
-        });
+        field = field.option(model.clone(), model.clone());
     }
-    labeled(
-        "Model",
-        el(El::Select)
-            .attr("name", "model")
-            .on(Ev::Change, model_changed())
-            .st(select_st())
-            .append(options),
-    )
+    labeled("Model", field.build().on(Ev::Change, model_changed()))
 }
 
 #[handler]
