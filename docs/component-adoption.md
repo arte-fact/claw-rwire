@@ -14,6 +14,7 @@ served on `:9002`) catalogs **50 components** in 6 groups; the ones claw should 
 | raw `el(El::Select)`+`el(El::Option)` | **`Select`** | `Select::new().name(n).value(selected).option(v, l)…` — `.option()` takes **two args** (value, label), not a `SelectOption`; `.value()` marks the selected one |
 | `labeled(label, field)` wrapper (workspace_workflow) | **`FormField`** | `FormField::new().label(l).input(el).help().error().required()` |
 | custom `card(label, body)` (workspace.rs) | **`Card`** | `Card::new().padding().bordered().children([…])` (+ a label row) |
+| `el(El::Div/Span).st([TextSm,TextMuted,…]).text(…)` (pervasive) | **`Text`** | `Text::body/body_small/heading1-3/label/caption(s)` + `.muted()/.accent()/.success()/.warning()/.error()` or `.color(TextColor::High)` |
 | flex-row/col `el(El::Div).st([DisplayFlex,…])` | **`Stack`** | `Stack::row()/column().gap(Gap::*).align().justify().children([…])` |
 | custom `status_badge` / `verdict_chip` | **`Badge`** / **`Tag`** | `Badge::success/warning/error(text)`, `Tag::new(text).intent()` |
 | custom tab chips (Peek modal) | **`Tabs`** | `Tabs::new().tab(Tab::new(label,content)).active(i)` |
@@ -68,7 +69,7 @@ several sub-swaps (Button / Input / Select / Card / …); list them so partial p
 
 - [ ] **`widgets.rs`** (shared helpers — highest leverage) — `accent_submit`/`icon_button`/`action`/`action_icon` → `Button`. _Blocked: owner's uncommitted token migration; coordinate first._
 - [x] **`workspace_workflow.rs`** — [x] `Alert` (lock notices) · [x] `Button` (add/move/delete via `icon_btn`/`add_btn`) · [x] `Input`/`Textarea`/`Select` (step form fields, pre-selection confirmed). [ ] submit + ✕-close stay raw (Button has no submit-type method; `icon_only` is uncommitted) · [ ] `labeled`→`FormField` deferred. _Gate-green (fmt/clippy/168 tests) **+ visually verified** (step editor renders all fields with correct pre-filled/selected values)._
-- [~] **`workspace.rs`** — [x] `Card` (all Team/Overview blocks via `card()`) · [x] `Input` (name) · [x] `Select` (owner, pre-selection confirmed). [ ] member toggle-chips + auto-approve toggle stay raw (state-styled buttons) · [ ] brief editor stays raw (custom `FontMono` + min-height) · [ ] delete uses shared `widgets::action` (migrate with widgets.rs). _Gate-green + visually verified._
+- [~] **`workspace.rs`** — [x] `Card` (all Team/Overview blocks via `card()`) · [x] `Input` (name) · [x] `Select` (owner, pre-selection confirmed) · [x] `Text` (roster/hints/empties/errors via `Text::body`/`caption`). [ ] member toggle-chips + auto-approve toggle stay raw (state-styled buttons) · [ ] brief editor stays raw (custom `FontMono` + min-height) · [ ] delete uses shared `widgets::action` (migrate with widgets.rs). _Gate-green + visually verified._
 - [ ] **`prompts.rs`** — `Button` · `Textarea` · `Select`
 - [ ] **`system_map/agents.rs`** — `Button` · `Input`/`Select`
 - [ ] **`system_map/mod.rs`** — `Button`

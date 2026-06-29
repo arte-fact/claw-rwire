@@ -7,7 +7,7 @@
 use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
-use rwire_components::{Avatar, AvatarSize, Card, Input, Select, Text, Tooltip};
+use rwire_components::{Avatar, AvatarSize, Card, Input, Select, Text, TextColor, Tooltip};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, WorkspaceView};
@@ -163,9 +163,7 @@ pub fn dashboard(app: &App) -> ElementBuilder {
         .as_deref()
         .and_then(|id| app.workspaces.iter().find(|w| w.id == id))
     else {
-        return el(El::Div)
-            .st([St::TextSm, St::TextMuted])
-            .text("Select a workspace.");
+        return Text::body("Select a workspace.").muted().build();
     };
     let owner = workspace.owner.clone();
     let mut roster: Vec<ElementBuilder> = app
@@ -178,17 +176,13 @@ pub fn dashboard(app: &App) -> ElementBuilder {
             } else {
                 ""
             };
-            el(El::Div)
-                .st([St::TextSm, St::TextHigh])
-                .text(&format!("{}{role}", a.name))
+            Text::body(format!("{}{role}", a.name))
+                .color(TextColor::High)
+                .build()
         })
         .collect();
     if roster.is_empty() {
-        roster.push(
-            el(El::Div)
-                .st([St::TextSm, St::TextMuted])
-                .text("No members yet."),
-        );
+        roster.push(Text::body("No members yet.").muted().build());
     }
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
@@ -242,7 +236,7 @@ fn auto_approve_toggle(workspace: &WorkspaceView) -> ElementBuilder {
                     St::CursorPointer,
                 ])
                 .text(label),
-            el(El::Div).st([St::TextXs, St::TextMuted]).text(hint),
+            Text::caption(hint).muted().build(),
         ])
 }
 
@@ -318,9 +312,7 @@ pub fn team(app: &App) -> ElementBuilder {
         .as_deref()
         .and_then(|id| app.workspaces.iter().find(|w| w.id == id))
     else {
-        return el(El::Div)
-            .st([St::TextSm, St::TextMuted])
-            .text("Select a workspace.");
+        return Text::body("Select a workspace.").muted().build();
     };
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
@@ -355,9 +347,7 @@ fn owner_field(app: &App, owner: Option<&str>) -> ElementBuilder {
 /// One toggle-chip per agent: on = a member (the owner's chip is on + can't be toggled off).
 fn members_field(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
     if app.agents.is_empty() {
-        return el(El::Div)
-            .st([St::TextSm, St::TextMuted])
-            .text("No agents to add.");
+        return Text::body("No agents to add.").muted().build();
     }
     let chips: Vec<ElementBuilder> = app
         .agents
@@ -412,9 +402,9 @@ fn delete_block(armed: bool) -> ElementBuilder {
         el(El::Div)
             .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
             .append([
-                el(El::Span)
-                    .st([St::TextXs, St::TextError])
-                    .text("Delete this workspace and its files?"),
+                Text::caption("Delete this workspace and its files?")
+                    .error()
+                    .build(),
                 crate::ui::widgets::action_icon(
                     rwire::icons::Icon::Trash,
                     "Delete",
