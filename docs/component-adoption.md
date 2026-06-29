@@ -76,7 +76,8 @@ Component adoption is net-negative — the components absorb the styling/attrs c
 | system_map/agents | −28 |
 | system_map/mod (shared helpers) | −35 |
 | workspace_tasks (the big board) | −84 |
-| **total (8 screens)** | **−352** (+239 / −591) |
+| task_detail (Peek modal) | −23 |
+| **total (9 screens)** | **−375** (+258 / −633) |
 
 Trend: ~−40 lines/screen on form-heavy screens, less on text-only ones. Remaining screens
 (`workspace_tasks` is the big one) should keep the slope.
@@ -93,7 +94,7 @@ several sub-swaps (Button / Input / Select / Card / …); list them so partial p
 - [~] **`system_map/agents.rs`** — [x] `Select` (endpoint + model) · [x] `Textarea` (persona). [ ] tool-chips stay raw (toggle-state) · [ ] `action`/`badge`/`text_input` are shared `system_map` helpers (migrate in `system_map/mod.rs`). _Gate-green._
 - [x] **`system_map/mod.rs`** — [x] `Input` (shared `text_input`/`field` → propagates to agents + endpoints tiers) · [x] `Select` (channel picker) · [x] `Alert` (error banner); drops `select_st()`. Already had `Text`/`Drawer`/`action`/`submit`. _Gate-green._
 - [~] **`workspace_tasks.rs`** — [x] create + edit forms → `Input`/`Textarea`/`Select` (drops `input_st()`/`owner_option`) · [x] `status_badge` → `Badge` · [x] Approve/Restart → `Button` · [x] empty states → `Text`. [ ] toggle/filter/view chips + icon "New task" + card-title buttons stay raw (toggle-state / icon+text). _Gate-green; live visual deferred (server wouldn't relaunch this session)._
-- [ ] **`task_detail.rs`** — `Button` (controls/gate/close) · `Tabs` (Peek tabs) · `Spinner` (live). _Defer Peek `Modal` until the rwire Modal backdrop fix lands._
+- [~] **`task_detail.rs`** — [x] `Button` (control bar + review gate) · [x] `Input` (feedback) · [x] `Text` (notes). [ ] tab chips → `Tabs` (needs server-driven active) · [ ] ✕-close raw (icon-only) · [ ] Peek overlay → `Modal` (rwire backdrop fix now committed — unblocked). _Gate-green._
 - [~] **`review.rs`** — [x] buttons → `Button` (approve/reject/open). [ ] feedback field → `Input`; [ ] `card()` → `Card`; [ ] submit chip → `Button`
 - [ ] **`run_chain.rs`** — tool/run collapse → `Accordion`
 - [~] **`dashboard.rs`** — [x] `Input` (create form) · [x] `Text` (name/owner/empty/needs-you). [ ] lane line stays raw (dynamic color incl. `TextLow`, no `Text` variant). _Gate-green._
