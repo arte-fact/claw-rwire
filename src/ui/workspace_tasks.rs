@@ -10,7 +10,10 @@ use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 use crate::bridge::{self, Command};
 use crate::state::{App, TaskView, WorkspaceView};
 use crate::ui::widgets::accent_submit;
-use rwire_components::{Avatar, AvatarSize, Drawer, DrawerPosition, Tag, TagIntent, Tooltip};
+use rwire_components::{
+    Avatar, AvatarSize, Badge, BadgeIntent, Drawer, DrawerPosition, Input, Select, Tag, TagIntent,
+    Text, Textarea, Tooltip,
+};
 
 #[renderer]
 pub fn tasks(app: &App) -> ElementBuilder {
@@ -19,9 +22,7 @@ pub fn tasks(app: &App) -> ElementBuilder {
         .as_deref()
         .and_then(|id| app.workspaces.iter().find(|w| w.id == id))
     else {
-        return el(El::Div)
-            .st([St::TextSm, St::TextMuted])
-            .text("Select a workspace.");
+        return Text::body("Select a workspace.").muted().build();
     };
     // The assignable members (for the drawer's reassign select) and which card is open.
     let members: Vec<(String, String)> = app
@@ -201,11 +202,7 @@ fn list_board(app: &App, members: &[(String, String)], wid: &str) -> ElementBuil
         .map(|task| task_card(task, members, editing == Some(task.id.as_str()), wid))
         .collect();
     if cards.is_empty() {
-        cards.push(
-            el(El::Div)
-                .st([St::TextSm, St::TextMuted, St::PySm])
-                .text("No tasks yet."),
-        );
+        cards.push(Text::body("No tasks yet.").muted().build().st([St::PySm]));
     }
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
@@ -530,23 +527,12 @@ fn signal_tags(task: &TaskView) -> Vec<ElementBuilder> {
 fn card_actions(task: &TaskView) -> ElementBuilder {
     let mut actions: Vec<ElementBuilder> = Vec::new();
     if task.status == "awaiting" {
+        use rwire_components::{Button, ButtonSize};
         actions.push(
-            el(El::Button)
-                .at(At::Type, Av::Button)
-                .data("task", &task.id)
-                .on(Ev::Click, kanban_approve())
-                .st([
-                    St::FontInheritAll,
-                    St::TextXs,
-                    St::PxSm,
-                    St::PyXs,
-                    St::RoundedSm,
-                    St::BgAccent,
-                    St::TextOnAccent,
-                    St::BorderAccent,
-                    St::CursorPointer,
-                ])
-                .text("Approve"),
+            Button::primary("Approve")
+                .size(ButtonSize::Sm)
+                .on_click(kanban_approve())
+                .data("task", &task.id),
         );
     }
     actions.extend(control_buttons(task));
@@ -614,52 +600,40 @@ fn kanban_approve(app: &mut App, ctx: &EventContext) {
 
 fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
     // Assignee options: the workspace's members (the owner is the default).
-    let mut assignee = vec![el(El::Option).at_str(At::Value, "").text("— owner —")];
+    let mut assignee = Select::new().name("agent").option("", "— owner —");
     for agent in app
         .agents
         .iter()
         .filter(|a| workspace.members.iter().any(|m| m == &a.id))
     {
-        assignee.push(
-            el(El::Option)
-                .at_str(At::Value, &agent.id)
-                .text(&agent.name),
-        );
+        assignee = assignee.option(agent.id.clone(), agent.name.clone());
     }
     el(El::Form)
         .on(Ev::Submit, submit_task())
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
-            el(El::Input)
-                .at_str(At::Name, "title")
-                .at_str(At::Placeholder, "Task title")
-                .at(At::Autocomplete, Av::Off)
-                .bool_attr(At::Required)
-                .st(input_st())
-                .focus([St::BorderAccent]),
-            el(El::Textarea)
-                .at_str(At::Name, "spec")
-                .at_str(At::Rows, "3")
-                .bool_attr(At::Required)
-                .at_str(At::Placeholder, "What should the agent do?")
-                .st(input_st())
-                .st([St::ResizeY])
-                .focus([St::BorderAccent]),
-            el(El::Input)
-                .at_str(At::Name, "schedule")
-                .at_str(At::Placeholder, "Cron schedule — optional, e.g. 0 8 * * *")
-                .at(At::Autocomplete, Av::Off)
-                .st(input_st())
-                .focus([St::BorderAccent]),
+            Input::text()
+                .name("title")
+                .placeholder("Task title")
+                .required(true)
+                .autocomplete("off")
+                .build(),
+            Textarea::new()
+                .name("spec")
+                .rows(3)
+                .required(true)
+                .placeholder("What should the agent do?")
+                .build(),
+            Input::text()
+                .name("schedule")
+                .placeholder("Cron schedule — optional, e.g. 0 8 * * *")
+                .autocomplete("off")
+                .build(),
             retries_input(None),
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
-                    el(El::Select)
-                        .at_str(At::Name, "agent")
-                        .st(input_st())
-                        .st([St::Flex1])
-                        .append(assignee),
+                    assignee.build().st([St::Flex1]),
                     accent_submit(icons::Icon::Plus, "Queue task"),
                 ]),
         ])
@@ -668,33 +642,15 @@ fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
 /// The optional per-task auto-retry-budget input, prefilled with `value` (the task's current
 /// override) when editing. Blank = use the global default.
 fn retries_input(value: Option<i64>) -> ElementBuilder {
-    let field = el(El::Input)
-        .at_str(At::Name, "max_retries")
-        .at(At::Type, Av::Number)
-        .at_str(At::Min, "0")
-        .at_str(At::Placeholder, "Auto-retries on failure — blank = default")
-        .at(At::Autocomplete, Av::Off)
-        .st(input_st())
-        .focus([St::BorderAccent]);
+    let field = Input::number()
+        .name("max_retries")
+        .min("0")
+        .placeholder("Auto-retries on failure — blank = default")
+        .autocomplete("off");
     match value {
-        Some(n) => field.at_str(At::Value, &n.to_string()),
-        None => field,
+        Some(n) => field.value(n.to_string()).build(),
+        None => field.build(),
     }
-}
-
-fn input_st() -> [St; 9] {
-    [
-        St::WFull,
-        St::PxSm,
-        St::PySm,
-        St::BorderDefault,
-        St::RoundedSm,
-        St::BgApp,
-        St::TextHigh,
-        St::OutlineNone,
-        // Inherit the page font so the control doesn't fall back to the UA default.
-        St::FontInheritAll,
-    ]
 }
 
 /// The run-control buttons for a task card, by status: Stop while live, Start/Restart when
@@ -730,23 +686,11 @@ fn control_buttons(task: &TaskView) -> Vec<ElementBuilder> {
 
 /// A small text "Restart" button (there's no rotate glyph) carrying the task id.
 fn restart_button(task_id: &str) -> ElementBuilder {
-    el(El::Button)
-        .at(At::Type, Av::Button)
+    use rwire_components::{Button, ButtonSize};
+    Button::secondary("Restart")
+        .size(ButtonSize::Sm)
+        .on_click(restart_task())
         .data("task", task_id)
-        .on(Ev::Click, restart_task())
-        .st([
-            St::FontInheritAll,
-            St::TextXs,
-            St::PxSm,
-            St::PyXs,
-            St::RoundedSm,
-            St::BorderDefault,
-            St::BgApp,
-            St::TextMuted,
-            St::CursorPointer,
-        ])
-        .hover([St::TextHigh])
-        .text("Restart")
 }
 
 #[handler]
@@ -854,14 +798,12 @@ fn task_card(
 /// The inline edit drawer for one task: retitle, rewrite the spec, reassign to a member,
 /// change the schedule, and edit the blocker ids — saved as one form submit.
 fn edit_form(task: &TaskView, members: &[(String, String)]) -> ElementBuilder {
-    let mut assignee = vec![owner_option(task.agent_id.is_none())];
+    let mut assignee = Select::new()
+        .name("agent")
+        .value(task.agent_id.clone().unwrap_or_default())
+        .option("", "— owner —");
     for (id, name) in members {
-        let option = el(El::Option).at_str(At::Value, id).text(name);
-        assignee.push(if task.agent_id.as_deref() == Some(id.as_str()) {
-            option.bool_attr(At::Selected)
-        } else {
-            option
-        });
+        assignee = assignee.option(id.clone(), name.clone());
     }
     el(El::Form)
         .on(Ev::Submit, save_edit())
@@ -873,73 +815,47 @@ fn edit_form(task: &TaskView, members: &[(String, String)]) -> ElementBuilder {
                 .at(At::Type, Av::Hidden)
                 .at_str(At::Name, "id")
                 .at_str(At::Value, &task.id),
-            el(El::Input)
-                .at_str(At::Name, "title")
-                .at_str(At::Value, &task.title)
-                .at(At::Autocomplete, Av::Off)
-                .st(input_st())
-                .focus([St::BorderAccent]),
-            el(El::Textarea)
-                .at_str(At::Name, "spec")
-                .at_str(At::Rows, "2")
-                .st(input_st())
-                .st([St::ResizeY])
-                .focus([St::BorderAccent])
-                .text(&task.spec),
-            el(El::Input)
-                .at_str(At::Name, "schedule")
-                .at_str(At::Value, task.schedule.as_deref().unwrap_or(""))
-                .at_str(At::Placeholder, "Cron schedule — empty = one-shot")
-                .at(At::Autocomplete, Av::Off)
-                .st(input_st())
-                .focus([St::BorderAccent]),
-            el(El::Input)
-                .at_str(At::Name, "blockers")
-                .at_str(At::Value, &task.blockers.join(", "))
-                .at_str(At::Placeholder, "Blocker task ids, comma-separated")
-                .at(At::Autocomplete, Av::Off)
-                .st(input_st())
-                .focus([St::BorderAccent]),
+            Input::text()
+                .name("title")
+                .value(task.title.clone())
+                .autocomplete("off")
+                .build(),
+            Textarea::new()
+                .name("spec")
+                .rows(2)
+                .value(task.spec.clone())
+                .build(),
+            Input::text()
+                .name("schedule")
+                .value(task.schedule.clone().unwrap_or_default())
+                .placeholder("Cron schedule — empty = one-shot")
+                .autocomplete("off")
+                .build(),
+            Input::text()
+                .name("blockers")
+                .value(task.blockers.join(", "))
+                .placeholder("Blocker task ids, comma-separated")
+                .autocomplete("off")
+                .build(),
             retries_input(task.max_retries),
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
-                    el(El::Select)
-                        .at_str(At::Name, "agent")
-                        .st(input_st())
-                        .st([St::Flex1])
-                        .append(assignee),
+                    assignee.build().st([St::Flex1]),
                     accent_submit(icons::Icon::Check, "Save"),
                     crate::ui::widgets::icon_button(icons::Icon::Close, close_edit(), false),
                 ]),
         ])
 }
 
-fn owner_option(selected: bool) -> ElementBuilder {
-    let option = el(El::Option).at_str(At::Value, "").text("— owner —");
-    if selected {
-        option.bool_attr(At::Selected)
-    } else {
-        option
-    }
-}
-
 fn status_badge(status: &str) -> ElementBuilder {
-    let color = match status {
-        "running" => St::TextAccent,
-        "done" => St::TextHigh,
-        "failed" => St::TextError,
-        _ => St::TextMuted,
+    let intent = match status {
+        "running" => BadgeIntent::Primary,
+        "done" => BadgeIntent::Success,
+        "failed" => BadgeIntent::Error,
+        _ => BadgeIntent::Default,
     };
-    el(El::Span)
-        .st([
-            St::TextXs,
-            color,
-            St::BorderDefault,
-            St::RoundedSm,
-            St::PxXs,
-        ])
-        .text(status)
+    Badge::new().intent(intent).text(status.to_owned()).build()
 }
 
 #[handler]
