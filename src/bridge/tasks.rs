@@ -167,12 +167,17 @@ fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::sta
     })
 }
 
-/// Project one task's detail into `App.task_detail` — the detail view opening (unconditional).
+/// Project one task's detail into `App.task_detail` and open its Peek modal (`selected_task`) —
+/// the detail opening, whether from a board card click or a deep link to `/w/:wid/tasks/:tid`.
 pub fn load_detail(conn: &rusqlite::Connection, shared: &SharedServerState, task_id: &str) {
     let detail = build_detail(conn, task_id);
+    let selected = task_id.to_owned();
     shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_TASK_DETAIL]),
-        move |app| app.task_detail = detail,
+        ChangeSet::from_fields(&[App::FIELD_TASK_DETAIL, App::FIELD_SELECTED_TASK]),
+        move |app| {
+            app.task_detail = detail;
+            app.selected_task = Some(selected);
+        },
     );
 }
 

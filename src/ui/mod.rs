@@ -27,7 +27,7 @@ use rwire::router::Link;
 use rwire::router::RoutePattern;
 use rwire::style::Style;
 use rwire::{
-    CurrentRoute, El, ElementBuilder, Ev, Router, St, el, handler, icons, outlet, renderer,
+    At, Av, CurrentRoute, El, ElementBuilder, Ev, Router, St, el, handler, icons, outlet, renderer,
 };
 
 use crate::bridge::{self, Command};
@@ -42,7 +42,15 @@ pub fn routes() -> Router {
         .page("/", |_| view(chat::surface()))
         .page("/chat/:id", |_| view(chat::surface()))
         .page("/dashboard", |_| view(dashboard::page()))
+        // The board is the workspace's landing view (the "board is the workspace" overhaul).
         .page("/w/:wid", |p| {
+            view(workspace::shell(
+                wid(p),
+                WsTab::Tasks,
+                workspace_tasks::tasks(),
+            ))
+        })
+        .page("/w/:wid/overview", |p| {
             view(workspace::shell(
                 wid(p),
                 WsTab::Dashboard,
@@ -64,7 +72,12 @@ pub fn routes() -> Router {
             ))
         })
         .page("/w/:wid/tasks/:tid", |p| {
-            view(workspace::shell(wid(p), WsTab::Tasks, task_detail::page()))
+            // A deep link to a task renders the board; the bridge opens its Peek modal over it.
+            view(workspace::shell(
+                wid(p),
+                WsTab::Tasks,
+                workspace_tasks::tasks(),
+            ))
         })
         .page("/w/:wid/workflow", |p| {
             view(workspace::shell(
@@ -108,8 +121,8 @@ pub fn app() -> ElementBuilder {
         // the visible viewport, and `100vh` (the *large* viewport) would push the bottom
         // — the composer — under the bar. `dvh` tracks the bar auto-hiding, so the
         // layout always fits the visible area.
-        .style(Style::new().set("height", "100dvh"))
         .st([
+            St::HDvh,
             St::BgApp,
             St::FontMono,
             St::TextSm,
@@ -132,15 +145,16 @@ fn nav_drawer(app: &App) -> ElementBuilder {
         St::TranslateXNegFull
     };
     el(El::Aside)
+        // `width: 16rem` + slide `transition` — no tokens for the custom drawer width / easing.
         .style(
             Style::new()
                 .width(DRAWER_W)
-                .set("height", "100dvh")
-                .set("top", "0")
-                .set("left", "0")
                 .set("transition", "transform 0.2s ease"),
         )
         .st([
+            St::HDvh,
+            St::Top0,
+            St::Left0,
             St::BgSidebar,
             St::BorderRDefault,
             St::DisplayFlex,
@@ -271,7 +285,7 @@ fn new_chat_bar() -> ElementBuilder {
 #[renderer]
 fn backdrop(app: &App) -> ElementBuilder {
     if !app.nav_open {
-        return el(El::Div).style(Style::new().display("none"));
+        return el(El::Div).st([St::DisplayNone]);
     }
     el(El::Div)
         .st([St::FixedFill, St::BgOverlay50, St::Z1300])
@@ -338,8 +352,7 @@ fn brand_row() -> ElementBuilder {
 /// flex child (so it actually grows) wrapping the `thread_list` renderer.
 fn drawer_threads() -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().min_height("0").overflow("auto"))
-        .st([St::Flex1, St::PySm])
+        .st([St::MinH0, St::OverflowAuto, St::Flex1, St::PySm])
         .append([chat::thread_list()])
 }
 
@@ -356,7 +369,7 @@ fn drawer_foot() -> ElementBuilder {
 /// link would try to resolve it as an in-app route and fail.
 fn logout_link() -> ElementBuilder {
     el(El::A)
-        .attr("href", "/logout")
+        .at_str(At::Href, "/logout")
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
@@ -467,8 +480,13 @@ fn main_area() -> ElementBuilder {
     // mobile). `min-width:0` lets it shrink so chat content can't force a horizontal
     // scroll. The `outlet()` view fills the positioned content wrapper.
     el(El::Div)
-        .style(Style::new().min_width("0"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::OverflowHidden])
+        .st([
+            St::MinW0,
+            St::Flex1,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::OverflowHidden,
+        ])
         .append([
             mobile_topbar(),
             el(El::Div)
@@ -508,8 +526,8 @@ fn mobile_topbar() -> ElementBuilder {
 
 fn hamburger() -> ElementBuilder {
     el(El::Button)
-        .attr("type", "button")
-        .attr("aria-label", "Toggle navigation")
+        .at(At::Type, Av::Button)
+        .at_str(At::AriaLabel, "Toggle navigation")
         .on(Ev::Click, toggle_nav())
         .st([
             St::DisplayFlex,
@@ -522,7 +540,6 @@ fn hamburger() -> ElementBuilder {
             St::TextHigh,
             St::CursorPointer,
         ])
-        .style(Style::new().set("font", "inherit"))
         .append([icons::icon_sized(icons::Icon::Menu, 18)])
 }
 
@@ -588,19 +605,27 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
             path: String::new(),
         });
     }
-    // Entering a workspace's Tasks tab projects its lane.
+    // Entering a workspace's Tasks tab — or its landing board (`/w/:wid`) — projects its lane and
+    // the pipeline (so the board's column headers can open the in-situ step editor).
     if let Some(wid) = RoutePattern::new("/w/:wid/tasks")
         .matches(path)
+        .or_else(|| RoutePattern::new("/w/:wid").matches(path))
         .and_then(|params| params.get("wid").map(str::to_owned))
     {
-        bridge::send(Command::LoadTasks { workspace: wid });
+        bridge::send(Command::LoadTasks {
+            workspace: wid.clone(),
+        });
+        bridge::send(Command::LoadWorkflow { workspace: wid });
     }
-    // A task's detail view loads its run chain.
-    if let Some(tid) = RoutePattern::new("/w/:wid/tasks/:tid")
-        .matches(path)
-        .and_then(|params| params.get("tid").map(str::to_owned))
-    {
-        bridge::send(Command::LoadTaskDetail { task_id: tid });
+    // A deep link to a task: load the board's lane (so the modal opens over a populated board)
+    // and the task's detail/run chain (which also opens its Peek modal).
+    if let Some(params) = RoutePattern::new("/w/:wid/tasks/:tid").matches(path) {
+        if let Some(wid) = params.get("wid").map(str::to_owned) {
+            bridge::send(Command::LoadTasks { workspace: wid });
+        }
+        if let Some(tid) = params.get("tid").map(str::to_owned) {
+            bridge::send(Command::LoadTaskDetail { task_id: tid });
+        }
     }
     // The Workflow tab loads the workspace's configured pipeline + edit lock.
     if let Some(wid) = RoutePattern::new("/w/:wid/workflow")
@@ -621,6 +646,7 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
 fn workspace_of(path: &str) -> Option<String> {
     for pattern in [
         "/w/:wid",
+        "/w/:wid/overview",
         "/w/:wid/files",
         "/w/:wid/tasks",
         "/w/:wid/tasks/:tid",

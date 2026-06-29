@@ -5,12 +5,12 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, TaskView, WorkspaceView};
 use crate::ui::widgets::accent_submit;
-use rwire_components::{Drawer, DrawerPosition};
+use rwire_components::{Avatar, AvatarSize, Drawer, DrawerPosition, Tag, TagIntent, Tooltip};
 
 #[renderer]
 pub fn tasks(app: &App) -> ElementBuilder {
@@ -41,9 +41,94 @@ pub fn tasks(app: &App) -> ElementBuilder {
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
         .append([
             toolbar(app.tasks_list_view),
+            filter_bar(&app.board_filter),
+            locked_banner(app),
             board,
             new_task_drawer(app, workspace),
+            // The in-situ pipeline step editor (opens from a step column header).
+            crate::ui::workspace_workflow::step_drawer(app),
+            // The Peek modal (opens over the board when a card is clicked or a task is deep-linked).
+            crate::ui::task_detail::peek_modal(app),
         ])
+}
+
+/// A banner shown while the workspace has a task in flight (running/awaiting): the pipeline editor
+/// is locked, so this explains why editing the workflow from a column header is unavailable.
+fn locked_banner(app: &App) -> ElementBuilder {
+    let locked = app
+        .tasks
+        .iter()
+        .any(|task| matches!(task.status.as_str(), "running" | "awaiting"));
+    if !locked {
+        return el(El::Div).st([St::DisplayNone]);
+    }
+    el(El::Div)
+        .st([
+            St::SelfStart,
+            St::TextXs,
+            St::TextMuted,
+            St::PxSm,
+            St::PyXs,
+            St::RoundedSm,
+            St::BgSubtle,
+        ])
+        .text("⏳ Pipeline locked while tasks are in flight — finish or stop them to edit the workflow.")
+}
+
+/// The board quick-filter chips — narrow the board to what needs attention without leaving it.
+fn filter_bar(active: &str) -> ElementBuilder {
+    let active = if active.is_empty() { "all" } else { active };
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapXs, St::FlexWrap])
+        .append([
+            filter_chip("All", "all", active),
+            filter_chip("Needs you", "awaiting", active),
+            filter_chip("Running", "running", active),
+            filter_chip("Blocked", "blocked", active),
+            filter_chip("Failed", "failed", active),
+        ])
+}
+
+fn filter_chip(label: &str, value: &str, active: &str) -> ElementBuilder {
+    let chip = el(El::Button)
+        .at(At::Type, Av::Button)
+        .data("filter", value)
+        .on(Ev::Click, set_board_filter())
+        .st([
+            St::FontInheritAll,
+            St::TextXs,
+            St::PxSm,
+            St::PyXs,
+            St::RoundedSm,
+            St::BorderDefault,
+            St::CursorPointer,
+        ])
+        .text(label);
+    if value == active {
+        chip.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
+    } else {
+        chip.st([St::BgApp, St::TextMuted]).hover([St::TextHigh])
+    }
+}
+
+#[handler]
+fn set_board_filter(app: &mut App, ctx: &EventContext) {
+    if let Some(filter) = ctx.data("filter") {
+        app.board_filter = filter.to_owned();
+    }
+}
+
+/// Whether a task passes the active board quick-filter.
+fn task_matches_filter(task: &TaskView, filter: &str) -> bool {
+    match filter {
+        "awaiting" => task.status == "awaiting",
+        "running" => task.status == "running",
+        "blocked" => {
+            !task.blockers.is_empty() && matches!(task.status.as_str(), "pending" | "stopped")
+        }
+        "failed" => matches!(task.status.as_str(), "failed" | "rejected" | "cancelled"),
+        _ => true,
+    }
 }
 
 /// The board toolbar: the Board/List view switch and the "New task" button.
@@ -59,16 +144,14 @@ fn toolbar(list: bool) -> ElementBuilder {
 /// The "New task" button — opens the create drawer.
 fn new_task_button() -> ElementBuilder {
     el(El::Button)
-        .attr("type", "button")
+        .at(At::Type, Av::Button)
         .on(Ev::Click, open_new_task())
-        .style(Style::new().set("font", "inherit"))
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
-            St::TextXs,
-            St::PxMd,
-            St::PySm,
+            St::PxSm,
+            St::PyXs,
             St::RoundedSm,
             St::BgAccent,
             St::TextOnAccent,
@@ -114,6 +197,7 @@ fn list_board(app: &App, members: &[(String, String)], wid: &str) -> ElementBuil
     let mut cards: Vec<ElementBuilder> = app
         .tasks
         .iter()
+        .filter(|task| task_matches_filter(task, &app.board_filter))
         .map(|task| task_card(task, members, editing == Some(task.id.as_str()), wid))
         .collect();
     if cards.is_empty() {
@@ -132,6 +216,10 @@ fn list_board(app: &App, members: &[(String, String)], wid: &str) -> ElementBuil
 /// current step's column (or Done/Closed when terminal) and moves left→right as it advances.
 fn kanban_board(app: &App, wid: &str) -> ElementBuilder {
     let step_count = app.pipeline_columns.len();
+    let locked = app
+        .tasks
+        .iter()
+        .any(|task| matches!(task.status.as_str(), "running" | "awaiting"));
     let mut columns = app.pipeline_columns.clone();
     columns.push("Done".to_owned());
     columns.push("Closed".to_owned());
@@ -143,13 +231,30 @@ fn kanban_board(app: &App, wid: &str) -> ElementBuilder {
                 .tasks
                 .iter()
                 .filter(|task| task_column(task, step_count) == index)
+                .filter(|task| task_matches_filter(task, &app.board_filter))
                 .collect();
-            kanban_column(name, &cards, wid)
+            // The configured step row for this column (the implicit default Execute has no row).
+            let step_id = if index < step_count {
+                app.workflow_steps.get(index).map(|s| s.id.as_str())
+            } else {
+                None
+            };
+            kanban_column(
+                name,
+                &cards,
+                &app.pipeline_columns,
+                index < step_count,
+                step_id,
+                locked,
+                wid,
+            )
         })
         .collect();
+    // Mobile: stack the columns vertically (scroll down). Desktop (`md+`): a row that scrolls
+    // horizontally — the classic kanban.
     el(El::Div)
-        .style(Style::new().set("overflow-x", "auto"))
-        .st([St::DisplayFlex, St::GapMd])
+        .st([St::DisplayFlex, St::FlexCol, St::GapMd])
+        .md([St::FlexRow, St::OverflowXAuto])
         .append(lanes)
 }
 
@@ -163,67 +268,275 @@ fn task_column(task: &crate::state::TaskView, step_count: usize) -> usize {
     }
 }
 
-fn kanban_column(name: &str, tasks: &[&crate::state::TaskView], wid: &str) -> ElementBuilder {
-    let mut items = vec![
-        el(El::Div)
-            .st([
-                St::TextXs,
-                St::TextMuted,
-                St::TextUppercase,
-                St::TrackingWide,
-                St::PbXs,
-            ])
-            .text(&format!("{name} · {}", tasks.len())),
-    ];
+fn kanban_column(
+    name: &str,
+    tasks: &[&crate::state::TaskView],
+    steps: &[String],
+    is_step: bool,
+    step_id: Option<&str>,
+    locked: bool,
+    wid: &str,
+) -> ElementBuilder {
+    let mut items = vec![column_header(
+        name,
+        tasks.len(),
+        is_step,
+        step_id,
+        locked,
+        wid,
+    )];
     for task in tasks {
-        items.push(kanban_card(task, wid));
+        items.push(kanban_card(task, steps, wid));
     }
+    // Full-width when stacked (mobile); a `≥12rem` grow-to-fill column in the desktop row.
     el(El::Div)
-        .style(
-            Style::new()
-                .set("min-width", "12rem")
-                .set("flex", "1 0 12rem"),
-        )
+        .style(Style::new().set("min-width", "12rem"))
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .md([St::Flex1])
         .append(items)
 }
 
-fn kanban_card(task: &TaskView, wid: &str) -> ElementBuilder {
+/// A column header `NAME · count`. A pipeline-step column with a configured row opens that step's
+/// editor in a drawer (the columns *are* the pipeline); a step with no row (the implicit default) or
+/// a locked board links to the Workflow tab; Done/Closed are plain text.
+fn column_header(
+    name: &str,
+    count: usize,
+    is_step: bool,
+    step_id: Option<&str>,
+    locked: bool,
+    wid: &str,
+) -> ElementBuilder {
+    let label = format!("{name} · {count}");
+    let header_st = [
+        St::FontInheritAll,
+        St::TextXs,
+        St::TextMuted,
+        St::TextUppercase,
+        St::TrackingWide,
+        St::PbXs,
+    ];
+    if !is_step {
+        return el(El::Div).st(header_st).text(&label);
+    }
+    match step_id.filter(|_| !locked) {
+        // A configured, editable step → open its editor drawer in place.
+        Some(id) => el(El::Button)
+            .at(At::Type, Av::Button)
+            .data("step", id)
+            .on(Ev::Click, crate::ui::workspace_workflow::toggle_edit())
+            .st(header_st)
+            .st([
+                St::TextLeft,
+                St::BgTransparent,
+                St::BorderNone,
+                St::P0,
+                St::CursorPointer,
+            ])
+            .hover([St::TextAccent])
+            .append([el(El::Span).text(&label)]),
+        // The implicit default (no row) or a locked board → jump to the Workflow tab.
+        None => Link::route(&format!("/w/{wid}/workflow"))
+            .st(header_st)
+            .st([St::NoUnderline, St::CursorPointer])
+            .hover([St::TextAccent])
+            .append([el(El::Span).text(&label)]),
+    }
+}
+
+/// A kanban card: title + status, the pipeline mini-stepper, a 2-line spec preview, an
+/// assignee avatar + signal tags (blocked / recurrent / retry / attempt), and an inline action
+/// row (Approve when parked, run controls otherwise) — the at-a-glance view of one task.
+fn kanban_card(task: &TaskView, steps: &[String], wid: &str) -> ElementBuilder {
+    let _ = wid;
     let mut rows = vec![
         el(El::Div)
             .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
             .append([
-                Link::route(&format!("/w/{wid}/tasks/{}", task.id))
-                    .style(Style::new().set("font", "inherit"))
+                // The title opens the task's Peek modal over the board (no navigation away).
+                el(El::Button)
+                    .at(At::Type, Av::Button)
+                    .data("task", &task.id)
+                    .on(Ev::Click, crate::ui::task_detail::open_peek())
                     .st([
+                        St::FontInheritAll,
                         St::Flex1,
                         St::TextXs,
                         St::TextHigh,
                         St::FontSemibold,
-                        St::NoUnderline,
+                        St::TextLeft,
+                        St::BgTransparent,
+                        St::BorderNone,
+                        St::P0,
+                        St::CursorPointer,
                     ])
                     .hover([St::TextAccent])
                     .text(&task.title),
                 status_badge(&task.status),
             ]),
     ];
-    let mut meta = task.agent.as_deref().unwrap_or("owner").to_owned();
-    if task.iteration > 0 {
-        meta.push_str(&format!(" · iter {}", task.iteration + 1));
+    // The pipeline mini-stepper (only when there's a real multi-step pipeline to show).
+    if steps.len() > 1 {
+        rows.push(step_trail(steps, task));
+    }
+    // A 2-line spec preview so the card says what the task is, not just its title.
+    if !task.spec.trim().is_empty() {
+        rows.push(spec_preview(&task.spec));
+    }
+    // Assignee avatar + signal tags.
+    rows.push(card_meta_row(task));
+    // Inline actions: Approve right on a parked card, then the status-appropriate run controls.
+    rows.push(card_actions(task));
+    el(El::Div)
+        .st([
+            St::BgSurface,
+            St::BorderDefault,
+            St::RoundedSm,
+            St::PSm,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapXs,
+        ])
+        .append(rows)
+}
+
+/// The pipeline position as a compact `Execute › Refine › Approve` trail: the current step is
+/// accented (with its loop iteration), past steps muted, future steps faint; a terminal task
+/// shows the whole trail faint.
+fn step_trail(steps: &[String], task: &TaskView) -> ElementBuilder {
+    let terminal = matches!(
+        task.status.as_str(),
+        "done" | "failed" | "rejected" | "cancelled"
+    );
+    let current = (task.step_position.max(0) as usize).min(steps.len().saturating_sub(1));
+    let mut parts: Vec<ElementBuilder> = Vec::new();
+    for (index, name) in steps.iter().enumerate() {
+        if index > 0 {
+            parts.push(el(El::Span).st([St::TextLow]).text("›"));
+        }
+        let mut label = name.clone();
+        if !terminal && index == current && task.iteration > 0 {
+            label.push_str(&format!(" {}", task.iteration + 1));
+        }
+        let color = if terminal || index > current {
+            St::TextLow
+        } else if index == current {
+            St::TextAccent
+        } else {
+            St::TextMuted
+        };
+        let span = el(El::Span).st([St::TextXs, color]).text(&label);
+        parts.push(if !terminal && index == current {
+            span.st([St::FontSemibold])
+        } else {
+            span
+        });
+    }
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapXs, St::FlexWrap])
+        .append(parts)
+}
+
+/// A 2-line clamped spec preview (the clamp is a genuinely dynamic CSS escape hatch).
+fn spec_preview(spec: &str) -> ElementBuilder {
+    el(El::Div)
+        .style(
+            Style::new()
+                .set("display", "-webkit-box")
+                .set("-webkit-line-clamp", "2")
+                .set("-webkit-box-orient", "vertical")
+                .set("overflow", "hidden"),
+        )
+        .st([St::TextXs, St::TextMuted])
+        .text(spec)
+}
+
+/// The assignee avatar (initials, tooltip = full name) followed by the signal tags.
+fn card_meta_row(task: &TaskView) -> ElementBuilder {
+    let assignee = task.agent.as_deref().unwrap_or("owner");
+    let avatar = Tooltip::new(assignee.to_owned())
+        .child(
+            Avatar::new()
+                .fallback(initials(assignee))
+                .size(AvatarSize::Sm)
+                .build(),
+        )
+        .build();
+    let mut row = vec![avatar];
+    row.extend(signal_tags(task));
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapXs, St::FlexWrap])
+        .append(row)
+}
+
+/// Up to two uppercase initials for an avatar fallback (`Forge` → `F`, `John Doe` → `JD`).
+pub(crate) fn initials(name: &str) -> String {
+    let letters: String = name
+        .split_whitespace()
+        .filter_map(|word| word.chars().next())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase();
+    if letters.is_empty() {
+        "?".to_owned()
+    } else {
+        letters
+    }
+}
+
+/// The card's signal tags — only the ones that apply: a human gate, blockers, recurrence, a
+/// pending retry, and the manual-restart attempt count. A terminal card carries no live signals
+/// (a done/cancelled task is no longer blocked or retrying).
+fn signal_tags(task: &TaskView) -> Vec<ElementBuilder> {
+    let mut tags = Vec::new();
+    if matches!(
+        task.status.as_str(),
+        "done" | "failed" | "rejected" | "cancelled"
+    ) {
+        return tags;
+    }
+    if task.status == "awaiting" {
+        tags.push(Tag::new("needs you").intent(TagIntent::Primary).build());
+    }
+    if !task.blockers.is_empty() {
+        tags.push(
+            Tag::new(format!("⛔ {}", task.blockers.len()))
+                .intent(TagIntent::Warning)
+                .build(),
+        );
     }
     if task.recurrent {
-        meta.push_str(" · ⟳");
+        let label = match &task.schedule {
+            Some(schedule) => format!("⟳ {schedule}"),
+            None => "⟳".to_owned(),
+        };
+        tags.push(Tag::new(label).build());
     }
-    rows.push(el(El::Div).st([St::TextXs, St::TextLow]).text(&meta));
-    // A one-click Approve right on the card for tasks parked at a human gate.
+    if let Some(next) = &task.next_retry {
+        tags.push(
+            Tag::new(format!("retry → {next}"))
+                .intent(TagIntent::Warning)
+                .build(),
+        );
+    }
+    if task.attempt > 0 {
+        tags.push(Tag::new(format!("att {}", task.attempt + 1)).build());
+    }
+    tags
+}
+
+/// The inline action row: a one-click Approve on a parked card, then the status-appropriate run
+/// controls (Stop / Start / Restart / Edit / Cancel), wrapping on a narrow column.
+fn card_actions(task: &TaskView) -> ElementBuilder {
+    let mut actions: Vec<ElementBuilder> = Vec::new();
     if task.status == "awaiting" {
-        rows.push(
+        actions.push(
             el(El::Button)
-                .attr("type", "button")
+                .at(At::Type, Av::Button)
                 .data("task", &task.id)
                 .on(Ev::Click, kanban_approve())
-                .style(Style::new().set("font", "inherit"))
                 .st([
+                    St::FontInheritAll,
                     St::TextXs,
                     St::PxSm,
                     St::PyXs,
@@ -236,17 +549,16 @@ fn kanban_card(task: &TaskView, wid: &str) -> ElementBuilder {
                 .text("Approve"),
         );
     }
+    actions.extend(control_buttons(task));
     el(El::Div)
         .st([
-            St::BgSurface,
-            St::BorderDefault,
-            St::RoundedSm,
-            St::PSm,
             St::DisplayFlex,
-            St::FlexCol,
+            St::ItemsCenter,
             St::GapXs,
+            St::FlexWrap,
+            St::PtXs,
         ])
-        .append(rows)
+        .append(actions)
 }
 
 /// The Kanban ↔ List view switch (immediate-apply chips).
@@ -261,11 +573,11 @@ fn view_toggle(list: bool) -> ElementBuilder {
 
 fn toggle_chip(label: &str, view: &str, active: bool) -> ElementBuilder {
     let chip = el(El::Button)
-        .attr("type", "button")
+        .at(At::Type, Av::Button)
         .data("view", view)
         .on(Ev::Click, toggle_view())
-        .style(Style::new().set("font", "inherit"))
         .st([
+            St::FontInheritAll,
             St::TextXs,
             St::PxSm,
             St::PyXs,
@@ -302,43 +614,41 @@ fn kanban_approve(app: &mut App, ctx: &EventContext) {
 
 fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
     // Assignee options: the workspace's members (the owner is the default).
-    let mut assignee = vec![el(El::Option).attr("value", "").text("— owner —")];
+    let mut assignee = vec![el(El::Option).at_str(At::Value, "").text("— owner —")];
     for agent in app
         .agents
         .iter()
         .filter(|a| workspace.members.iter().any(|m| m == &a.id))
     {
-        assignee.push(el(El::Option).attr("value", &agent.id).text(&agent.name));
+        assignee.push(
+            el(El::Option)
+                .at_str(At::Value, &agent.id)
+                .text(&agent.name),
+        );
     }
     el(El::Form)
         .on(Ev::Submit, submit_task())
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
             el(El::Input)
-                .attr("name", "title")
-                .attr("placeholder", "Task title")
-                .attr("autocomplete", "off")
-                .attr("required", "required")
-                .style(Style::new().set("font", "inherit"))
+                .at_str(At::Name, "title")
+                .at_str(At::Placeholder, "Task title")
+                .at(At::Autocomplete, Av::Off)
+                .bool_attr(At::Required)
                 .st(input_st())
                 .focus([St::BorderAccent]),
             el(El::Textarea)
-                .attr("name", "spec")
-                .attr("rows", "3")
-                .attr("required", "required")
-                .at_str(rwire::At::Placeholder, "What should the agent do?")
-                .style(
-                    Style::new()
-                        .set("font", "inherit")
-                        .set("resize", "vertical"),
-                )
+                .at_str(At::Name, "spec")
+                .at_str(At::Rows, "3")
+                .bool_attr(At::Required)
+                .at_str(At::Placeholder, "What should the agent do?")
                 .st(input_st())
+                .st([St::ResizeY])
                 .focus([St::BorderAccent]),
             el(El::Input)
-                .attr("name", "schedule")
-                .attr("placeholder", "Cron schedule — optional, e.g. 0 8 * * *")
-                .attr("autocomplete", "off")
-                .style(Style::new().set("font", "inherit"))
+                .at_str(At::Name, "schedule")
+                .at_str(At::Placeholder, "Cron schedule — optional, e.g. 0 8 * * *")
+                .at(At::Autocomplete, Av::Off)
                 .st(input_st())
                 .focus([St::BorderAccent]),
             retries_input(None),
@@ -346,9 +656,9 @@ fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
                     el(El::Select)
-                        .attr("name", "agent")
+                        .at_str(At::Name, "agent")
                         .st(input_st())
-                        .style(Style::new().set("flex", "1"))
+                        .st([St::Flex1])
                         .append(assignee),
                     accent_submit(icons::Icon::Plus, "Queue task"),
                 ]),
@@ -359,21 +669,20 @@ fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
 /// override) when editing. Blank = use the global default.
 fn retries_input(value: Option<i64>) -> ElementBuilder {
     let field = el(El::Input)
-        .attr("name", "max_retries")
-        .attr("type", "number")
-        .attr("min", "0")
-        .attr("placeholder", "Auto-retries on failure — blank = default")
-        .attr("autocomplete", "off")
-        .style(Style::new().set("font", "inherit"))
+        .at_str(At::Name, "max_retries")
+        .at(At::Type, Av::Number)
+        .at_str(At::Min, "0")
+        .at_str(At::Placeholder, "Auto-retries on failure — blank = default")
+        .at(At::Autocomplete, Av::Off)
         .st(input_st())
         .focus([St::BorderAccent]);
     match value {
-        Some(n) => field.attr("value", &n.to_string()),
+        Some(n) => field.at_str(At::Value, &n.to_string()),
         None => field,
     }
 }
 
-fn input_st() -> [St; 8] {
+fn input_st() -> [St; 9] {
     [
         St::WFull,
         St::PxSm,
@@ -383,6 +692,8 @@ fn input_st() -> [St; 8] {
         St::BgApp,
         St::TextHigh,
         St::OutlineNone,
+        // Inherit the page font so the control doesn't fall back to the UA default.
+        St::FontInheritAll,
     ]
 }
 
@@ -420,11 +731,11 @@ fn control_buttons(task: &TaskView) -> Vec<ElementBuilder> {
 /// A small text "Restart" button (there's no rotate glyph) carrying the task id.
 fn restart_button(task_id: &str) -> ElementBuilder {
     el(El::Button)
-        .attr("type", "button")
+        .at(At::Type, Av::Button)
         .data("task", task_id)
         .on(Ev::Click, restart_task())
-        .style(Style::new().set("font", "inherit"))
         .st([
+            St::FontInheritAll,
             St::TextXs,
             St::PxSm,
             St::PyXs,
@@ -471,8 +782,8 @@ fn task_card(
     let mut head: Vec<ElementBuilder> = vec![
         // The title links to the task's detail view (its run chain).
         Link::route(&format!("/w/{wid}/tasks/{}", task.id))
-            .style(Style::new().set("font", "inherit"))
             .st([
+                St::FontInheritAll,
                 St::Flex1,
                 St::TextSm,
                 St::TextHigh,
@@ -545,9 +856,9 @@ fn task_card(
 fn edit_form(task: &TaskView, members: &[(String, String)]) -> ElementBuilder {
     let mut assignee = vec![owner_option(task.agent_id.is_none())];
     for (id, name) in members {
-        let option = el(El::Option).attr("value", id).text(name);
+        let option = el(El::Option).at_str(At::Value, id).text(name);
         assignee.push(if task.agent_id.as_deref() == Some(id.as_str()) {
-            option.bool_attr(rwire::At::Selected)
+            option.bool_attr(At::Selected)
         } else {
             option
         });
@@ -559,41 +870,34 @@ fn edit_form(task: &TaskView, members: &[(String, String)]) -> ElementBuilder {
             // The task id rides as a hidden field so the submit handler reads it from
             // FormData (a form's data-attribute isn't exposed on the Submit event).
             el(El::Input)
-                .attr("type", "hidden")
-                .attr("name", "id")
-                .attr("value", &task.id),
+                .at(At::Type, Av::Hidden)
+                .at_str(At::Name, "id")
+                .at_str(At::Value, &task.id),
             el(El::Input)
-                .attr("name", "title")
-                .attr("value", &task.title)
-                .attr("autocomplete", "off")
-                .style(Style::new().set("font", "inherit"))
+                .at_str(At::Name, "title")
+                .at_str(At::Value, &task.title)
+                .at(At::Autocomplete, Av::Off)
                 .st(input_st())
                 .focus([St::BorderAccent]),
             el(El::Textarea)
-                .attr("name", "spec")
-                .attr("rows", "2")
-                .style(
-                    Style::new()
-                        .set("font", "inherit")
-                        .set("resize", "vertical"),
-                )
+                .at_str(At::Name, "spec")
+                .at_str(At::Rows, "2")
                 .st(input_st())
+                .st([St::ResizeY])
                 .focus([St::BorderAccent])
                 .text(&task.spec),
             el(El::Input)
-                .attr("name", "schedule")
-                .attr("value", task.schedule.as_deref().unwrap_or(""))
-                .attr("placeholder", "Cron schedule — empty = one-shot")
-                .attr("autocomplete", "off")
-                .style(Style::new().set("font", "inherit"))
+                .at_str(At::Name, "schedule")
+                .at_str(At::Value, task.schedule.as_deref().unwrap_or(""))
+                .at_str(At::Placeholder, "Cron schedule — empty = one-shot")
+                .at(At::Autocomplete, Av::Off)
                 .st(input_st())
                 .focus([St::BorderAccent]),
             el(El::Input)
-                .attr("name", "blockers")
-                .attr("value", &task.blockers.join(", "))
-                .attr("placeholder", "Blocker task ids, comma-separated")
-                .attr("autocomplete", "off")
-                .style(Style::new().set("font", "inherit"))
+                .at_str(At::Name, "blockers")
+                .at_str(At::Value, &task.blockers.join(", "))
+                .at_str(At::Placeholder, "Blocker task ids, comma-separated")
+                .at(At::Autocomplete, Av::Off)
                 .st(input_st())
                 .focus([St::BorderAccent]),
             retries_input(task.max_retries),
@@ -601,9 +905,9 @@ fn edit_form(task: &TaskView, members: &[(String, String)]) -> ElementBuilder {
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
                     el(El::Select)
-                        .attr("name", "agent")
+                        .at_str(At::Name, "agent")
                         .st(input_st())
-                        .style(Style::new().set("flex", "1"))
+                        .st([St::Flex1])
                         .append(assignee),
                     accent_submit(icons::Icon::Check, "Save"),
                     crate::ui::widgets::icon_button(icons::Icon::Close, close_edit(), false),
@@ -612,9 +916,9 @@ fn edit_form(task: &TaskView, members: &[(String, String)]) -> ElementBuilder {
 }
 
 fn owner_option(selected: bool) -> ElementBuilder {
-    let option = el(El::Option).attr("value", "").text("— owner —");
+    let option = el(El::Option).at_str(At::Value, "").text("— owner —");
     if selected {
-        option.bool_attr(rwire::At::Selected)
+        option.bool_attr(At::Selected)
     } else {
         option
     }

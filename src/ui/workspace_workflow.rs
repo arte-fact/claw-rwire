@@ -5,7 +5,7 @@
 //! `App.workflow_steps` / `workflow_locked` / `editing_step`.
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, StepForm, StepView, WorkspaceView};
@@ -84,6 +84,130 @@ fn body(app: &App) -> ElementBuilder {
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append(sections)
+}
+
+/// The in-situ step editor — a right-side overlay opened from a board column header. Shows the
+/// step's edit form (plus move/delete), or a "locked" note while the workspace has tasks in flight.
+/// Built by hand (backdrop + panel as siblings, toggled by `editing_step`) — the same reliable
+/// pattern as the Peek modal, rather than the `Drawer` component.
+pub(crate) fn step_drawer(app: &App) -> ElementBuilder {
+    if app.editing_step.is_none() {
+        return el(El::Div).st([St::DisplayNone]);
+    }
+    el(El::Div)
+        .st([
+            St::PositionFixed,
+            St::Inset0,
+            St::Z1400,
+            St::DisplayFlex,
+            St::JustifyEnd,
+        ])
+        .append([
+            el(El::Div)
+                .st([
+                    St::PositionAbsolute,
+                    St::Inset0,
+                    St::BgOverlay50,
+                    St::CursorPointer,
+                ])
+                .on(Ev::Click, close_step_edit()),
+            el(El::Div)
+                .style(Style::new().set("width", "24rem").set("max-width", "100%"))
+                .st([
+                    St::PositionRelative,
+                    St::DisplayFlex,
+                    St::FlexCol,
+                    St::GapMd,
+                    St::BgApp,
+                    St::BorderDefault,
+                    St::OverflowYAuto,
+                    St::PLg,
+                ])
+                .append([step_drawer_header(), step_drawer_body(app)]),
+        ])
+}
+
+/// The overlay header: a title and a close (✕) button.
+fn step_drawer_header() -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+        .append([
+            el(El::Span)
+                .st([St::Flex1, St::TextLg, St::TextHigh, St::FontSemibold])
+                .text("Edit pipeline step"),
+            el(El::Button)
+                .at(At::Type, Av::Button)
+                .at_str(At::AriaLabel, "Close")
+                .on(Ev::Click, close_step_edit())
+                .st([
+                    St::DisplayFlex,
+                    St::ItemsCenter,
+                    St::BgTransparent,
+                    St::BorderNone,
+                    St::P0,
+                    St::TextMuted,
+                    St::CursorPointer,
+                ])
+                .hover([St::TextHigh])
+                .append([icons::icon_sized(icons::Icon::Close, 18)]),
+        ])
+}
+
+fn step_drawer_body(app: &App) -> ElementBuilder {
+    let Some(editing) = app.editing_step.as_deref() else {
+        return el(El::Div);
+    };
+    let Some(workspace) = app
+        .active_workspace
+        .as_deref()
+        .and_then(|id| app.workspaces.iter().find(|w| w.id == id))
+    else {
+        return el(El::Div);
+    };
+    if app.workflow_locked {
+        return el(El::Div).st([St::TextSm, St::TextMuted]).text(
+            "Editing is locked while this workspace has tasks in flight. Finish or stop them to \
+             change the pipeline.",
+        );
+    }
+    let Some((index, step)) = app
+        .workflow_steps
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.id == editing)
+    else {
+        return el(El::Div)
+            .st([St::TextSm, St::TextMuted])
+            .text("That step no longer exists.");
+    };
+    let members = members_of(app, workspace);
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapMd])
+        .append([
+            drawer_controls(step, index, app.workflow_steps.len()),
+            edit_form(step, &members, &workspace.id),
+        ])
+}
+
+/// Move / delete buttons for the drawer (no "edit" toggle — the form is already open).
+fn drawer_controls(step: &StepView, index: usize, count: usize) -> ElementBuilder {
+    let mut buttons = Vec::new();
+    if index > 0 {
+        buttons.push(icon_btn("↑ Move up", move_up(), &step.id));
+    }
+    if index + 1 < count {
+        buttons.push(icon_btn("↓ Move down", move_down(), &step.id));
+    }
+    buttons.push(icon_btn("Delete step", delete_step(), &step.id));
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapXs, St::FlexWrap])
+        .append(buttons)
+}
+
+#[handler]
+fn close_step_edit(app: &mut App, ctx: &EventContext) {
+    let _ = ctx;
+    app.editing_step = None;
 }
 
 fn step_card(
@@ -427,7 +551,7 @@ fn add_loop(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn toggle_edit(app: &mut App, ctx: &EventContext) {
+pub(crate) fn toggle_edit(app: &mut App, ctx: &EventContext) {
     if let Some(step) = ctx.data("step") {
         let step = step.to_owned();
         app.editing_step = if app.editing_step.as_deref() == Some(step.as_str()) {

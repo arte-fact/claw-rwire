@@ -615,6 +615,15 @@ pub struct App {
     pub review_count: usize,
     /// The task whose detail view (run chain) is open, or `None`.
     pub task_detail: Option<TaskDetail>,
+    /// The task whose **Peek** modal is open over the board, or `None` (closed).
+    pub selected_task: Option<String>,
+    /// The Peek modal's active tab: 0 = Overview, 1 = Activity, 2 = Review.
+    pub detail_tab: usize,
+    /// Run-chain tool rows the user toggled away from their default (collapsed, except a run's
+    /// latest call). A tool is open iff `is_last XOR tool_toggled.contains(key)`.
+    pub tool_toggled: Vec<String>,
+    /// The board's active quick-filter: `all` | `awaiting` | `running` | `blocked` | `failed`.
+    pub board_filter: String,
     /// The active workspace's configured pipeline steps (the Workflow editor).
     pub workflow_steps: Vec<StepView>,
     /// The pipeline editor is locked because the workspace has in-flight tasks.

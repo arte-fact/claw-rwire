@@ -318,6 +318,61 @@ pub fn running_in(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Opt
     .optional()
 }
 
+/// The workspace's currently running task **other than** `exclude_id`, if any. Used to hold the
+/// one-running-task-per-workspace invariant when a task is resumed from a human gate: while it sat
+/// parked the scheduler may have started another task, so the resume path must check the lane
+/// before launching a second worker into the shared workspace tree.
+pub fn other_running_in(
+    conn: &Connection,
+    workspace_id: &str,
+    exclude_id: &str,
+) -> rusqlite::Result<Option<Task>> {
+    conn.query_row(
+        &format!("{SELECT} WHERE workspace_id = ?1 AND status = 'running' AND id != ?2 LIMIT 1"),
+        params![workspace_id, exclude_id],
+        from_row,
+    )
+    .optional()
+}
+
+/// Cancel the tasks still waiting on `blocker_id` because it ended **without succeeding** (failed /
+/// rejected / cancelled). They can never become ready — the ready-scan requires every blocker
+/// `done` — so leaving them `pending` strands them silently forever. Cascades transitively (a
+/// cancelled dependent strands *its* own dependents) and returns every id it cancelled, for
+/// notification / re-projection. Only touches not-yet-started tasks (`pending` / `stopped`); a
+/// running / awaiting / terminal dependent is left alone.
+pub fn cancel_dependents(
+    conn: &Connection,
+    blocker_id: &str,
+    reason: &str,
+) -> rusqlite::Result<Vec<String>> {
+    let mut cancelled: Vec<String> = Vec::new();
+    let mut frontier = vec![blocker_id.to_owned()];
+    while let Some(blocker) = frontier.pop() {
+        for dependent in waiting_dependents_of(conn, &blocker)? {
+            conn.execute(
+                "UPDATE tasks SET status = 'cancelled', result = ?2, run_epoch = run_epoch + 1,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                  WHERE id = ?1",
+                params![dependent, reason],
+            )?;
+            cancelled.push(dependent.clone());
+            frontier.push(dependent);
+        }
+    }
+    Ok(cancelled)
+}
+
+/// The not-yet-started tasks (`pending` / `stopped`) that list `blocker_id` among their blockers.
+fn waiting_dependents_of(conn: &Connection, blocker_id: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id FROM tasks t JOIN task_blockers b ON b.task_id = t.id
+          WHERE b.blocked_by = ?1 AND t.status IN ('pending', 'stopped')",
+    )?;
+    let rows = stmt.query_map(params![blocker_id], |row| row.get(0))?;
+    rows.collect()
+}
+
 /// The next pending task ready to run in a workspace: highest priority, then oldest, and
 /// with no still-unfinished blocker. `None` when the lane is empty or everything pending
 /// is still waiting on a blocker.
@@ -371,7 +426,9 @@ pub fn has_inflight(conn: &Connection, workspace_id: &str) -> rusqlite::Result<b
 }
 
 /// Reschedule a recurrent task after a run: store its result + `last_run`, set the computed
-/// `next_run`, and return it to `pending` so the lane re-runs it once that slot arrives.
+/// `next_run`, and return it to `pending` so the lane re-runs it once that slot arrives. Resets
+/// `auto_retries` so **each** cron cycle gets a fresh retry budget — otherwise the budget spent in
+/// the first cycle would leave every later occurrence with zero transient-failure tolerance.
 pub fn reschedule(
     conn: &Connection,
     id: &str,
@@ -381,6 +438,7 @@ pub fn reschedule(
     conn.execute(
         "UPDATE tasks
             SET status = 'pending', next_run = ?2, result = ?3, step_position = 0,
+                auto_retries = 0,
                 last_run = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
           WHERE id = ?1",
@@ -647,6 +705,85 @@ mod tests {
         assert_eq!(
             blockers_of(&conn, "t1").expect("of2"),
             vec!["t3".to_owned()]
+        );
+    }
+
+    #[test]
+    fn other_running_in_excludes_self_and_finds_peers() {
+        let conn = seeded();
+        create(&conn, &task("a")).expect("a");
+        create(&conn, &task("b")).expect("b");
+        set_status(&conn, "a", TaskStatus::Running).expect("run a");
+        // From a's own perspective no *other* task is running…
+        assert!(other_running_in(&conn, "ws", "a").expect("scan").is_none());
+        // …but from b's perspective, a holds the lane.
+        assert_eq!(
+            other_running_in(&conn, "ws", "b")
+                .expect("scan")
+                .unwrap()
+                .id,
+            "a"
+        );
+    }
+
+    #[test]
+    fn reschedule_resets_the_retry_budget_each_cycle() {
+        // Regression (B4): a recurrent task that spent its retry budget in one cycle must get a
+        // fresh budget on the next, not stay maxed out forever.
+        let conn = seeded();
+        create(
+            &conn,
+            &NewTask {
+                schedule: Some("0 8 * * *"),
+                ..task("t1")
+            },
+        )
+        .expect("create");
+        note_retry(&conn, "t1", "2999-01-01T00:00:00.000Z").expect("retry"); // auto_retries → 1
+        assert_eq!(get(&conn, "t1").expect("get").unwrap().auto_retries, 1);
+        reschedule(&conn, "t1", "2000-01-01T00:00:00.000Z", Some("ran")).expect("reschedule");
+        assert_eq!(
+            get(&conn, "t1").expect("get").unwrap().auto_retries,
+            0,
+            "each cron cycle starts with a fresh retry budget"
+        );
+    }
+
+    #[test]
+    fn cancel_dependents_cascades_through_the_chain() {
+        // Regression (B2): when a blocker fails, its waiting followers (and theirs) must be
+        // cancelled rather than left pending forever.
+        let conn = seeded();
+        create(&conn, &task("a")).expect("a"); // the blocker that fails
+        create(&conn, &task("b")).expect("b"); // blocked by a
+        create(&conn, &task("c")).expect("c"); // blocked by b
+        add_blocker(&conn, "b", "a").expect("b<-a");
+        add_blocker(&conn, "c", "b").expect("c<-b");
+        let cancelled = cancel_dependents(&conn, "a", "blocker did not succeed").expect("cascade");
+        assert_eq!(cancelled.len(), 2, "both b and c are cancelled");
+        for id in ["b", "c"] {
+            let t = get(&conn, id).expect("get").unwrap();
+            assert_eq!(t.status, TaskStatus::Cancelled);
+            assert_eq!(t.result.as_deref(), Some("blocker did not succeed"));
+        }
+    }
+
+    #[test]
+    fn cancel_dependents_leaves_started_followers_untouched() {
+        let conn = seeded();
+        create(&conn, &task("a")).expect("a");
+        create(&conn, &task("b")).expect("b");
+        add_blocker(&conn, "b", "a").expect("b<-a");
+        set_status(&conn, "b", TaskStatus::Running).expect("run b");
+        // A running dependent already cleared its blockers; never cancel it out from under a worker.
+        assert!(
+            cancel_dependents(&conn, "a", "x")
+                .expect("cascade")
+                .is_empty()
+        );
+        assert_eq!(
+            get(&conn, "b").expect("get").unwrap().status,
+            TaskStatus::Running
         );
     }
 

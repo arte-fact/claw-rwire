@@ -37,6 +37,23 @@ fn app_theme() -> Theme {
         .radius(RadiusScale::Small)
 }
 
+/// Installable-PWA config: name/colors matching the Nord dark theme, with branded `>_` icons (the
+/// claw masthead glyph). Serves `/manifest.webmanifest` + `/sw.js` + `/pwa/icon-*.png`.
+fn pwa_config() -> rwire::pwa::Pwa {
+    rwire::pwa::Pwa::new("claw")
+        .short_name("claw")
+        .description("Your AI assistant — a small team across workspaces.")
+        .display(rwire::pwa::PwaDisplay::Standalone)
+        .theme_color("#2e3440")
+        .background_color("#2e3440")
+        .icon(192, include_bytes!("../assets/pwa/icon-192.png").as_slice())
+        .icon(512, include_bytes!("../assets/pwa/icon-512.png").as_slice())
+        .maskable_icon(
+            512,
+            include_bytes!("../assets/pwa/icon-512-maskable.png").as_slice(),
+        )
+}
+
 fn data_dir() -> std::path::PathBuf {
     std::env::var_os(DATA_DIR_ENV)
         .map(std::path::PathBuf::from)
@@ -71,7 +88,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .on_route(ui::on_route())
         .auth(&creds.user, &creds.password)
         .auth_brand("claw")
-        .capsule_config(CapsuleConfig::new())
+        .capsule_config(CapsuleConfig::new().pwa(pwa_config()))
         .theme(app_theme());
 
     // Dev convenience: a stable session token (CLAW_DEV_SESSION) survives server restarts, so a

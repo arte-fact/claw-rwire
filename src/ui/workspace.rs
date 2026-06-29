@@ -7,12 +7,13 @@
 use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{At, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
-use rwire_components::Text;
+use rwire_components::{Avatar, AvatarSize, Text, Tooltip};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, WorkspaceView};
 use crate::ui::files;
 use crate::ui::widgets::accent_submit;
+use crate::ui::workspace_tasks::initials;
 
 /// The sections of a workspace, in tab order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,22 +36,24 @@ impl WsTab {
         }
     }
 
-    /// The route for this tab within workspace `wid`.
+    /// The route for this tab within workspace `wid`. The board (`Tasks`) is the bare `/w/{wid}`
+    /// landing; Overview moved to its own path.
     fn path(self, wid: &str) -> String {
         match self {
-            WsTab::Dashboard => format!("/w/{wid}"),
+            WsTab::Tasks => format!("/w/{wid}"),
+            WsTab::Dashboard => format!("/w/{wid}/overview"),
             WsTab::Files => format!("/w/{wid}/files"),
-            WsTab::Tasks => format!("/w/{wid}/tasks"),
             WsTab::Workflow => format!("/w/{wid}/workflow"),
             WsTab::Team => format!("/w/{wid}/team"),
         }
     }
 }
 
+// Board first — it's the landing view.
 const TABS: [WsTab; 5] = [
+    WsTab::Tasks,
     WsTab::Dashboard,
     WsTab::Files,
-    WsTab::Tasks,
     WsTab::Workflow,
     WsTab::Team,
 ];
@@ -86,13 +89,36 @@ fn header(app: &App) -> ElementBuilder {
         n => format!("{n} member{}", if n == 1 { "" } else { "s" }),
     };
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
             Text::heading1(workspace.name.clone()).build(),
             Text::body(format!("owner {owner} · {team}"))
                 .muted()
                 .build(),
+            member_avatars(workspace),
         ])
+}
+
+/// A row of member avatars (initials, tooltip = name) — the team at a glance in the header.
+fn member_avatars(workspace: &WorkspaceView) -> ElementBuilder {
+    let avatars: Vec<ElementBuilder> = workspace
+        .member_names
+        .iter()
+        .take(8)
+        .map(|name| {
+            Tooltip::new(name.clone())
+                .child(
+                    Avatar::new()
+                        .fallback(initials(name))
+                        .size(AvatarSize::Sm)
+                        .build(),
+                )
+                .build()
+        })
+        .collect();
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapXs, St::FlexWrap])
+        .append(avatars)
 }
 
 fn tab_row(wid: &str, active: WsTab) -> ElementBuilder {

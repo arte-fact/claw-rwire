@@ -4,6 +4,15 @@ A single sequence for the [improvement requests](improvement-requests.md) (R1–
 in-flight task-control work. Two requests already have their own detailed plans, linked below; the
 rest are broken into PR-sized subtasks here. Each subtask lands independently green on the gate:
 
+> **Forward-looking:** [Workflow optimization & simplification levers](workflow-optimization-levers.md)
+> — throughput/cost/quality and friction levers for the coding-agent workflow, grounded in a live
+> end-to-end run and compared to Jira (parallelism via isolation, objective test gates, DAG
+> scheduling, grounded planning, ranked backlog, visible blocked state).
+>
+> **Forward-looking:** [Workspace UX overhaul](workspace-ux-overhaul.md) — "the board is the
+> workspace": richer kanban cards, a Peek modal (one-page task view + review, over the board),
+> folding the 5 tabs + Review screen into one board with drawers/modals/tabs/accordions.
+
 ```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings

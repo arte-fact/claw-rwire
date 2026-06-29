@@ -29,18 +29,26 @@ pub fn page() -> ElementBuilder {
 
 #[renderer]
 fn body(app: &App) -> ElementBuilder {
-    if app.review_inbox.is_empty() {
-        return el(El::Div)
-            .st([St::TextSm, St::TextMuted, St::PySm])
-            .text("Nothing needs your review right now.");
-    }
-    let cards: Vec<ElementBuilder> = app.review_inbox.iter().map(review_card).collect();
+    let mut children: Vec<ElementBuilder> = if app.review_inbox.is_empty() {
+        vec![
+            el(El::Div)
+                .st([St::TextSm, St::TextMuted, St::PySm])
+                .text("Nothing needs your review right now."),
+        ]
+    } else {
+        app.review_inbox
+            .iter()
+            .map(|item| review_card(item, &app.tool_toggled))
+            .collect()
+    };
+    // The same Peek modal as the board — a review row opens the task in place, over the inbox.
+    children.push(crate::ui::task_detail::peek_modal(app));
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapMd])
-        .append(cards)
+        .append(children)
 }
 
-fn review_card(item: &ReviewItem) -> ElementBuilder {
+fn review_card(item: &ReviewItem, toggled: &[String]) -> ElementBuilder {
     let body = el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
@@ -62,19 +70,11 @@ fn review_card(item: &ReviewItem) -> ElementBuilder {
                     el(El::Span).text(&format!("· {}", item.spec)),
                 ]),
             // The work to review: a plan shows its proposed tasks; an ordinary task its full run.
-            work_to_review(item),
-            // Approve / Reject (clicks) + a link to the full run chain, then a Request-changes form.
+            work_to_review(item, toggled),
+            // Approve / Reject (clicks) + open the task in the Peek modal, then a Request-changes form.
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-                .append([
-                    approve_button(&item.task_id),
-                    plain("Reject", reject(), &item.task_id),
-                    Link::route(&format!("/w/{}/tasks/{}", item.workspace_id, item.task_id))
-                        .style(Style::new().set("font", "inherit"))
-                        .st([St::TextXs, St::TextMuted, St::NoUnderline])
-                        .hover([St::TextAccent])
-                        .text("View run chain →"),
-                ]),
+                .append(action_row(item)),
             el(El::Form)
                 .on(Ev::Submit, request_changes())
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
@@ -97,12 +97,12 @@ fn review_card(item: &ReviewItem) -> ElementBuilder {
 }
 
 /// The reviewable work: a plan's proposed task list (R3), else the producer's full run.
-fn work_to_review(item: &ReviewItem) -> ElementBuilder {
+fn work_to_review(item: &ReviewItem, toggled: &[String]) -> ElementBuilder {
     if item.is_plan {
         return proposed_view(&item.proposed);
     }
     match &item.run {
-        Some(run) => crate::ui::run_chain::run_card(run),
+        Some(run) => crate::ui::run_chain::run_card(run, "r", true, toggled),
         None => el(El::Div)
             .st([St::TextXs, St::TextMuted, St::PSm])
             .text("(no output produced)"),
@@ -149,6 +149,38 @@ fn proposed_view(proposed: &[crate::state::ProposedTask]) -> ElementBuilder {
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append(cards)
+}
+
+/// The review row's action buttons: Approve / Reject, plus — for an ordinary task — an "Open task"
+/// that opens it in the shared Peek modal (a plan shows its proposed tasks inline instead).
+fn action_row(item: &ReviewItem) -> Vec<ElementBuilder> {
+    let mut row = vec![
+        approve_button(&item.task_id),
+        plain("Reject", reject(), &item.task_id),
+    ];
+    if !item.is_plan {
+        row.push(open_button(&item.task_id));
+    }
+    row
+}
+
+/// A borderless "Open task →" that opens the Peek modal over the inbox (reuses the board's modal).
+fn open_button(task: &str) -> ElementBuilder {
+    el(El::Button)
+        .attr("type", "button")
+        .data("task", task)
+        .on(Ev::Click, crate::ui::task_detail::open_peek())
+        .style(Style::new().set("font", "inherit"))
+        .st([
+            St::TextXs,
+            St::TextMuted,
+            St::BgTransparent,
+            St::BorderNone,
+            St::P0,
+            St::CursorPointer,
+        ])
+        .hover([St::TextAccent])
+        .text("Open task →")
 }
 
 /// The accented Approve button, carrying the task id for the click handler.

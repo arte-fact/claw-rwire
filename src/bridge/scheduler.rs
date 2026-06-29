@@ -652,7 +652,7 @@ fn route_verdict(
             if human || task.iteration + 1 < step.max_iterations {
                 let _ = tasks::set_iteration(conn, &task.id, task.iteration + 1);
                 if let Ok(Some(again)) = tasks::get(conn, &task.id) {
-                    launch_current(conn, &again);
+                    relaunch(conn, &again);
                 }
                 super::tasks::project_if_active(conn, shared, &task.workspace_id);
                 super::tasks::refresh_detail_if_open(conn, shared, &task.id);
@@ -680,7 +680,49 @@ fn route_verdict(
     }
 }
 
-/// Move a task to its next step and immediately launch it (the task holds the lane).
+/// Whether a task being (re)launched can claim the lane now, or must queue. A task resumed from a
+/// human gate may find the lane already held by another task the scheduler started while it waited;
+/// launching anyway would run two workers against the one shared workspace tree at once.
+#[derive(Debug, PartialEq, Eq)]
+enum Dispatch {
+    LaunchNow,
+    Queue,
+}
+
+fn dispatch_when(lane_busy: bool) -> Dispatch {
+    if lane_busy {
+        Dispatch::Queue
+    } else {
+        Dispatch::LaunchNow
+    }
+}
+
+/// (Re)launch the task's current step if the lane is free, else leave it `pending` for the
+/// scheduler to start once the lane frees — preserving one-running-task-per-workspace across the
+/// review-gate resume path. The normal mid-pipeline advance sees only this task on the lane, so it
+/// launches immediately as before.
+fn relaunch(conn: &rusqlite::Connection, task: &Task) {
+    let lane_busy = tasks::other_running_in(conn, &task.workspace_id, &task.id)
+        .ok()
+        .flatten()
+        .is_some();
+    match dispatch_when(lane_busy) {
+        Dispatch::LaunchNow => {
+            if let Err(err) = tasks::set_status(conn, &task.id, TaskStatus::Running) {
+                log_line(format!("scheduler: claim {} failed: {err}", task.id));
+            }
+            launch_current(conn, task);
+        }
+        Dispatch::Queue => {
+            if let Err(err) = tasks::set_status(conn, &task.id, TaskStatus::Pending) {
+                log_line(format!("scheduler: requeue {} failed: {err}", task.id));
+            }
+        }
+    }
+}
+
+/// Move a task to its next step and (re)launch it. The task holds the lane in the normal flow; on
+/// the human-gate resume path [`relaunch`] queues instead if another task grabbed the lane.
 fn advance_to(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
@@ -691,7 +733,7 @@ fn advance_to(
         log_line(format!("scheduler: advance {} failed: {err}", task.id));
     }
     if let Ok(Some(advanced)) = tasks::get(conn, &task.id) {
-        launch_current(conn, &advanced);
+        relaunch(conn, &advanced);
     }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
     super::tasks::refresh_detail_if_open(conn, shared, &task.id);
@@ -719,6 +761,11 @@ fn terminal_finish(
     } else if let Err(err) = tasks::finish(conn, &task.id, status, Some(output)) {
         log_line(format!("scheduler: finish {} failed: {err}", task.id));
     }
+    // A terminal failure strands every task waiting on this one (the ready-scan needs each blocker
+    // `done`) — cancel them so they don't sit `pending` forever, invisibly.
+    if matches!(status, TaskStatus::Failed | TaskStatus::Rejected) {
+        cancel_stranded_dependents(conn, shared, task, status);
+    }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
     super::tasks::refresh_detail_if_open(conn, shared, &task.id);
     if let Some(chat) = &task.origin_chat {
@@ -730,6 +777,47 @@ fn terminal_finish(
         (ActivityKind::Failed, output.to_owned())
     };
     activity(shared, task, kind, detail);
+}
+
+/// Cancel the not-yet-started tasks stranded by `task`'s terminal failure, then surface it: one
+/// Activity line and a cheap ping to the origin chat (not an LLM turn), so a dead dependency is
+/// visible instead of a silently stuck `pending` card.
+fn cancel_stranded_dependents(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    task: &Task,
+    status: TaskStatus,
+) {
+    let reason = format!(
+        "cancelled — blocked by \"{}\" which ended {}",
+        task.title,
+        status.as_str()
+    );
+    match tasks::cancel_dependents(conn, &task.id, &reason) {
+        Ok(ids) if !ids.is_empty() => {
+            activity(
+                shared,
+                task,
+                ActivityKind::Failed,
+                format!("{} dependent task(s) cancelled", ids.len()),
+            );
+            if let Some(chat) = &task.origin_chat {
+                let _ = crate::db::chat::append_message(
+                    conn,
+                    chat,
+                    MessageRole::Agent,
+                    &format!(
+                        "⚠️ {} dependent task(s) were cancelled because **{}** ended {}.",
+                        ids.len(),
+                        task.title,
+                        status.as_str()
+                    ),
+                );
+            }
+        }
+        Ok(_) => {}
+        Err(err) => log_line(format!("scheduler: cascade {} failed: {err}", task.id)),
+    }
 }
 
 /// Park a task at a human gate (a human validator, or a loop's on-exhaust = human). Frees the
@@ -805,18 +893,18 @@ pub fn human_verdict(
             },
         );
     }
-    // Back to running for the advance/revise paths, then route exactly like an agent verdict.
-    let _ = tasks::set_status(conn, task_id, TaskStatus::Running);
-    if let Ok(Some(running)) = tasks::get(conn, task_id) {
-        route_verdict(
-            conn,
-            shared,
-            &running,
-            &step,
-            &steps,
-            Some((decision.to_owned(), feedback.to_owned())),
-        );
-    }
+    // Route exactly like an agent verdict. The advance/revise paths go through `relaunch`, which
+    // re-claims the lane (status → running) only if it's free — otherwise it queues the task, so a
+    // resume never starts a second worker alongside one the scheduler launched while this task was
+    // parked. (The pre-verdict `task` carries the right step/iteration; status is unread here.)
+    route_verdict(
+        conn,
+        shared,
+        &task,
+        &step,
+        &steps,
+        Some((decision.to_owned(), feedback.to_owned())),
+    );
     super::review::project_count(conn, shared);
 }
 
@@ -927,6 +1015,14 @@ mod tests {
                 backoff_secs: RETRY_BACKOFF_CAP_SECS
             }
         );
+    }
+
+    #[test]
+    fn dispatch_queues_when_the_lane_is_busy() {
+        // Regression (B1): a task resumed from a human gate must not launch a second worker while
+        // another task holds the workspace lane.
+        assert_eq!(dispatch_when(true), Dispatch::Queue);
+        assert_eq!(dispatch_when(false), Dispatch::LaunchNow);
     }
 
     #[test]
