@@ -75,7 +75,8 @@ Component adoption is net-negative — the components absorb the styling/attrs c
 | prompts | −46 |
 | system_map/agents | −28 |
 | system_map/mod (shared helpers) | −35 |
-| **total (7 screens)** | **−268** (+163 / −431) |
+| workspace_tasks (the big board) | −84 |
+| **total (8 screens)** | **−352** (+239 / −591) |
 
 Trend: ~−40 lines/screen on form-heavy screens, less on text-only ones. Remaining screens
 (`workspace_tasks` is the big one) should keep the slope.
@@ -91,7 +92,7 @@ several sub-swaps (Button / Input / Select / Card / …); list them so partial p
 - [~] **`prompts.rs`** — [x] `Select` (agent picker) · [x] `Textarea` (role + memory editors) · [x] `Button` (`plain_button`). [ ] run-kind chips stay raw (toggle-state) · [ ] `text_block` stays raw (custom pre-wrap/word-break) · [ ] `Text` for headings/empties/context deferred. _Gate-green._
 - [~] **`system_map/agents.rs`** — [x] `Select` (endpoint + model) · [x] `Textarea` (persona). [ ] tool-chips stay raw (toggle-state) · [ ] `action`/`badge`/`text_input` are shared `system_map` helpers (migrate in `system_map/mod.rs`). _Gate-green._
 - [x] **`system_map/mod.rs`** — [x] `Input` (shared `text_input`/`field` → propagates to agents + endpoints tiers) · [x] `Select` (channel picker) · [x] `Alert` (error banner); drops `select_st()`. Already had `Text`/`Drawer`/`action`/`submit`. _Gate-green._
-- [ ] **`workspace_tasks.rs`** — toolbar/filter/card-action `Button` · create+edit `Input`/`Textarea`/`Select` · `EmptyState` ("No tasks yet") _(largest — 22 raw els)_
+- [~] **`workspace_tasks.rs`** — [x] create + edit forms → `Input`/`Textarea`/`Select` (drops `input_st()`/`owner_option`) · [x] `status_badge` → `Badge` · [x] Approve/Restart → `Button` · [x] empty states → `Text`. [ ] toggle/filter/view chips + icon "New task" + card-title buttons stay raw (toggle-state / icon+text). _Gate-green; live visual deferred (server wouldn't relaunch this session)._
 - [ ] **`task_detail.rs`** — `Button` (controls/gate/close) · `Tabs` (Peek tabs) · `Spinner` (live). _Defer Peek `Modal` until the rwire Modal backdrop fix lands._
 - [~] **`review.rs`** — [x] buttons → `Button` (approve/reject/open). [ ] feedback field → `Input`; [ ] `card()` → `Card`; [ ] submit chip → `Button`
 - [ ] **`run_chain.rs`** — tool/run collapse → `Accordion`
