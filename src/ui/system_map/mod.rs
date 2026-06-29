@@ -10,8 +10,8 @@ mod agents;
 mod endpoints;
 
 use rwire::style::Style;
-use rwire::{At, El, ElementBuilder, Ev, HandlerSpec, St, el, handler, renderer};
-use rwire_components::{Drawer, DrawerPosition, Text};
+use rwire::{El, ElementBuilder, Ev, HandlerSpec, St, el, handler, renderer};
+use rwire_components::{Alert, Drawer, DrawerPosition, Input, Select, Text};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, Editing};
@@ -37,17 +37,7 @@ pub fn page() -> ElementBuilder {
 #[renderer]
 fn error_banner(app: &App) -> ElementBuilder {
     match &app.error {
-        Some(message) => el(El::Div)
-            .st([
-                St::PxMd,
-                St::PySm,
-                St::TextXs,
-                St::TextError,
-                St::BorderDefault,
-                St::RoundedSm,
-                St::BgSurface,
-            ])
-            .append([el(El::Span).text(&format!("⚠ {message}"))]),
+        Some(message) => Alert::error().message(format!("⚠ {message}")).build(),
         None => el(El::Div).style(Style::new().display("none")),
     }
 }
@@ -147,23 +137,15 @@ fn drawer(app: &App) -> ElementBuilder {
 }
 
 fn channel_form(app: &App) -> ElementBuilder {
-    let options = app.agents.iter().map(|agent| {
-        let option = el(El::Option).attr("value", &agent.id).text(&agent.name);
-        if app.web_agent.as_deref() == Some(agent.id.as_str()) {
-            option.bool_attr(At::Selected)
-        } else {
-            option
-        }
-    });
+    let mut picker = Select::new()
+        .name("agent")
+        .value(app.web_agent.clone().unwrap_or_default());
+    for agent in &app.agents {
+        picker = picker.option(agent.id.clone(), agent.name.clone());
+    }
     drawer_form(
         route_web(),
-        [labeled(
-            "Concierge",
-            el(El::Select)
-                .attr("name", "agent")
-                .st(select_st())
-                .append(options),
-        )],
+        [labeled("Concierge", picker.build())],
         [
             submit("Save"),
             action("Cancel", close()).data("act", "cancel"),
@@ -224,19 +206,6 @@ pub(super) fn row_head(name: &str, badge: ElementBuilder) -> ElementBuilder {
 // `super::{action, submit}` imports in this module keep resolving.
 pub(super) use crate::ui::widgets::{action, submit};
 
-pub(super) fn select_st() -> [St; 8] {
-    [
-        St::WFull,
-        St::PxSm,
-        St::PySm,
-        St::BorderDefault,
-        St::RoundedSm,
-        St::BgApp,
-        St::TextHigh,
-        St::OutlineNone,
-    ]
-}
-
 /// A controlled text input that reports its value on `change` (blur). The agent form
 /// re-renders when discovered models arrive, so its inputs can't be uncontrolled.
 pub(super) fn text_input(
@@ -245,14 +214,11 @@ pub(super) fn text_input(
     placeholder: &str,
     on_change: HandlerSpec,
 ) -> ElementBuilder {
-    el(El::Input)
-        .attr("name", name)
-        .attr("value", value)
-        .attr("placeholder", placeholder)
-        .attr("autocomplete", "off")
-        .st(select_st())
-        .style(Style::new().set("font", "inherit"))
-        .focus([St::BorderAccent])
+    Input::text()
+        .name(name.to_owned())
+        .value(value.to_owned())
+        .placeholder(placeholder.to_owned())
+        .build()
         .on(Ev::Change, on_change)
 }
 
@@ -281,20 +247,19 @@ pub(super) fn field(
     placeholder: &str,
     password: bool,
 ) -> ElementBuilder {
-    let input = el(El::Input)
-        .attr("name", name)
-        .attr("value", value)
-        .attr("placeholder", placeholder)
-        .attr("autocomplete", "off")
-        .st(select_st())
-        .style(Style::new().set("font", "inherit"))
-        .focus([St::BorderAccent]);
     let input = if password {
-        input.attr("type", "password")
+        Input::password()
     } else {
-        input
+        Input::text()
     };
-    labeled(label, input)
+    labeled(
+        label,
+        input
+            .name(name.to_owned())
+            .value(value.to_owned())
+            .placeholder(placeholder.to_owned())
+            .build(),
+    )
 }
 
 /// A `<form>` that posts on submit: stacked `fields`, then an actions row.
