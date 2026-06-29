@@ -2,8 +2,8 @@
 //! button family every view draws from, so buttons look the same everywhere.
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, HandlerSpec, St, el, icons};
-use rwire_components::Text;
+use rwire::{At, Av, El, ElementBuilder, HandlerSpec, St, el, icons};
+use rwire_components::{Button, ButtonSize, Text};
 use rwire_markdown::{Markdown, ProseSize};
 
 /// Render model output as **compact** markdown. The markdown component's heading scale
@@ -12,6 +12,7 @@ use rwire_markdown::{Markdown, ProseSize};
 /// the body. One helper so chat, the task detail, and the review inbox stay consistent.
 pub fn markdown(text: String) -> ElementBuilder {
     el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol])
         .style(
             Style::new()
                 .set("--T6", "1.05rem") // h1
@@ -20,7 +21,7 @@ pub fn markdown(text: String) -> ElementBuilder {
                 .set("--T3", "0.82rem") // base
                 .set("--T2", "0.82rem"), // sm — body (via ProseSize::Sm), inline code, pre
         )
-        .append([Markdown::new(text).size(ProseSize::Sm).build()])
+        .append([Markdown::new(text).size(ProseSize::Sm).full_width().build()])
 }
 
 /// A page header: heading + muted subtitle on the left, an action on the right.
@@ -54,21 +55,7 @@ pub fn page_header(
 
 /// A bordered secondary button (`type=button`): muted text, hover lifts to accent border.
 pub fn action(label: &str, on_click: HandlerSpec) -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "button")
-        .on(Ev::Click, on_click)
-        .st([
-            St::PxSm,
-            St::PySm,
-            St::BorderDefault,
-            St::RoundedSm,
-            St::BgApp,
-            St::TextMuted,
-            St::CursorPointer,
-        ])
-        .style(Style::new().set("font", "inherit"))
-        .hover([St::TextHigh, St::BorderAccent])
-        .text(label)
+    Button::secondary(label.to_string()).on_click(on_click)
 }
 
 /// A small secondary button (Clear, …) — the same look as [`action`].
@@ -79,7 +66,7 @@ pub fn clear_button(label: &str, on_click: HandlerSpec) -> ElementBuilder {
 /// A bordered form-submit button (`type=submit`) with high-contrast text.
 pub fn submit(label: &str) -> ElementBuilder {
     el(El::Button)
-        .attr("type", "submit")
+        .at(At::Type, Av::Submit)
         .st([
             St::PxMd,
             St::PySm,
@@ -88,8 +75,8 @@ pub fn submit(label: &str) -> ElementBuilder {
             St::BgApp,
             St::TextHigh,
             St::CursorPointer,
+            St::FontInheritAll,
         ])
-        .style(Style::new().set("font", "inherit"))
         .hover([St::BorderAccent])
         .text(label)
 }
@@ -101,69 +88,36 @@ pub fn action_icon(
     on_click: HandlerSpec,
     danger: bool,
 ) -> ElementBuilder {
-    let color = if danger { St::TextError } else { St::TextMuted };
-    el(El::Button)
-        .attr("type", "button")
-        .on(Ev::Click, on_click)
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::PxMd,
-            St::PySm,
-            St::BorderDefault,
-            St::RoundedSm,
-            St::BgApp,
-            color,
-            St::CursorPointer,
-        ])
-        .style(Style::new().set("font", "inherit"))
-        .hover([St::TextHigh, St::BorderAccent])
-        .append([icons::icon_sized(icon, 14), el(El::Span).text(label)])
+    if danger {
+        return Button::destructive(label.to_string())
+            .icon(icon)
+            .on_click(on_click);
+    }
+    Button::secondary(label.to_string())
+        .icon(icon)
+        .on_click(on_click)
 }
 
 /// The primary filled-accent submit button (`type=submit`) — the composer-Send style, for
 /// the one main action on a surface.
 pub fn accent_submit(icon: icons::Icon, label: &str) -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "submit")
-        .style(Style::new().set("font", "inherit").set("border", "none"))
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::PxMd,
-            St::PySm,
-            St::RoundedMd,
-            St::BgAccent,
-            St::TextOnAccent,
-            St::CursorPointer,
-        ])
-        .hover([St::BgAccentHover])
+    Button::default()
+        .size(ButtonSize::Sm)
+        .build()
+        .at(At::Type, Av::Submit)
         .append([icons::icon_sized(icon, 14), el(El::Span).text(label)])
 }
 
 /// A bare, subtle icon-only button (`type=button`) for inline row actions. `danger`
 /// colours it as destructive.
 pub fn icon_button(icon: icons::Icon, on_click: HandlerSpec, danger: bool) -> ElementBuilder {
-    let color = if danger { St::TextError } else { St::TextLow };
-    el(El::Button)
-        .attr("type", "button")
-        .on(Ev::Click, on_click)
-        .style(
-            Style::new()
-                .set("font", "inherit")
-                .set("border", "none")
-                .set("background", "transparent"),
-        )
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::PxXs,
-            St::FlexShrink0,
-            St::CursorPointer,
-            color,
-        ])
-        .hover([St::TextHigh])
+    Button::ghost("")
+        .size(ButtonSize::Sm)
+        .on_click(on_click)
+        .hover(if danger {
+            [St::TextError]
+        } else {
+            [St::TextHigh]
+        })
         .append([icons::icon_sized(icon, 14)])
 }

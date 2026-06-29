@@ -5,12 +5,12 @@
 //! rust-claw's Files manager, adapted to the Command/renderer model.
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, HandlerSpec, St, el, handler, icons, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, HandlerSpec, St, el, handler, icons, renderer};
 use rwire_components::Text;
 
 use crate::bridge::{self, Command};
 use crate::state::{App, FileKind, FileNode};
-use crate::ui::widgets::{accent_submit, action_icon, icon_button, submit};
+use crate::ui::widgets::{self, accent_submit, action_icon, icon_button, submit};
 
 /// The Files section of a workspace view: the error banner + the two-pane browser/editor,
 /// scoped to the workspace named in the route (the bridge sets `App.files_*` when the
@@ -18,8 +18,13 @@ use crate::ui::widgets::{accent_submit, action_icon, icon_button, submit};
 /// route's, and a header is provided by the workspace shell.
 pub fn section() -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().min_height("0"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::GapMd])
+        .st([
+            St::MinH0,
+            St::Flex1,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapMd,
+        ])
         .append([error_banner(), panes()])
 }
 
@@ -37,7 +42,7 @@ fn error_banner(app: &App) -> ElementBuilder {
                 St::RoundedSm,
             ])
             .append([el(El::Span).text(&format!("⚠ {message}"))]),
-        None => el(El::Div).style(Style::new().display("none")),
+        None => el(El::Div).st([St::DisplayNone]),
     }
 }
 
@@ -45,8 +50,8 @@ fn error_banner(app: &App) -> ElementBuilder {
 /// single divider. Fills the available height; each pane scrolls internally. Stacks on mobile.
 fn panes() -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().min_height("0"))
         .st([
+            St::MinH0,
             St::Flex1,
             St::DisplayFlex,
             St::FlexCol,
@@ -61,24 +66,16 @@ fn panes() -> ElementBuilder {
             // This plain Div is the scroll container — the `#[renderer]` inside is wrapped in an
             // inline span that can't bound the flex height, so the scroll lives here.
             el(El::Div)
-                .style(
-                    Style::new()
-                        .min_height("0")
-                        .min_width("0")
-                        .set("flex", "0 0 22rem")
-                        .set("overflow-y", "auto"),
-                )
+                // `flex: 0 0 22rem` — fixed pane width, no token for the custom basis.
+                .style(Style::new().set("flex", "0 0 22rem"))
+                .st([St::MinH0, St::MinW0, St::OverflowYAuto])
                 .md([St::BorderRDefault])
                 .append([browser()]),
             // Editor pane: takes the remaining width; likewise the scroll container.
             el(El::Div)
-                .style(
-                    Style::new()
-                        .min_height("0")
-                        .min_width("0")
-                        .set("flex", "1 1 0")
-                        .set("overflow-y", "auto"),
-                )
+                // `flex: 1 1 0` — fill remaining width (distinct from the `flex:1` token's basis).
+                .style(Style::new().set("flex", "1 1 0"))
+                .st([St::MinH0, St::MinW0, St::OverflowYAuto])
                 .append([editor()]),
         ])
 }
@@ -94,8 +91,9 @@ fn panel(header: ElementBuilder, body: ElementBuilder) -> ElementBuilder {
 /// A header bar that stays pinned to the top of its scrolling pane.
 fn sticky_header(header: ElementBuilder) -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().set("position", "sticky").set("top", "0"))
         .st([
+            St::PositionSticky,
+            St::Top0,
             St::DisplayFlex,
             St::ItemsCenter,
             St::JustifyBetween,
@@ -113,7 +111,7 @@ fn sticky_header(header: ElementBuilder) -> ElementBuilder {
 #[renderer]
 fn browser(app: &App) -> ElementBuilder {
     let header = el(El::Div)
-        .style(Style::new().min_width("0"))
+        .st([St::MinW0])
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
@@ -149,7 +147,7 @@ fn breadcrumb(path: &str) -> ElementBuilder {
         crumbs.push(crumb(segment, &prefix));
     }
     el(El::Div)
-        .style(Style::new().min_width("0"))
+        .st([St::MinW0])
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
@@ -164,16 +162,17 @@ fn breadcrumb(path: &str) -> ElementBuilder {
 
 fn crumb(label: &str, path: &str) -> ElementBuilder {
     el(El::Button)
-        .attr("type", "button")
+        .at(At::Type, Av::Button)
         .data("path", path)
         .on(Ev::Click, navigate())
-        .style(
-            Style::new()
-                .set("font", "inherit")
-                .set("border", "none")
-                .set("background", "transparent"),
-        )
-        .st([St::CursorPointer, St::TextMuted, St::FlexShrink0])
+        .st([
+            St::FontInheritAll,
+            St::BorderNone,
+            St::BgTransparent,
+            St::CursorPointer,
+            St::TextMuted,
+            St::FlexShrink0,
+        ])
         .hover([St::TextAccent])
         .text(label)
 }
@@ -213,13 +212,13 @@ fn create_row(kind: &str, value: &str) -> ElementBuilder {
                     13,
                 )]),
             el(El::Input)
-                .attr("name", "newname")
-                .attr("value", value)
-                .attr("autocomplete", "off")
-                .at_str(rwire::At::Placeholder, &format!("new {label} name…"))
+                .at_str(At::Name, "newname")
+                .at_str(At::Value, value)
+                .at(At::Autocomplete, Av::Off)
+                .at_str(At::Placeholder, &format!("new {label} name…"))
                 .on(Ev::Change, new_name_changed())
-                .style(Style::new().set("font", "inherit"))
                 .st([
+                    St::FontInheritAll,
                     St::Flex1,
                     St::PxSm,
                     St::PyXs,
@@ -329,18 +328,15 @@ fn tree_row(node: &FileNode, selected: bool, pending_delete: bool, active: bool)
     );
 
     let open_btn = el(El::Button)
-        .attr("type", "button")
+        .at(At::Type, Av::Button)
         .data("path", &node.path)
         .on(Ev::Click, handler)
-        .style(
-            Style::new()
-                .set("font", "inherit")
-                .set("border", "none")
-                .set("background", "transparent")
-                .set("text-align", "left")
-                .min_width("0"),
-        )
         .st([
+            St::FontInheritAll,
+            St::BorderNone,
+            St::BgTransparent,
+            St::TextLeft,
+            St::MinW0,
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
@@ -398,11 +394,11 @@ fn rename_row(current: &str) -> ElementBuilder {
         ])
         .append([
             el(El::Input)
-                .attr("name", "to")
-                .attr("value", current)
-                .attr("autocomplete", "off")
-                .style(Style::new().set("font", "inherit"))
+                .at_str(At::Name, "to")
+                .at_str(At::Value, current)
+                .at(At::Autocomplete, Av::Off)
                 .st([
+                    St::FontInheritAll,
                     St::Flex1,
                     St::PxSm,
                     St::PyXs,
@@ -447,12 +443,12 @@ fn editor(app: &App) -> ElementBuilder {
     };
 
     let filename = el(El::Span)
-        .style(Style::new().min_width("0"))
+        .st([St::MinW0])
         .st([St::TextSm, St::FontMono, St::TextHigh, St::Truncate])
         .text(&open.path);
 
     if !open.editable {
-        let header = header_row([filename, el(El::Span).style(Style::new().display("none"))]);
+        let header = header_row([filename, el(El::Span).st([St::DisplayNone])]);
         return panel(
             header,
             placeholder(open.note.as_deref().unwrap_or("Not editable.")),
@@ -481,28 +477,28 @@ fn editor(app: &App) -> ElementBuilder {
         ]);
     el(El::Form)
         .on(Ev::Submit, save_file())
-        .st([St::DisplayFlex, St::FlexCol])
+        .st([St::DisplayFlex, St::FlexCol, St::Flex1])
         .append([
             sticky_header(header_row([filename, controls])),
             el(El::Textarea)
                 .id(&field_id)
-                .attr("name", "content")
-                .attr("spellcheck", "false")
+                .at_str(At::Name, "content")
+                .at(At::Spellcheck, Av::False)
                 .st([
-                    St::WFull,
                     St::PMd,
                     St::BgApp,
                     St::TextDefault,
                     St::FontMono,
                     St::TextXs,
+                    St::OutlineNone,
+                    St::BorderNone,
+                    St::WhitespacePre,
                 ])
+                // `word-wrap`/`field-sizing` have no tokens (auto-grow to content).
                 .style(
                     Style::new()
-                        .set("outline", "none")
-                        .set("border", "none")
-                        .set("resize", "vertical")
-                        .set("min-height", "24rem")
-                        .set("white-space", "pre"),
+                        .set("word-wrap", "break-word")
+                        .set("field-sizing", "content"),
                 )
                 .text(&open.content),
             el(El::Div)
@@ -513,6 +509,11 @@ fn editor(app: &App) -> ElementBuilder {
                     St::TextLow,
                     St::TextXs,
                     St::FontMono,
+                    St::PositionSticky,
+                    St::Bottom0,
+                    St::Left0,
+                    St::Right0,
+                    St::BgSurface,
                 ])
                 .text(&format!("{lines} lines · {chars} chars")),
         ])
@@ -522,7 +523,7 @@ fn editor(app: &App) -> ElementBuilder {
 /// (flat text for an unrecognised extension).
 fn rendered_view(open: &crate::state::OpenFile) -> ElementBuilder {
     if is_markdown(&open.path) {
-        crate::ui::widgets::markdown(open.content.clone())
+        widgets::markdown(open.content.clone())
     } else {
         rwire_markdown::highlight_code(&open.content, lang_for_path(&open.path))
     }
@@ -540,11 +541,11 @@ fn mode_toggle(view: bool) -> ElementBuilder {
 
 fn mode_chip(label: &str, view: bool, active: bool) -> ElementBuilder {
     let chip = el(El::Button)
-        .attr("type", "button")
+        .at(At::Type, Av::Button)
         .data("view", if view { "1" } else { "0" })
         .on(Ev::Click, set_files_view())
-        .style(Style::new().set("font", "inherit"))
         .st([
+            St::FontInheritAll,
             St::TextXs,
             St::PxSm,
             St::PyXs,
@@ -599,7 +600,7 @@ fn placeholder(text: &str) -> ElementBuilder {
 /// A spaced filename + action header row (used inside the panel's header bar / form).
 fn header_row(children: [ElementBuilder; 2]) -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().min_width("0"))
+        .st([St::MinW0])
         .st([
             St::DisplayFlex,
             St::ItemsCenter,

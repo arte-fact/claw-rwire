@@ -6,7 +6,7 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, HandlerSpec, Pc, St, el, handler, icons, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, HandlerSpec, Pc, St, el, handler, icons, renderer};
 use rwire_components::{Spinner, SpinnerSize, Text};
 
 use crate::bridge::{self, Command};
@@ -14,7 +14,7 @@ use crate::state::{App, ChatMessage, MessageRole, ToolCardView, TranscriptItem};
 
 /// The reading width of the whole chat — transcript and composer share it, centered,
 /// so lines don't sprawl on wide screens.
-const CHAT_MAX_W: &str = "720px";
+const CHAT_MAX_W: &str = "960px";
 
 // ── Main area ───────────────────────────────────────────────────────────────
 
@@ -22,8 +22,13 @@ pub fn surface() -> ElementBuilder {
     // A column: a scrolling transcript above a composer that reserves its own height
     // (a non-shrinking flex child), so the composer can never cover the last turn.
     el(El::Div)
-        .style(Style::new().min_height("0"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexCol, St::OverflowHidden])
+        .st([
+            St::MinH0,
+            St::Flex1,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::OverflowHidden,
+        ])
         .append([transcript_scroll(), composer_bar()])
 }
 
@@ -33,8 +38,13 @@ pub fn surface() -> ElementBuilder {
 /// screen). The single inner [`transcript`] keeps normal top-to-bottom message order.
 fn transcript_scroll() -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().min_height("0").overflow("auto"))
-        .st([St::Flex1, St::DisplayFlex, St::FlexColReverse])
+        .st([
+            St::MinH0,
+            St::OverflowAuto,
+            St::Flex1,
+            St::DisplayFlex,
+            St::FlexColReverse,
+        ])
         .append([transcript()])
 }
 
@@ -56,12 +66,8 @@ fn composer_bar() -> ElementBuilder {
 /// Width-limited column holding the error banner above the composer pill.
 fn composer_column() -> ElementBuilder {
     el(El::Div)
-        .style(
-            Style::new()
-                .set("width", "100%")
-                .set("max-width", CHAT_MAX_W),
-        )
-        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .style(Style::new().set("max-width", CHAT_MAX_W))
+        .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([error_banner(), composer()])
 }
 
@@ -78,7 +84,7 @@ fn error_banner(app: &App) -> ElementBuilder {
                 St::BorderTSubtle,
             ])
             .append([el(El::Span).text(&format!("⚠ {message}"))]),
-        None => el(El::Div).style(Style::new().display("none")),
+        None => el(El::Div).st([St::DisplayNone]),
     }
 }
 
@@ -111,12 +117,11 @@ fn transcript(app: &App) -> ElementBuilder {
         // outsized bottom padding is needed — just breathing room above and below.
         .style(
             Style::new()
-                .set("width", "100%")
                 .set("max-width", CHAT_MAX_W)
                 .set("margin", "0 auto")
                 .set("padding", "1.5rem 1.25rem"),
         )
-        .st([St::DisplayFlex, St::FlexCol, St::GapLg])
+        .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapLg])
         .append(items)
 }
 
@@ -126,13 +131,12 @@ fn transcript(app: &App) -> ElementBuilder {
 /// In the transcript (always `active`) the accent is what shows.
 pub(super) fn accent_bar(active: bool) -> ElementBuilder {
     el(El::Span)
-        .style(
-            Style::new()
-                .width("2px")
-                .set("flex", "0 0 2px")
-                .set("align-self", "stretch"),
-        )
-        .st([if active { St::BgAccent } else { St::BgSidebar }])
+        // `width: 2px` / `flex: 0 0 2px` — a hairline strip, no token for the 2px basis.
+        .style(Style::new().width("2px").set("flex", "0 0 2px"))
+        .st([
+            St::SelfStretch,
+            if active { St::BgAccent } else { St::BgSidebar },
+        ])
 }
 
 /// A fixed-width slot for a drawer row's leading glyph (status dot, nav icon, action
@@ -183,29 +187,27 @@ pub(crate) fn tool_card(card: &ToolCardView) -> ElementBuilder {
                 .st([St::TextMuted])
                 .text(&format!("🔧 {}", card.name)),
             el(El::Span)
-                .style(Style::new().min_width("0"))
-                .st([St::TextLow, St::Flex1, St::Truncate])
+                .st([St::MinW0, St::TextLow, St::Flex1, St::Truncate])
                 .text(&preview(&card.arguments, 80)),
             el(El::Span).st([status_color]).text(status),
             el(El::Span).st([St::TextLow]).text(&card.time),
         ]);
     let body = el(El::Pre)
-        .st([St::TextXs, St::TextLow, St::FontMono])
-        .style(
-            Style::new()
-                .set("white-space", "pre-wrap")
-                .set("margin", "0")
-                .set("max-height", "8rem")
-                .overflow("auto"),
-        )
+        // `max-height: 8rem` — caps the result box; no token for the 8rem cap.
+        .style(Style::new().set("max-height", "8rem"))
+        .st([
+            St::TextXs,
+            St::TextLow,
+            St::FontMono,
+            St::WhitespacePreWrap,
+            St::M0,
+            St::OverflowAuto,
+        ])
         .text(&clip(&card.result, 800));
     el(El::Div)
-        .style(
-            Style::new()
-                .set("align-self", "flex-start")
-                .set("max-width", "100%"),
-        )
         .st([
+            St::SelfStart,
+            St::MaxWFull,
             St::DisplayFlex,
             St::FlexCol,
             St::GapXs,
@@ -248,12 +250,9 @@ fn message_row(message: &ChatMessage) -> ElementBuilder {
         // Match the agent's compact Markdown body (see `widgets::markdown`, which shrinks the
         // prose to ~0.82rem) so your turn and claw's reply read at the same size.
         MessageRole::User => el(El::Div)
-            .st([St::TextDefault])
-            .style(
-                Style::new()
-                    .set("white-space", "pre-wrap")
-                    .set("font-size", "0.82rem"),
-            )
+            // `font-size: 0.82rem` — matches the agent's compact markdown; no token for it.
+            .style(Style::new().set("font-size", "0.82rem"))
+            .st([St::TextDefault, St::WhitespacePreWrap])
             .append([el(El::Span).text(&message.text)]),
         MessageRole::Agent => crate::ui::widgets::markdown(message.text.clone()),
     };
@@ -350,23 +349,27 @@ fn message_input(field_id: &str) -> ElementBuilder {
     // Shift+Enter inserts a newline — the standard chat convention.
     el(El::Textarea)
         .id(field_id)
-        .attr("name", "message")
-        .attr("rows", "1")
-        .attr("autocomplete", "off")
+        .at_str(At::Name, "message")
+        .at_str(At::Rows, "1")
+        .at(At::Autocomplete, Av::Off)
         .data("enter-submit", "1")
-        .at_str(rwire::At::Placeholder, "Message claw…")
-        .st([St::WFull, St::TextDefault])
+        .at_str(At::Placeholder, "Message claw…")
+        .st([
+            St::WFull,
+            St::TextDefault,
+            St::BgTransparent,
+            St::BorderNone,
+            St::OutlineNone,
+            St::FontInheritAll,
+            St::ResizeNone,
+            St::OverflowYAuto,
+        ])
+        // `padding`/`field-sizing`/`max-height: 40vh` — auto-grow to content, capped; no tokens.
         .style(
             Style::new()
-                .set("background", "transparent")
-                .set("border", "none")
-                .set("outline", "none")
-                .set("font", "inherit")
                 .set("padding", "0.25rem")
-                .set("resize", "none")
                 .set("field-sizing", "content")
-                .set("max-height", "40vh")
-                .set("overflow-y", "auto"),
+                .set("max-height", "40vh"),
         )
 }
 
@@ -393,11 +396,12 @@ fn composer_tools() -> ElementBuilder {
 
 fn send_button() -> ElementBuilder {
     el(El::Button)
-        .attr("type", "submit")
-        .attr("aria-label", "Send")
+        .at(At::Type, Av::Submit)
+        .at_str(At::AriaLabel, "Send")
         .data("act", "send")
-        .style(Style::new().set("font", "inherit").set("border", "none"))
         .st([
+            St::FontInheritAll,
+            St::BorderNone,
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
@@ -421,18 +425,15 @@ pub fn new_chat_button() -> ElementBuilder {
     // The primary action, styled as an aligned accent row (not a boxed pill) so its
     // label sits in the same column as the conversation rows it creates into.
     el(El::Button)
-        .attr("type", "button")
+        .at(At::Type, Av::Button)
         .data("act", "new-chat")
         .on(Ev::Click, new_chat())
-        .style(
-            Style::new()
-                .set("font", "inherit")
-                .set("border", "none")
-                .set("background", "transparent")
-                .set("width", "100%")
-                .set("text-align", "left"),
-        )
         .st([
+            St::FontInheritAll,
+            St::BorderNone,
+            St::BgTransparent,
+            St::WFull,
+            St::TextLeft,
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
@@ -480,8 +481,8 @@ fn chat_row(id: &str, title: &str, active: bool, busy: bool) -> ElementBuilder {
     // the client router pushes /chat/:id and the bridge loads the thread.
     let href = format!("/chat/{id}");
     let link = Link::route(&href)
-        .style(Style::new().min_width("0"))
         .st([
+            St::MinW0,
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
@@ -513,11 +514,14 @@ pub(super) fn row_icon_button(
     chat_id: &str,
 ) -> ElementBuilder {
     el(El::Button)
-        .attr("type", "button")
-        .attr("aria-label", aria)
+        .at(At::Type, Av::Button)
+        .at_str(At::AriaLabel, aria)
         .data("chat", chat_id)
         .on(Ev::Click, on_click)
         .st([
+            St::FontInheritAll,
+            St::BorderNone,
+            St::BgTransparent,
             St::DisplayFlex,
             St::ItemsCenter,
             St::PxXs,
@@ -527,12 +531,6 @@ pub(super) fn row_icon_button(
             St::CursorPointer,
             St::FlexShrink0,
         ])
-        .style(
-            Style::new()
-                .set("font", "inherit")
-                .set("border", "none")
-                .set("background", "transparent"),
-        )
         .hover([St::TextHigh])
         .append([icons::icon_sized(icon, 14)])
 }
