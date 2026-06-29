@@ -5,6 +5,7 @@
 
 use rwire::style::Style;
 use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler};
+use rwire_components::Text;
 use serde_json::Value;
 
 use crate::diff::{DiffKind, line_diff};
@@ -24,19 +25,15 @@ pub fn run_card(run: &RunView, key: &str, is_latest: bool, toggled: &[String]) -
         }
         // The run's reply (the "bottom line") — rendered as markdown, full and prominent.
         if run.output.trim().is_empty() {
-            children.push(
-                el(El::Div)
-                    .st([St::TextXs, St::TextMuted])
-                    .text("(no output)"),
-            );
+            children.push(Text::caption("(no output)").muted().build());
         } else {
             children.push(crate::ui::widgets::markdown(run.output.clone()));
         }
         if let Some(feedback) = run.feedback.as_deref().filter(|f| !f.trim().is_empty()) {
             children.push(
-                el(El::Div)
-                    .st([St::TextXs, St::TextAccent])
-                    .text(&format!("feedback: {feedback}")),
+                Text::caption(format!("feedback: {feedback}"))
+                    .accent()
+                    .build(),
             );
         }
     }
