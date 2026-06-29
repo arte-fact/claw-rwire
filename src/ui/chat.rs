@@ -213,7 +213,7 @@ pub(crate) fn tool_card(card: &ToolCardView) -> ElementBuilder {
             St::GapXs,
             St::PSm,
             St::BorderDefault,
-            St::RoundedSm,
+            St::Rounded0,
             St::BgSurface,
             St::WFull,
         ])
@@ -526,7 +526,7 @@ pub(super) fn row_icon_button(
             St::ItemsCenter,
             St::PxXs,
             St::PyXs,
-            St::RoundedSm,
+            St::Rounded0,
             St::TextLow,
             St::CursorPointer,
             St::FlexShrink0,

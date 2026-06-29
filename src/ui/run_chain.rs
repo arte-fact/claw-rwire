@@ -41,7 +41,7 @@ pub fn run_card(run: &RunView, key: &str, is_latest: bool, toggled: &[String]) -
         .st([
             St::BgApp,
             St::BorderDefault,
-            St::RoundedSm,
+            St::Rounded0,
             St::PSm,
             St::DisplayFlex,
             St::FlexCol,
@@ -231,7 +231,7 @@ fn tool_body(tool: &ToolCardView) -> ElementBuilder {
             St::GapXs,
             St::PSm,
             St::BorderDefault,
-            St::RoundedSm,
+            St::Rounded0,
             St::BgCode,
         ])
         .append(rows)
@@ -285,7 +285,7 @@ fn edit_diff(tool: &ToolCardView) -> Option<ElementBuilder> {
             .st([
                 St::BgCode,
                 St::BorderDefault,
-                St::RoundedSm,
+                St::Rounded0,
                 St::PSm,
                 St::DisplayFlex,
                 St::FlexCol,

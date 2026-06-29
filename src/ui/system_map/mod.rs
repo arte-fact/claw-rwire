@@ -170,7 +170,7 @@ pub(super) fn card(children: impl IntoIterator<Item = ElementBuilder>) -> Elemen
         .st([
             St::BgSurface,
             St::BorderDefault,
-            St::RoundedSm,
+            St::Rounded0,
             St::PMd,
             St::DisplayFlex,
             St::FlexCol,
@@ -185,7 +185,7 @@ pub(super) fn badge(text: &str) -> ElementBuilder {
             St::TextXs,
             St::TextMuted,
             St::BorderDefault,
-            St::RoundedSm,
+            St::Rounded0,
             St::PxXs,
         ])
         .text(text)

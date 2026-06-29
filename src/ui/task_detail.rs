@@ -63,7 +63,7 @@ pub fn peek_modal(app: &App) -> ElementBuilder {
                     St::FlexCol,
                     St::BgSurface,
                     St::BorderDefault,
-                    St::RoundedSm,
+                    St::Rounded0,
                     St::OverflowHidden,
                 ])
                 .append([content]),
@@ -175,7 +175,7 @@ fn tab_chip(label: &str, index: usize, active: usize) -> ElementBuilder {
             St::TextXs,
             St::PxSm,
             St::PyXs,
-            St::RoundedSm,
+            St::Rounded0,
             St::BorderDefault,
             St::CursorPointer,
         ])
@@ -376,7 +376,7 @@ fn actions(task_id: &str) -> ElementBuilder {
                             St::TextXs,
                             St::PxSm,
                             St::PyXs,
-                            St::RoundedSm,
+                            St::Rounded0,
                             St::BorderDefault,
                             St::BgApp,
                             St::TextMuted,

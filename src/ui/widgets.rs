@@ -71,7 +71,7 @@ pub fn submit(label: &str) -> ElementBuilder {
             St::PxMd,
             St::PySm,
             St::BorderDefault,
-            St::RoundedSm,
+            St::Rounded0,
             St::BgApp,
             St::TextHigh,
             St::CursorPointer,

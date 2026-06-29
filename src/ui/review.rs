@@ -128,7 +128,7 @@ fn proposed_view(proposed: &[crate::state::ProposedTask]) -> ElementBuilder {
                 .st([
                     St::BgApp,
                     St::BorderDefault,
-                    St::RoundedSm,
+                    St::Rounded0,
                     St::PSm,
                     St::DisplayFlex,
                     St::FlexCol,
@@ -197,7 +197,7 @@ fn field_st() -> [St; 7] {
         St::PxSm,
         St::PySm,
         St::BorderDefault,
-        St::RoundedSm,
+        St::Rounded0,
         St::BgApp,
         St::TextHigh,
         St::OutlineNone,

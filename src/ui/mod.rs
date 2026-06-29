@@ -32,7 +32,6 @@ use rwire::{
 
 use crate::bridge::{self, Command};
 use crate::state::{App, Tab};
-use rwire_components::Badge;
 use workspace::WsTab;
 
 /// The app's routes: each path renders its view into the shell's [`outlet`]. `/` and
@@ -446,7 +445,15 @@ fn review_badge(app: &App) -> ElementBuilder {
     if app.review_count == 0 {
         return el(El::Span);
     }
-    Badge::primary(app.review_count.to_string()).build()
+    el(El::Span)
+        .st([
+            St::TextXs,
+            St::PxXs,
+            St::Rounded0,
+            St::BgAccent,
+            St::TextOnAccent,
+        ])
+        .text(&app.review_count.to_string())
 }
 
 #[renderer]
@@ -529,7 +536,7 @@ fn hamburger() -> ElementBuilder {
             St::PySm,
             St::BgApp,
             St::BorderDefault,
-            St::RoundedSm,
+            St::Rounded0,
             St::TextHigh,
             St::CursorPointer,
         ])

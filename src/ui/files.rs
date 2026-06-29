@@ -39,7 +39,7 @@ fn error_banner(app: &App) -> ElementBuilder {
                 St::TextError,
                 St::BgSurface,
                 St::BorderDefault,
-                St::RoundedSm,
+                St::Rounded0,
             ])
             .append([el(El::Span).text(&format!("⚠ {message}"))]),
         None => el(El::Div).st([St::DisplayNone]),
@@ -223,7 +223,7 @@ fn create_row(kind: &str, value: &str) -> ElementBuilder {
                     St::PxSm,
                     St::PyXs,
                     St::BorderDefault,
-                    St::RoundedSm,
+                    St::Rounded0,
                     St::BgApp,
                     St::TextHigh,
                     St::OutlineNone,
@@ -372,7 +372,7 @@ fn tree_row(node: &FileNode, selected: bool, pending_delete: bool, active: bool)
             St::GapSm,
             St::PyXs,
             St::PxSm,
-            St::RoundedSm,
+            St::Rounded0,
         ])
         .hover([St::BgSubtle]);
     if highlight {
@@ -403,7 +403,7 @@ fn rename_row(current: &str) -> ElementBuilder {
                     St::PxSm,
                     St::PyXs,
                     St::BorderDefault,
-                    St::RoundedSm,
+                    St::Rounded0,
                     St::BgApp,
                     St::TextHigh,
                     St::OutlineNone,
@@ -549,7 +549,7 @@ fn mode_chip(label: &str, view: bool, active: bool) -> ElementBuilder {
             St::TextXs,
             St::PxSm,
             St::PyXs,
-            St::RoundedSm,
+            St::Rounded0,
             St::BorderDefault,
             St::CursorPointer,
         ])

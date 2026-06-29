@@ -138,7 +138,7 @@ fn run_chip(run: RunKind, active: bool) -> ElementBuilder {
         St::TextXs,
         St::PxSm,
         St::PyXs,
-        St::RoundedSm,
+        St::Rounded0,
         St::BorderDefault,
         St::CursorPointer,
     ];

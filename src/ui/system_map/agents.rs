@@ -123,7 +123,7 @@ fn tool_chip(name: &str, on: bool) -> ElementBuilder {
             St::PxSm,
             St::PyXs,
             St::BorderDefault,
-            St::RoundedSm,
+            St::Rounded0,
             St::TextXs,
             St::CursorPointer,
             bg,

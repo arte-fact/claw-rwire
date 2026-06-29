@@ -11,8 +11,8 @@ use crate::bridge::{self, Command};
 use crate::state::{App, TaskView, WorkspaceView};
 use crate::ui::widgets::accent_submit;
 use rwire_components::{
-    Avatar, AvatarSize, Badge, BadgeIntent, Drawer, DrawerPosition, Input, Select, Tag, TagIntent,
-    Text, Textarea, Tooltip,
+    Avatar, AvatarSize, Drawer, DrawerPosition, Input, Select, Tag, TagIntent, Text, Textarea,
+    Tooltip,
 };
 
 #[renderer]
@@ -70,7 +70,7 @@ fn locked_banner(app: &App) -> ElementBuilder {
             St::TextMuted,
             St::PxSm,
             St::PyXs,
-            St::RoundedSm,
+            St::Rounded0,
             St::BgSubtle,
         ])
         .text("⏳ Pipeline locked while tasks are in flight — finish or stop them to edit the workflow.")
@@ -100,7 +100,7 @@ fn filter_chip(label: &str, value: &str, active: &str) -> ElementBuilder {
             St::TextXs,
             St::PxSm,
             St::PyXs,
-            St::RoundedSm,
+            St::Rounded0,
             St::BorderDefault,
             St::CursorPointer,
         ])
@@ -153,7 +153,7 @@ fn new_task_button() -> ElementBuilder {
             St::GapSm,
             St::PxSm,
             St::PyXs,
-            St::RoundedSm,
+            St::Rounded0,
             St::BgAccent,
             St::TextOnAccent,
             St::BorderAccent,
@@ -388,7 +388,7 @@ fn kanban_card(task: &TaskView, steps: &[String], wid: &str) -> ElementBuilder {
         .st([
             St::BgSurface,
             St::BorderDefault,
-            St::RoundedSm,
+            St::Rounded0,
             St::PSm,
             St::DisplayFlex,
             St::FlexCol,
@@ -567,7 +567,7 @@ fn toggle_chip(label: &str, view: &str, active: bool) -> ElementBuilder {
             St::TextXs,
             St::PxSm,
             St::PyXs,
-            St::RoundedSm,
+            St::Rounded0,
             St::BorderDefault,
             St::CursorPointer,
         ])
@@ -786,7 +786,7 @@ fn task_card(
         .st([
             St::BgSurface,
             St::BorderDefault,
-            St::RoundedSm,
+            St::Rounded0,
             St::PMd,
             St::DisplayFlex,
             St::FlexCol,
@@ -849,13 +849,17 @@ fn edit_form(task: &TaskView, members: &[(String, String)]) -> ElementBuilder {
 }
 
 fn status_badge(status: &str) -> ElementBuilder {
-    let intent = match status {
-        "running" => BadgeIntent::Primary,
-        "done" => BadgeIntent::Success,
-        "failed" => BadgeIntent::Error,
-        _ => BadgeIntent::Default,
+    // A sharp, outlined status chip (the Badge component is a fixed `RoundedFull` pill, which can't
+    // go square — and the outlined chip matches rust-claw's original status look anyway).
+    let color = match status {
+        "running" => St::TextAccent,
+        "done" => St::TextHigh,
+        "failed" => St::TextError,
+        _ => St::TextMuted,
     };
-    Badge::new().intent(intent).text(status.to_owned()).build()
+    el(El::Span)
+        .st([St::TextXs, color, St::BorderDefault, St::Rounded0, St::PxXs])
+        .text(status)
 }
 
 #[handler]

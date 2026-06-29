@@ -31,10 +31,13 @@ const DATA_DIR_ENV: &str = "CLAW_DATA_DIR";
 
 #[theme]
 fn app_theme() -> Theme {
-    // rust-claw look: Nord, flat, small radius (3px-ish hairline feel).
+    // rust-claw look: Nord palette + the flat `soft` style (no shadow, 1px hairline borders) +
+    // **sharp corners** (`None`). The raw chips/cards were also swept from `RoundedSm` → `Rounded0`,
+    // and the two status badges reverted from the `Badge` pill to sharp outlined chips, so the whole
+    // UI is consistently square — the crisp terminal aesthetic. (Circular avatars keep `RoundedFull`.)
     Theme::dark()
         .palette(palettes::nord())
-        .radius(RadiusScale::Small)
+        .radius(RadiusScale::None)
 }
 
 /// Installable-PWA config: name/colors matching the Nord dark theme, with branded `>_` icons (the

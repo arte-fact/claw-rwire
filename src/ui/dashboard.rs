@@ -141,7 +141,7 @@ fn card(
             St::GapSm,
             St::BgSurface,
             St::BorderDefault,
-            St::RoundedSm,
+            St::Rounded0,
             St::PMd,
             St::NoUnderline,
             St::CursorPointer,
