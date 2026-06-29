@@ -6,7 +6,7 @@
 
 use rwire::style::Style;
 use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons};
-use rwire_components::{Avatar, AvatarSize};
+use rwire_components::{Avatar, AvatarSize, Button, ButtonSize, Input, Text};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, LiveEvent, TaskDetail};
@@ -24,7 +24,7 @@ pub fn peek_modal(app: &App) -> ElementBuilder {
     };
     let content = match &app.task_detail {
         Some(detail) if detail.id == selected => peek_content(app, detail),
-        _ => el(El::Div).st([St::TextSm, St::TextMuted]).text("Loading…"),
+        _ => Text::body("Loading…").muted().build(),
     };
     // Container (flex-centred) holding two siblings: the backdrop (fills it, click = close) and the
     // panel (later in DOM, so it paints above the backdrop — no z-index juggling needed).
@@ -240,9 +240,7 @@ fn peek_activity(app: &App, detail: &TaskDetail) -> ElementBuilder {
         })
         .collect();
     let chain = if runs.is_empty() {
-        el(El::Div)
-            .st([St::TextSm, St::TextMuted])
-            .text("No runs recorded yet.")
+        Text::body("No runs recorded yet.").muted().build()
     } else {
         // No own scroll — the modal body scrolls (the fixed-height panel owns the single scroll).
         el(El::Div)
@@ -262,9 +260,9 @@ fn peek_review(detail: &TaskDetail) -> ElementBuilder {
     } else {
         card(
             "Review",
-            el(El::Div)
-                .st([St::TextSm, St::TextMuted])
-                .text("This task isn't waiting on your review right now."),
+            Text::body("This task isn't waiting on your review right now.")
+                .muted()
+                .build(),
         )
     }
 }
@@ -365,22 +363,12 @@ fn actions(task_id: &str) -> ElementBuilder {
                         .at(At::Type, Av::Hidden)
                         .at_str(At::Name, "task")
                         .at_str(At::Value, task_id),
-                    el(El::Input)
-                        .at_str(At::Name, "feedback")
-                        .at_str(At::Placeholder, "What to change…")
-                        .at(At::Autocomplete, Av::Off)
-                        .style(Style::new().set("flex", "1"))
-                        .st([
-                            St::FontInheritAll,
-                            St::PxSm,
-                            St::PySm,
-                            St::BorderDefault,
-                            St::RoundedSm,
-                            St::BgApp,
-                            St::TextHigh,
-                            St::OutlineNone,
-                        ])
-                        .focus([St::BorderAccent]),
+                    Input::text()
+                        .name("feedback")
+                        .placeholder("What to change…")
+                        .autocomplete("off")
+                        .build()
+                        .st([St::Flex1]),
                     el(El::Button)
                         .at(At::Type, Av::Submit)
                         .st([
@@ -407,25 +395,14 @@ fn action_button(
     task: &str,
     accent: bool,
 ) -> ElementBuilder {
-    let btn = el(El::Button)
-        .at(At::Type, Av::Button)
-        .data("task", task)
-        .on(Ev::Click, on_click)
-        .st([
-            St::FontInheritAll,
-            St::TextXs,
-            St::PxSm,
-            St::PyXs,
-            St::RoundedSm,
-            St::CursorPointer,
-        ])
-        .text(label);
-    if accent {
-        btn.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
+    let btn = if accent {
+        Button::primary(label.to_owned())
     } else {
-        btn.st([St::BorderDefault, St::BgApp, St::TextMuted])
-            .hover([St::TextHigh])
-    }
+        Button::secondary(label.to_owned())
+    };
+    btn.size(ButtonSize::Sm)
+        .on_click(on_click)
+        .data("task", task)
 }
 
 /// Open a task's Peek modal (card click) — set the selection + load its detail.
