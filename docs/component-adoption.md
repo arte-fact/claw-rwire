@@ -77,7 +77,9 @@ Component adoption is net-negative — the components absorb the styling/attrs c
 | system_map/mod (shared helpers) | −35 |
 | workspace_tasks (the big board) | −84 |
 | task_detail (Peek modal) | −23 |
-| **total (9 screens)** | **−375** (+258 / −633) |
+| run_chain (mostly custom) | −3 |
+| mod (shell nav badge) | −7 |
+| **total (11 screens)** | **−385** (+265 / −650) |
 
 Trend: ~−40 lines/screen on form-heavy screens, less on text-only ones. Remaining screens
 (`workspace_tasks` is the big one) should keep the slope.
@@ -96,9 +98,9 @@ several sub-swaps (Button / Input / Select / Card / …); list them so partial p
 - [~] **`workspace_tasks.rs`** — [x] create + edit forms → `Input`/`Textarea`/`Select` (drops `input_st()`/`owner_option`) · [x] `status_badge` → `Badge` · [x] Approve/Restart → `Button` · [x] empty states → `Text`. [ ] toggle/filter/view chips + icon "New task" + card-title buttons stay raw (toggle-state / icon+text). _Gate-green; live visual deferred (server wouldn't relaunch this session)._
 - [~] **`task_detail.rs`** — [x] `Button` (control bar + review gate) · [x] `Input` (feedback) · [x] `Text` (notes). [ ] tab chips → `Tabs` (needs server-driven active) · [ ] ✕-close raw (icon-only) · [ ] Peek overlay → `Modal` (rwire backdrop fix now committed — unblocked). _Gate-green._
 - [~] **`review.rs`** — [x] buttons → `Button` (approve/reject/open). [ ] feedback field → `Input`; [ ] `card()` → `Card`; [ ] submit chip → `Button`
-- [ ] **`run_chain.rs`** — tool/run collapse → `Accordion`
+- [~] **`run_chain.rs`** — [x] prose notes → `Text`. [ ] collapse/diffs/transcripts stay raw (custom by necessity; `Accordion` migration deliberately deferred). _Gate-green._
 - [~] **`dashboard.rs`** — [x] `Input` (create form) · [x] `Text` (name/owner/empty/needs-you). [ ] lane line stays raw (dynamic color incl. `TextLow`, no `Text` variant). _Gate-green._
-- [ ] **`mod.rs`** (shell nav) — `Button` where applicable
+- [x] **`mod.rs`** (shell nav) — [x] `review_badge` → `Badge`. Nav rows/status/logout stay bespoke (would need `AppShell`/`NavMenu` restructure). _Gate-green._
 - [ ] _coordinate before touching:_ **`chat.rs`**, **`files.rs`**, **`widgets.rs`** — mid token-migration (owner's uncommitted work)
 
 **Cross-cutting (do once the components are adopted):**
