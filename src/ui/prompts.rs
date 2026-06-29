@@ -9,6 +9,7 @@ use crate::bridge::{self, Command};
 use crate::state::{App, PromptPreview, RunKind};
 use crate::ui::widgets::{accent_submit, page_header};
 use crate::ui::workspace::card;
+use rwire_components::{Button, ButtonSize, Select, Textarea};
 
 pub fn page() -> ElementBuilder {
     el(El::Div)
@@ -29,24 +30,17 @@ pub fn page() -> ElementBuilder {
 #[renderer]
 fn body(app: &App) -> ElementBuilder {
     // Agent picker — the workspace owner / member whose persona + memory we compose.
-    let current = app.prompt_agent.clone();
-    let mut options = vec![el(El::Option).attr("value", "").text("— pick an agent —")];
+    let mut picker_select = Select::new()
+        .name("agent")
+        .value(app.prompt_agent.clone().unwrap_or_default())
+        .option("", "— pick an agent —");
     for agent in &app.agents {
-        let option = el(El::Option).attr("value", &agent.id).text(&agent.name);
-        options.push(if current.as_deref() == Some(agent.id.as_str()) {
-            option.bool_attr(rwire::At::Selected)
-        } else {
-            option
-        });
+        picker_select = picker_select.option(agent.id.clone(), agent.name.clone());
     }
     let picker = el(El::Div)
         .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::FlexWrap])
         .append([
-            el(El::Select)
-                .attr("name", "agent")
-                .on(Ev::Change, pick_agent())
-                .st(control_st())
-                .append(options),
+            picker_select.build().on(Ev::Change, pick_agent()),
             run_chips(app.prompt_run),
         ]);
 
@@ -108,18 +102,12 @@ fn role_default_card(label: &str, run: RunKind, value: &str) -> ElementBuilder {
                 .attr("type", "hidden")
                 .attr("name", "run")
                 .attr("value", run.as_str()),
-            el(El::Textarea)
-                .id(&format!("role-{}", run.as_str()))
-                .attr("name", "prompt")
-                .attr("rows", "4")
-                .style(
-                    Style::new()
-                        .set("font", "inherit")
-                        .set("resize", "vertical"),
-                )
-                .st(control_st())
-                .focus([St::BorderAccent])
-                .text(value),
+            Textarea::new()
+                .id(format!("role-{}", run.as_str()))
+                .name("prompt")
+                .rows(4)
+                .value(value.to_owned())
+                .build(),
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
@@ -179,22 +167,13 @@ fn memory_card(agent: Option<&str>, preview: &PromptPreview) -> ElementBuilder {
         .on(Ev::Submit, save_memory())
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
-            el(El::Textarea)
-                .id(&format!("mem-{}", agent.unwrap_or("none")))
-                .attr("name", "summary")
-                .attr("rows", "5")
-                .at_str(
-                    rwire::At::Placeholder,
-                    "(empty — fills as the conversation grows)",
-                )
-                .style(
-                    Style::new()
-                        .set("font", "inherit")
-                        .set("resize", "vertical"),
-                )
-                .st(control_st())
-                .focus([St::BorderAccent])
-                .text(&preview.memory),
+            Textarea::new()
+                .id(format!("mem-{}", agent.unwrap_or("none")))
+                .name("summary")
+                .rows(5)
+                .placeholder("(empty — fills as the conversation grows)")
+                .value(preview.memory.clone())
+                .build(),
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
@@ -236,22 +215,9 @@ fn plain_button(
     on_click: rwire::HandlerSpec,
     data: Option<(&str, &str)>,
 ) -> ElementBuilder {
-    let button = el(El::Button)
-        .attr("type", "button")
-        .on(Ev::Click, on_click)
-        .style(Style::new().set("font", "inherit"))
-        .st([
-            St::TextXs,
-            St::PxSm,
-            St::PyXs,
-            St::RoundedSm,
-            St::BorderDefault,
-            St::BgApp,
-            St::TextMuted,
-            St::CursorPointer,
-        ])
-        .hover([St::TextHigh])
-        .text(label);
+    let button = Button::secondary(label.to_owned())
+        .size(ButtonSize::Sm)
+        .on_click(on_click);
     match data {
         Some((key, value)) => button.data(key, value),
         None => button,
@@ -281,18 +247,6 @@ fn text_block(content: &str) -> ElementBuilder {
         )
         .st([St::TextXs, St::TextHigh])
         .text(content)
-}
-
-fn control_st() -> [St; 7] {
-    [
-        St::PxSm,
-        St::PySm,
-        St::BorderDefault,
-        St::RoundedSm,
-        St::BgApp,
-        St::TextHigh,
-        St::OutlineNone,
-    ]
 }
 
 #[handler]
