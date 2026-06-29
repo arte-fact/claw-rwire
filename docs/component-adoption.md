@@ -62,6 +62,22 @@ One screen per PR, each landing green on `cargo fmt && clippy -D warnings && car
 screenshot. Order by leverage: shared `widgets.rs` helpers first (propagate everywhere) once the owner's
 migration lands, then form-heavy screens (`workspace_workflow`, `workspace`, `prompts`), then the rest.
 
+## Codebase reduction (running tally)
+
+Component adoption is net-negative — the components absorb the styling/attrs claw spelled out by hand.
+
+| screen | net lines |
+|---|---|
+| review + workflow | **−105** |
+| workspace (Card/Input/Select) | −34 |
+| workspace (Text) | −10 |
+| dashboard | −10 |
+| prompts | −46 |
+| **total (5 screens)** | **−205** (+116 / −321) |
+
+Trend: ~−40 lines/screen on form-heavy screens, less on text-only ones. Remaining screens
+(`workspace_tasks` is the big one) should keep the slope.
+
 ## Progress checklist
 
 Tick a screen only when it lands green on the gate **and** is visually re-checked. A screen may need
