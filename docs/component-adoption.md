@@ -73,7 +73,8 @@ Component adoption is net-negative — the components absorb the styling/attrs c
 | workspace (Text) | −10 |
 | dashboard | −10 |
 | prompts | −46 |
-| **total (5 screens)** | **−205** (+116 / −321) |
+| system_map/agents | −28 |
+| **total (6 screens)** | **−233** (+138 / −371) |
 
 Trend: ~−40 lines/screen on form-heavy screens, less on text-only ones. Remaining screens
 (`workspace_tasks` is the big one) should keep the slope.
@@ -87,7 +88,7 @@ several sub-swaps (Button / Input / Select / Card / …); list them so partial p
 - [x] **`workspace_workflow.rs`** — [x] `Alert` (lock notices) · [x] `Button` (add/move/delete via `icon_btn`/`add_btn`) · [x] `Input`/`Textarea`/`Select` (step form fields, pre-selection confirmed). [ ] submit + ✕-close stay raw (Button has no submit-type method; `icon_only` is uncommitted) · [ ] `labeled`→`FormField` deferred. _Gate-green (fmt/clippy/168 tests) **+ visually verified** (step editor renders all fields with correct pre-filled/selected values)._
 - [~] **`workspace.rs`** — [x] `Card` (all Team/Overview blocks via `card()`) · [x] `Input` (name) · [x] `Select` (owner, pre-selection confirmed) · [x] `Text` (roster/hints/empties/errors via `Text::body`/`caption`). [ ] member toggle-chips + auto-approve toggle stay raw (state-styled buttons) · [ ] brief editor stays raw (custom `FontMono` + min-height) · [ ] delete uses shared `widgets::action` (migrate with widgets.rs). _Gate-green + visually verified._
 - [~] **`prompts.rs`** — [x] `Select` (agent picker) · [x] `Textarea` (role + memory editors) · [x] `Button` (`plain_button`). [ ] run-kind chips stay raw (toggle-state) · [ ] `text_block` stays raw (custom pre-wrap/word-break) · [ ] `Text` for headings/empties/context deferred. _Gate-green._
-- [ ] **`system_map/agents.rs`** — `Button` · `Input`/`Select`
+- [~] **`system_map/agents.rs`** — [x] `Select` (endpoint + model) · [x] `Textarea` (persona). [ ] tool-chips stay raw (toggle-state) · [ ] `action`/`badge`/`text_input` are shared `system_map` helpers (migrate in `system_map/mod.rs`). _Gate-green._
 - [ ] **`system_map/mod.rs`** — `Button`
 - [ ] **`workspace_tasks.rs`** — toolbar/filter/card-action `Button` · create+edit `Input`/`Textarea`/`Select` · `EmptyState` ("No tasks yet") _(largest — 22 raw els)_
 - [ ] **`task_detail.rs`** — `Button` (controls/gate/close) · `Tabs` (Peek tabs) · `Spinner` (live). _Defer Peek `Modal` until the rwire Modal backdrop fix lands._
