@@ -10,6 +10,7 @@ use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 use crate::bridge::{self, Command};
 use crate::state::{App, StepForm, StepView, WorkspaceView};
 use crate::ui::widgets::page_header;
+use rwire_components::{Alert, Button, ButtonSize, Input, Select, Textarea};
 
 pub fn page() -> ElementBuilder {
     el(El::Div)
@@ -43,19 +44,12 @@ fn body(app: &App) -> ElementBuilder {
     let mut sections: Vec<ElementBuilder> = Vec::new();
     if app.workflow_locked {
         sections.push(
-            el(El::Div)
-                .st([
-                    St::TextXs,
-                    St::TextAccent,
-                    St::BorderDefault,
-                    St::RoundedSm,
-                    St::PSm,
-                    St::BgSurface,
-                ])
-                .text(
+            Alert::warning()
+                .message(
                     "Editing is locked while this workspace has tasks in flight. Let them finish \
                      (or clear them) to change the pipeline.",
-                ),
+                )
+                .build(),
         );
     }
     if app.workflow_steps.is_empty() {
@@ -165,10 +159,12 @@ fn step_drawer_body(app: &App) -> ElementBuilder {
         return el(El::Div);
     };
     if app.workflow_locked {
-        return el(El::Div).st([St::TextSm, St::TextMuted]).text(
-            "Editing is locked while this workspace has tasks in flight. Finish or stop them to \
-             change the pipeline.",
-        );
+        return Alert::warning()
+            .message(
+                "Editing is locked while this workspace has tasks in flight. Finish or stop them \
+                 to change the pipeline.",
+            )
+            .build();
     }
     let Some((index, step)) = app
         .workflow_steps
@@ -283,23 +279,10 @@ fn controls(step: &StepView, index: usize, count: usize, locked: bool) -> Elemen
 }
 
 fn icon_btn(label: &str, on_click: rwire::HandlerSpec, step: &str) -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "button")
+    Button::secondary(label.to_owned())
+        .size(ButtonSize::Sm)
+        .on_click(on_click)
         .data("step", step)
-        .on(Ev::Click, on_click)
-        .style(Style::new().set("font", "inherit"))
-        .st([
-            St::TextXs,
-            St::PxSm,
-            St::PyXs,
-            St::RoundedSm,
-            St::BorderDefault,
-            St::BgApp,
-            St::TextMuted,
-            St::CursorPointer,
-        ])
-        .hover([St::TextHigh])
-        .text(label)
 }
 
 /// The inline edit form for a step. Validator fields apply to loops (ignored for stages on save).
@@ -391,22 +374,9 @@ fn add_bar() -> ElementBuilder {
 }
 
 fn add_btn(label: &str, on_click: rwire::HandlerSpec) -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "button")
-        .on(Ev::Click, on_click)
-        .style(Style::new().set("font", "inherit"))
-        .st([
-            St::TextXs,
-            St::PxMd,
-            St::PyXs,
-            St::RoundedSm,
-            St::BorderDefault,
-            St::BgApp,
-            St::TextMuted,
-            St::CursorPointer,
-        ])
-        .hover([St::TextHigh])
-        .text(label)
+    Button::secondary(label.to_owned())
+        .size(ButtonSize::Sm)
+        .on_click(on_click)
 }
 
 // ── small form helpers ─────────────────────────────────────────────────────────
@@ -427,59 +397,30 @@ fn hidden(name: &str, value: &str) -> ElementBuilder {
         .attr("value", value)
 }
 
-fn field_st() -> [St; 7] {
-    [
-        St::PxSm,
-        St::PySm,
-        St::BorderDefault,
-        St::RoundedSm,
-        St::BgApp,
-        St::TextHigh,
-        St::OutlineNone,
-    ]
-}
-
 fn text_field(name: &str, value: &str, placeholder: &str) -> ElementBuilder {
-    el(El::Input)
-        .attr("name", name)
-        .attr("value", value)
-        .attr("placeholder", placeholder)
-        .attr("autocomplete", "off")
-        .style(Style::new().set("font", "inherit"))
-        .st(field_st())
-        .focus([St::BorderAccent])
+    Input::text()
+        .name(name.to_owned())
+        .value(value.to_owned())
+        .placeholder(placeholder.to_owned())
+        .build()
 }
 
 fn textarea(name: &str, value: &str) -> ElementBuilder {
-    el(El::Textarea)
-        .attr("name", name)
-        .attr("rows", "2")
-        .style(
-            Style::new()
-                .set("font", "inherit")
-                .set("resize", "vertical"),
-        )
-        .st(field_st())
-        .focus([St::BorderAccent])
-        .text(value)
+    Textarea::new()
+        .name(name.to_owned())
+        .value(value.to_owned())
+        .rows(2)
+        .build()
 }
 
 fn select(name: &str, options: &[(&str, &str)], selected: &str) -> ElementBuilder {
-    let opts: Vec<ElementBuilder> = options
-        .iter()
-        .map(|(value, label)| {
-            let mut option = el(El::Option).attr("value", value).text(label);
-            if *value == selected {
-                option = option.attr("selected", "selected");
-            }
-            option
-        })
-        .collect();
-    el(El::Select)
-        .attr("name", name)
-        .style(Style::new().set("font", "inherit"))
-        .st(field_st())
-        .append(opts)
+    let mut field = Select::new()
+        .name(name.to_owned())
+        .value(selected.to_owned());
+    for (value, label) in options {
+        field = field.option((*value).to_owned(), (*label).to_owned());
+    }
+    field.build()
 }
 
 fn agent_select(
@@ -487,25 +428,14 @@ fn agent_select(
     selected: Option<&str>,
     members: &[(String, String)],
 ) -> ElementBuilder {
-    let mut opts = vec![{
-        let mut owner = el(El::Option).attr("value", "").text("— owner —");
-        if selected.is_none() {
-            owner = owner.attr("selected", "selected");
-        }
-        owner
-    }];
-    for (id, name) in members {
-        let mut option = el(El::Option).attr("value", id).text(name);
-        if selected == Some(id.as_str()) {
-            option = option.attr("selected", "selected");
-        }
-        opts.push(option);
+    let mut field = Select::new()
+        .name(name.to_owned())
+        .value(selected.unwrap_or("").to_owned())
+        .option("", "— owner —");
+    for (id, member) in members {
+        field = field.option(id.clone(), member.clone());
     }
-    el(El::Select)
-        .attr("name", name)
-        .style(Style::new().set("font", "inherit"))
-        .st(field_st())
-        .append(opts)
+    field.build()
 }
 
 fn members_of(app: &App, workspace: &WorkspaceView) -> Vec<(String, String)> {

@@ -10,6 +10,7 @@ use crate::bridge::{self, Command};
 use crate::state::{App, ReviewItem};
 use crate::ui::widgets::{accent_submit, page_header};
 use crate::ui::workspace::card;
+use rwire_components::{Button, ButtonSize};
 
 pub fn page() -> ElementBuilder {
     el(El::Div)
@@ -166,61 +167,25 @@ fn action_row(item: &ReviewItem) -> Vec<ElementBuilder> {
 
 /// A borderless "Open task →" that opens the Peek modal over the inbox (reuses the board's modal).
 fn open_button(task: &str) -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "button")
+    Button::ghost("Open task →")
+        .size(ButtonSize::Sm)
+        .on_click(crate::ui::task_detail::open_peek())
         .data("task", task)
-        .on(Ev::Click, crate::ui::task_detail::open_peek())
-        .style(Style::new().set("font", "inherit"))
-        .st([
-            St::TextXs,
-            St::TextMuted,
-            St::BgTransparent,
-            St::BorderNone,
-            St::P0,
-            St::CursorPointer,
-        ])
-        .hover([St::TextAccent])
-        .text("Open task →")
 }
 
 /// The accented Approve button, carrying the task id for the click handler.
 fn approve_button(task: &str) -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "button")
+    Button::primary("Approve")
+        .size(ButtonSize::Sm)
+        .on_click(approve())
         .data("task", task)
-        .on(Ev::Click, approve())
-        .style(Style::new().set("font", "inherit"))
-        .st([
-            St::TextXs,
-            St::PxSm,
-            St::PyXs,
-            St::RoundedSm,
-            St::BgAccent,
-            St::TextOnAccent,
-            St::BorderAccent,
-            St::CursorPointer,
-        ])
-        .text("Approve")
 }
 
 fn plain(label: &str, on_click: rwire::HandlerSpec, task: &str) -> ElementBuilder {
-    el(El::Button)
-        .attr("type", "button")
+    Button::secondary(label.to_owned())
+        .size(ButtonSize::Sm)
+        .on_click(on_click)
         .data("task", task)
-        .on(Ev::Click, on_click)
-        .style(Style::new().set("font", "inherit"))
-        .st([
-            St::TextXs,
-            St::PxSm,
-            St::PyXs,
-            St::RoundedSm,
-            St::BorderDefault,
-            St::BgApp,
-            St::TextMuted,
-            St::CursorPointer,
-        ])
-        .hover([St::TextHigh])
-        .text(label)
 }
 
 fn submit_chip(label: &str) -> ElementBuilder {
