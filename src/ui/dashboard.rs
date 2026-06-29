@@ -5,7 +5,7 @@
 use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
-use rwire_components::Text;
+use rwire_components::{Input, Text};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, WorkspaceView};
@@ -34,21 +34,10 @@ fn create_form() -> ElementBuilder {
         .on(Ev::Submit, create())
         .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
         .append([
-            el(El::Input)
-                .attr("name", "name")
-                .attr("placeholder", "New workspace…")
-                .attr("autocomplete", "off")
-                .style(Style::new().set("font", "inherit"))
-                .st([
-                    St::PxSm,
-                    St::PySm,
-                    St::BorderDefault,
-                    St::RoundedSm,
-                    St::BgApp,
-                    St::TextHigh,
-                    St::OutlineNone,
-                ])
-                .focus([St::BorderAccent]),
+            Input::text()
+                .name("name")
+                .placeholder("New workspace…")
+                .build(),
             submit("Create"),
         ])
 }
@@ -65,9 +54,9 @@ fn create(app: &mut App, ctx: &EventContext) {
 #[renderer]
 fn grid(app: &App) -> ElementBuilder {
     if app.workspaces.is_empty() {
-        return el(El::Div)
-            .st([St::TextSm, St::TextMuted])
-            .text("No workspaces yet. Create one in System → Workspaces.");
+        return Text::body("No workspaces yet. Create one in System → Workspaces.")
+            .muted()
+            .build();
     }
     let owner_name = |w: &WorkspaceView| {
         w.owner
@@ -130,17 +119,18 @@ fn card(
         Text::body(workspace.name.clone())
             .build()
             .st([St::TextHigh, St::FontSemibold]),
-        el(El::Div)
-            .st([St::TextXs, St::TextMuted])
-            .text(&format!("owner {owner} · {team}")),
+        Text::caption(format!("owner {owner} · {team}"))
+            .muted()
+            .build(),
         el(El::Div).st([St::TextXs, lane_style]).text(&lane_text),
     ];
     // The "needs you" line — tasks parked at a human gate in this workspace.
     if awaiting > 0 {
         rows.push(
-            el(El::Div)
-                .st([St::TextXs, St::TextAccent, St::FontSemibold])
-                .text(&format!("● needs you: {awaiting}")),
+            Text::caption(format!("● needs you: {awaiting}"))
+                .accent()
+                .build()
+                .st([St::FontSemibold]),
         );
     }
     Link::route(&format!("/w/{}", workspace.id))

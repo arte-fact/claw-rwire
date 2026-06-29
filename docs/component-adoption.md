@@ -77,7 +77,7 @@ several sub-swaps (Button / Input / Select / Card / …); list them so partial p
 - [ ] **`task_detail.rs`** — `Button` (controls/gate/close) · `Tabs` (Peek tabs) · `Spinner` (live). _Defer Peek `Modal` until the rwire Modal backdrop fix lands._
 - [~] **`review.rs`** — [x] buttons → `Button` (approve/reject/open). [ ] feedback field → `Input`; [ ] `card()` → `Card`; [ ] submit chip → `Button`
 - [ ] **`run_chain.rs`** — tool/run collapse → `Accordion`
-- [ ] **`dashboard.rs`** — `Button` / `Stat`
+- [~] **`dashboard.rs`** — [x] `Input` (create form) · [x] `Text` (name/owner/empty/needs-you). [ ] lane line stays raw (dynamic color incl. `TextLow`, no `Text` variant). _Gate-green._
 - [ ] **`mod.rs`** (shell nav) — `Button` where applicable
 - [ ] _coordinate before touching:_ **`chat.rs`**, **`files.rs`**, **`widgets.rs`** — mid token-migration (owner's uncommitted work)
 
