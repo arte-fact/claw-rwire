@@ -244,6 +244,14 @@ pub enum Command {
     RestartTask {
         id: String,
     },
+    /// Archive a terminal task — hide it from the board to declutter it (the run chain is kept).
+    ArchiveTask {
+        id: String,
+    },
+    /// Restore an archived task to the board.
+    UnarchiveTask {
+        id: String,
+    },
     /// Periodic scheduler scan: launch the next ready task in each idle workspace lane.
     SchedulerTick,
     /// A live agent event during a task run (a tool call starting/finishing, or streamed text),
@@ -274,6 +282,7 @@ pub enum Command {
     AskPlanned {
         workspace: String,
         origin_chat: String,
+        plan_id: String,
         result: Result<String, String>,
     },
     /// The concierge's notify turn produced a completion message — append it to the origin
@@ -752,6 +761,8 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::StopTask { id } => tasks::stop(conn, shared, &id),
         Command::StartTask { id } => tasks::resume(conn, shared, &id),
         Command::RestartTask { id } => tasks::restart(conn, shared, &id),
+        Command::ArchiveTask { id } => tasks::archive(conn, shared, &id),
+        Command::UnarchiveTask { id } => tasks::unarchive(conn, shared, &id),
         Command::SchedulerTick => scheduler::tick(conn, shared),
         Command::AgentProgress { ctx, event } => live_progress(shared, ctx, event),
         Command::TaskFinished {
@@ -768,8 +779,9 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::AskPlanned {
             workspace,
             origin_chat,
+            plan_id,
             result,
-        } => orchestrate::planned(conn, shared, &workspace, &origin_chat, result),
+        } => orchestrate::planned(conn, shared, &workspace, &origin_chat, &plan_id, result),
         Command::Notified { chat, text } => notified(conn, shared, &chat, &text),
         Command::UpdateMemory {
             agent_id,

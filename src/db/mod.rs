@@ -83,7 +83,29 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_task_control_columns(conn).map_err(DbError::Schema)?;
     add_task_plan_columns(conn).map_err(DbError::Schema)?;
     add_workspace_auto_approve_column(conn).map_err(DbError::Schema)?;
+    add_task_proposal_column(conn).map_err(DbError::Schema)?;
+    add_task_archived_column(conn).map_err(DbError::Schema)?;
     Ok(())
+}
+
+/// Add `tasks.archived_at` (a terminal task hidden from the board) to a DB that predates it. A
+/// fresh DB already has it from the schema, so the ALTER fails "duplicate column" — ignored.
+fn add_task_archived_column(conn: &Connection) -> rusqlite::Result<()> {
+    match conn.execute("ALTER TABLE tasks ADD COLUMN archived_at TEXT", []) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Add `tasks.proposal` (a plan task's proposed breakdown as JSON, R3 Option A) to a DB that
+/// predates it. A fresh DB already has it from the schema, so the ALTER fails "duplicate column".
+fn add_task_proposal_column(conn: &Connection) -> rusqlite::Result<()> {
+    match conn.execute("ALTER TABLE tasks ADD COLUMN proposal TEXT", []) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 /// Add the `auto_approve` flag on `workspaces` (R3 auto-approve) to a DB that predates it. A fresh

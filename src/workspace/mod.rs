@@ -6,6 +6,7 @@
 pub mod ops;
 mod path;
 
+pub use ops::list_files;
 pub use path::jail;
 
 use std::path::{Path, PathBuf};

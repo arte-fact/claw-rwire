@@ -1,6 +1,7 @@
-//! Delegation: a concierge `ask` becomes a workspace **owner's planning turn**. The owner
-//! runs `run_turn` with the [`PlanningToolbox`] (which queues task cards), on its own worker
-//! thread — the same shape as a chat turn or a task run. The scheduler then drains the cards.
+//! Delegation: a concierge `ask` becomes a workspace **owner's planning turn**. The owner runs
+//! `run_turn` with the [`PlanningToolbox`] (which emits a reviewable **proposal**, R3 Option A),
+//! on its own worker thread — the same shape as a chat turn or a task run. Approving the plan
+//! materialises the proposal into real tasks the scheduler then drains.
 
 use rwire::SharedServerState;
 
@@ -12,19 +13,12 @@ use crate::workspace;
 
 use super::{Command, data_dir, log_line, now_hm, push_activity, run_system_prompt, send};
 
-/// Start a delegated request. By default (R3) this is a reviewable **Plan** task: create the plan
-/// gate, then run the owner's planning turn, which proposes tasks as held children. A workspace
-/// with `auto_approve` set skips the gate — the planning turn queues tasks directly (pre-R3).
+/// Start a delegated request (R3, Option A). Always a reviewable **Plan** task: create the plan
+/// gate, then run the owner's planning turn, which emits a structured **proposal** (no task rows
+/// yet). The user approves to materialise it. A workspace with `auto_approve` set materialises the
+/// proposal immediately (see [`planned`]) — and its per-task human sign-off gates also pass
+/// automatically (see `scheduler::gate_action`), so the workspace runs hands-off end to end.
 pub fn ask(conn: &rusqlite::Connection, workspace: &str, request: &str, origin_chat: &str) {
-    let auto_approve = workspaces::get(conn, workspace)
-        .ok()
-        .flatten()
-        .is_some_and(|ws| ws.auto_approve);
-    if auto_approve {
-        // No plan id → the planning toolbox queues tasks directly, no gate.
-        launch_planning(conn, workspace, None, &direct_brief(request), origin_chat);
-        return;
-    }
     let Ok(plan_id) = crate::id::new_id() else {
         return log_line("orchestrate: could not mint a plan id".to_owned());
     };
@@ -38,34 +32,37 @@ pub fn ask(conn: &rusqlite::Connection, workspace: &str, request: &str, origin_c
     ) {
         return log_line(format!("orchestrate: create plan failed: {err}"));
     }
-    launch_planning(
-        conn,
-        workspace,
-        Some(&plan_id),
-        &plan_brief(request),
-        origin_chat,
-    );
+    let auto_approve = workspaces::get(conn, workspace)
+        .ok()
+        .flatten()
+        .is_some_and(|ws| ws.auto_approve);
+    let brief = if auto_approve {
+        direct_brief(request)
+    } else {
+        plan_brief(request)
+    };
+    launch_planning(conn, workspace, &plan_id, &brief, origin_chat);
 }
 
-/// Re-plan a rejected-for-revision plan: re-run the owner's planning turn into the same plan task
-/// with the reviewer's feedback. The held children were already cleared by the caller.
+/// Re-plan a sent-back plan: re-run the owner's planning turn into the same plan task with the
+/// reviewer's feedback. The previous proposal was already cleared by the caller.
 pub fn replan(conn: &rusqlite::Connection, plan: &crate::db::tasks::Task, feedback: &str) {
     let origin = plan.origin_chat.as_deref().unwrap_or("");
     launch_planning(
         conn,
         &plan.workspace_id,
-        Some(&plan.id),
+        &plan.id,
         &revise_brief(&plan.spec, feedback),
         origin,
     );
 }
 
 /// Resolve the workspace owner and run its planning turn (the `brief` instruction) on a worker
-/// thread, proposing tasks as held children of `plan_id`. Posts `Command::AskPlanned` back.
+/// thread, appending its proposal to `plan_id`. Posts `Command::AskPlanned` back.
 fn launch_planning(
     conn: &rusqlite::Connection,
     workspace: &str,
-    plan_id: Option<&str>,
+    plan_id: &str,
     brief_text: &str,
     origin_chat: &str,
 ) {
@@ -104,15 +101,11 @@ fn launch_planning(
         time: now_hm(),
     };
     let messages = agent::build_messages(&system_prompt, std::slice::from_ref(&brief));
-    let toolbox = PlanningToolbox::new(
-        planning_conn,
-        workspace,
-        Some(origin_chat.to_owned()),
-        plan_id.map(str::to_owned),
-    );
+    let toolbox = PlanningToolbox::new(planning_conn, workspace, Some(plan_id.to_owned()));
 
     let workspace = workspace.to_owned();
     let origin_chat = origin_chat.to_owned();
+    let plan_id = plan_id.to_owned();
     std::thread::spawn(move || {
         let result = agent::run_turn(&inference, messages, &toolbox)
             .map(|turn| turn.reply.unwrap_or_default())
@@ -120,19 +113,20 @@ fn launch_planning(
         send(Command::AskPlanned {
             workspace,
             origin_chat,
+            plan_id,
             result,
         });
     });
 }
 
-/// The owner's planning instruction for an auto-approve workspace — tasks queue directly (no
-/// review gate), so it's a plain "break it into tasks and confirm".
+/// The owner's planning instruction for an auto-approve workspace — the proposal runs immediately
+/// (no review gate), so it's a plain "break it into tasks and confirm".
 fn direct_brief(request: &str) -> String {
     format!(
         "A request was delegated to you to plan for this workspace.\n\nRequest: {request}\n\n\
-         Break it into one or more tasks with create_task — assign a member by persona where it \
-         helps, chain dependent steps with blockers, and set a schedule for recurring work. Then \
-         confirm the plan in one or two sentences."
+         Break it into one or more tasks and call propose_tasks once with the whole list — assign a \
+         member by persona where it helps, chain dependent steps with blockers (by task title), and \
+         set a schedule for recurring work. Then confirm the plan in one or two sentences."
     )
 }
 
@@ -140,10 +134,10 @@ fn direct_brief(request: &str) -> String {
 fn plan_brief(request: &str) -> String {
     format!(
         "A request was delegated to you to plan for this workspace.\n\nRequest: {request}\n\n\
-         Break it into one or more tasks with create_task — assign a member by persona where it \
-         helps, chain dependent steps with blockers, and set a schedule for recurring work. The \
-         tasks you create are a **proposal** the user reviews and approves before they run. Then \
-         confirm the plan in one or two sentences."
+         Break it into one or more tasks and call propose_tasks once with the whole list — assign a \
+         member by persona where it helps, chain dependent steps with blockers (by task title), and \
+         set a schedule for recurring work. The proposal is reviewed and approved by the user before \
+         anything runs. Then confirm the plan in one or two sentences."
     )
 }
 
@@ -151,21 +145,44 @@ fn plan_brief(request: &str) -> String {
 fn revise_brief(request: &str, feedback: &str) -> String {
     format!(
         "Your earlier plan for this request was sent back for changes.\n\nRequest: {request}\n\n\
-         Reviewer feedback: {feedback}\n\nPropose a revised set of tasks with create_task \
-         addressing the feedback, then confirm the plan in one or two sentences."
+         Reviewer feedback: {feedback}\n\nCall propose_tasks with a revised set of tasks addressing \
+         the feedback, then confirm the plan in one or two sentences."
     )
 }
 
-/// The owner's planning turn finished: re-project the lane (so freshly queued cards show)
-/// and record the plan in the Activity log. The per-task completion notice is the
-/// scheduler's job; this marks the planning itself.
+/// The owner's planning turn finished. For an auto-approve workspace, materialise the proposal
+/// immediately (hands-off); otherwise the plan stays parked at the review gate. Either way,
+/// re-project the lane + Review inbox and record the plan in the Activity log.
 pub fn planned(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
     workspace: &str,
     origin_chat: &str,
+    plan_id: &str,
     result: Result<String, String>,
 ) {
+    let auto_approve = workspaces::get(conn, workspace)
+        .ok()
+        .flatten()
+        .is_some_and(|ws| ws.auto_approve);
+    if auto_approve && result.is_ok() {
+        match db::tasks::proposal::materialize(conn, plan_id, Some(origin_chat)) {
+            Ok(count) => {
+                let _ = db::tasks::finish(
+                    conn,
+                    plan_id,
+                    db::tasks::TaskStatus::Done,
+                    Some("auto-approved"),
+                );
+                log_line(format!(
+                    "orchestrate: auto-approved plan {plan_id} → {count} task(s)"
+                ));
+            }
+            Err(err) => log_line(format!(
+                "orchestrate: auto-materialize {plan_id} failed: {err}"
+            )),
+        }
+    }
     super::tasks::project_if_active(conn, shared, workspace);
     // The plan parked at a human gate — refresh the Review inbox + badge so it shows.
     super::review::project_count(conn, shared);

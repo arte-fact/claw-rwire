@@ -6,8 +6,9 @@
 use std::path::Path;
 
 use crate::db::pipeline::{self, StepFields};
-use crate::db::{agent_prompts, agents, chat, workspaces};
+use crate::db::{agent_prompts, agent_tools, agents, chat, workspaces};
 use crate::state::MessageRole;
+use crate::tools::WORKSPACE_TOOLS;
 use crate::workspace;
 
 const FORGE_ID: &str = "ag-forge";
@@ -16,9 +17,15 @@ const CRITIC_ID: &str = "ag-critic";
 const STUDIO: &str = "studio";
 const RESEARCH: &str = "research";
 
+/// The web MCP tool names a researcher needs. Only realised when the web server is connected; left
+/// in the agent's selection so they light up automatically once it is.
+const WEB_TOOLS: [&str; 4] = ["search", "fetch", "screenshot", "interact"];
+
 const FORGE_PERSONA: &str = "You are Forge, a pragmatic software engineer. You write clean, \
 idiomatic, well-tested code, make small focused changes, and follow the workspace's \
-conventions. You implement and verify — you don't just describe what to do.";
+conventions. You implement and verify — you don't just describe what to do, and you never report \
+something done without actually running it: build it and run its tests first. You keep your \
+changes scoped to the task at hand and leave other tasks' files alone.";
 
 const SCOUT_PERSONA: &str = "You are Scout, a sharp researcher. You gather primary sources, \
 compare options on the dimensions that matter, and write clear, well-organized summaries. You \
@@ -26,16 +33,36 @@ note where claims come from and flag uncertainty.";
 
 const CRITIC_PERSONA: &str = "You are Critic, a meticulous reviewer. You check work against its \
 spec for correctness, completeness, and quality, and give specific, actionable feedback. You're \
-fair but exacting — approve work that's genuinely done, and send back work that isn't.";
+fair but exacting — approve work that's genuinely done, and send back work that isn't. You record \
+every decision by calling the `verdict` tool, and you never approve code without evidence that it \
+builds and its tests pass.";
 
-/// Role-preamble override for Studio's "Refine" loop — it improves the prior step's output.
-const REFINE_PROMPT: &str = "You are refining the previous step's work, not starting over. \
-Read what was produced, then improve its correctness, clarity, and polish — fix issues, tighten \
-the code/prose, and keep what already works. Briefly note what you changed.";
+/// Role-preamble for Studio's first loop step (**Build**). It is the *sole* preamble for that
+/// producer (a step's `prompt` replaces the role default, it is not layered), so it must carry the
+/// full executor guidance. Folds the old `Execute` stage into iteration 0: the first pass builds
+/// from the spec; later passes address the reviewer's feedback.
+const BUILD_PROMPT: &str = "You are building this task inside the workspace, with real file tools \
+(`write`/`edit`/`read`/`bash`). On the first pass, implement it end to end from the spec; on a \
+later pass you'll be given a reviewer's feedback — address exactly what they flagged while keeping \
+what already works. Either way: make the project build and its tests pass before you finish (run \
+them — don't assume), and keep your changes scoped to this task's files. Briefly note what you \
+did and confirm it builds and tests clean. Call tools using the provided tool-call mechanism, \
+never by writing the call out as text.";
 
-/// Role-preamble override for Studio's final "Approve" loop — prepares the work for sign-off.
-const FINALIZE_PROMPT: &str = "Prepare the final version for the user's sign-off. Make sure it's \
-complete and correct, then briefly summarize what was built and confirm it's ready to ship.";
+/// Role-preamble for Studio's final loop step (**Approve**), parked for the human. **Dual-mode:**
+/// the initial pass is a review-only sign-off (no edits — a finalize pass once silently rewrote
+/// sibling tasks' files); but when the user requests changes, this same step re-runs with their
+/// feedback and *must* apply it (edit/build/test) — otherwise "request changes" produces no
+/// correction. The discriminator is whether there's reviewer feedback in the task context.
+const SIGNOFF_PROMPT: &str = "This is the sign-off step before the user approves. \
+If the task context includes change requests from the user/reviewer, apply them now: edit the \
+files with your tools (`write`/`edit`/`read`/`bash`), rebuild, run the tests (run them — don't \
+assume), and stay scoped to exactly what was asked — don't touch unrelated work. Then report what \
+you changed. \
+Otherwise, this is the initial sign-off and you must NOT edit anything: just confirm the project \
+builds and its tests pass, briefly summarize what was delivered, and confirm it's ready to ship \
+(if something is genuinely wrong, say so plainly so it can be sent back). \
+Call tools using the provided tool-call mechanism, never by writing the call out as text.";
 
 const STUDIO_BRIEF: &str = "# Studio\n\nWhere we build things — apps, scripts, and tooling. \
 Forge does the engineering here; ask for something concrete and it gets made.\n\n## \
@@ -53,9 +80,9 @@ small team across workspaces, each with its own review **workflow**.\n\n**Your t
 **Forge** — engineer, in the **Studio** workspace (apps, scripts, tooling)\n- **Critic** — \
 reviewer, checks Forge's work in Studio\n- **Scout** — researcher, owns the **Research** \
 workspace (gathers, compares, summarizes)\n\n**How it works:** ask me for something multi-step \
-and I'll delegate it. In **Studio**, every task flows through a pipeline — Forge builds, then a \
-**Refine** loop has Critic review until it passes, then it parks for **your** approval. Watch it \
-move across the board.\n\n**Try one:**\n> Build a small CLI tool in Studio that prints a \
+and I'll delegate it. In **Studio**, every task flows through a pipeline — in the **Build** step \
+Forge writes the code and Critic reviews it until it passes, then it parks for **your** approval. \
+Watch it move across the board.\n\n**Try one:**\n> Build a small CLI tool in Studio that prints a \
 motivational quote.\n\nThen open Studio's **Tasks** tab (the kanban board), **Workflow** tab (the \
 pipeline — edit it!), and the **Review** tab when something needs you. **Prompts** shows exactly \
 what each agent is told.";
@@ -88,6 +115,16 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
     let _ = agent_prompts::set(conn, SCOUT_ID, SCOUT_PERSONA);
     let _ = agent_prompts::set(conn, CRITIC_ID, CRITIC_PERSONA);
 
+    // Least-privilege tool permissions so each agent can actually do its job. (An agent left
+    // unconfigured silently falls back to *all* tools — explicit grants are both safer and clearer.)
+    // Forge builds → the coder tools (bash/read/write/edit). Critic reviews → read-only (its
+    // validator turn also gets `verdict`, added by the engine). Scout researches + writes → coder
+    // tools plus the web tools.
+    grant_tools(conn, FORGE_ID, &WORKSPACE_TOOLS);
+    grant_tools(conn, CRITIC_ID, &["read"]);
+    let scout_tools: Vec<&str> = WORKSPACE_TOOLS.iter().copied().chain(WEB_TOOLS).collect();
+    grant_tools(conn, SCOUT_ID, &scout_tools);
+
     // Workspaces + ownership (set_owner also adds the owner as a member) + membership.
     let _ = workspaces::create(conn, STUDIO, "Studio");
     let _ = workspaces::create(conn, RESEARCH, "Research");
@@ -102,27 +139,20 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
     write_brief(data_dir, RESEARCH, "Research", RESEARCH_BRIEF);
 
     // Studio's showcase pipeline — the whole feature, visible on first boot:
-    //   Execute (stage, Forge) → Refine (loop: Forge ⇄ Critic, ≤2) → Approve (loop: Forge ⇄ you).
-    // Research keeps the implicit default single stage.
-    let _ = pipeline::insert_stage(
+    //   Build (loop: Forge ⇄ Critic, ≤2) → Approve (loop: review-only Forge ⇄ you).
+    // The old standalone `Execute` stage is folded into Build's iteration 0 — one Forge produce
+    // before the first review instead of two — and the Approve step is a review-only sign-off that
+    // doesn't mutate code. Research keeps the implicit default single stage.
+    let _ = pipeline::insert(
         conn,
         "ps-studio-0",
         STUDIO,
         0,
-        "Execute",
-        Some(FORGE_ID),
-        None,
-    );
-    let _ = pipeline::insert(
-        conn,
-        "ps-studio-1",
-        STUDIO,
-        1,
         &StepFields {
             kind: "loop",
-            name: "Refine",
+            name: "Build",
             agent: Some(FORGE_ID),
-            prompt: Some(REFINE_PROMPT),
+            prompt: Some(BUILD_PROMPT),
             validator_kind: Some("agent"),
             validator_agent: Some(CRITIC_ID),
             validator_prompt: None,
@@ -132,14 +162,14 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
     );
     let _ = pipeline::insert(
         conn,
-        "ps-studio-2",
+        "ps-studio-1",
         STUDIO,
-        2,
+        1,
         &StepFields {
             kind: "loop",
             name: "Approve",
             agent: Some(FORGE_ID),
-            prompt: Some(FINALIZE_PROMPT),
+            prompt: Some(SIGNOFF_PROMPT),
             validator_kind: Some("human"),
             validator_agent: None,
             validator_prompt: None,
@@ -156,10 +186,97 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
     }
 }
 
+/// Enable exactly `tools` for an agent (each as an `enabled` row), marking it configured so the
+/// run offers precisely this set rather than falling back to every tool.
+fn grant_tools(conn: &rusqlite::Connection, agent_id: &str, tools: &[&str]) {
+    let catalog: Vec<(String, bool)> = tools.iter().map(|t| ((*t).to_owned(), true)).collect();
+    let _ = agent_tools::set_tools(conn, agent_id, &catalog);
+}
+
 /// Scaffold the workspace dir (standard folders) and write its showcase `AGENT.md` brief,
 /// overwriting the default scaffold seeds.
 fn write_brief(data_dir: &Path, id: &str, name: &str, brief: &str) {
     let dir = workspace::dir_for(data_dir, id);
     let _ = workspace::scaffold(&dir, name);
     let _ = std::fs::write(dir.join("AGENT.md"), brief);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::pipeline::StepKind;
+    use crate::db::{agents, open_in_memory, pipeline};
+
+    /// A fresh DB needs exactly one agent and no workspaces for the showcase to seed.
+    fn fresh_db_with_one_agent() -> rusqlite::Connection {
+        let conn = open_in_memory().expect("db");
+        agents::create(&conn, "ag-lead", "claw", None, None).expect("lead agent");
+        conn
+    }
+
+    #[test]
+    fn studio_pipeline_is_build_then_approve_no_execute_stage() {
+        let conn = fresh_db_with_one_agent();
+        let data = tempfile::tempdir().expect("tmp");
+        seed_showcase(&conn, data.path());
+
+        let steps = pipeline::steps_for(&conn, STUDIO).expect("steps");
+        // Two steps now (the old standalone Execute stage is folded into Build's iteration 0).
+        assert_eq!(steps.len(), 2, "Studio should have exactly Build → Approve");
+        assert!(
+            !steps.iter().any(|s| s.name == "Execute"),
+            "the Execute stage must be gone"
+        );
+
+        let build = &steps[0];
+        assert_eq!(build.name, "Build");
+        assert_eq!(build.kind, StepKind::Loop);
+        assert_eq!(build.validator_kind.as_deref(), Some("agent"));
+        assert_eq!(build.validator_agent.as_deref(), Some(CRITIC_ID));
+
+        let approve = &steps[1];
+        assert_eq!(approve.name, "Approve");
+        assert_eq!(approve.kind, StepKind::Loop);
+        assert_eq!(approve.validator_kind.as_deref(), Some("human"));
+    }
+
+    #[test]
+    fn signoff_prompt_is_dual_mode() {
+        // The Approve step is review-only on the initial pass (no edits)…
+        assert!(SIGNOFF_PROMPT.contains("NOT edit"));
+        // …but applies the user's change requests when revised, so "request changes" actually
+        // produces a correction run (the regression this guards against).
+        let lower = SIGNOFF_PROMPT.to_lowercase();
+        assert!(lower.contains("change request"));
+        assert!(lower.contains("apply them"));
+    }
+
+    #[test]
+    fn agents_are_seeded_with_role_appropriate_tools() {
+        let conn = fresh_db_with_one_agent();
+        let data = tempfile::tempdir().expect("tmp");
+        seed_showcase(&conn, data.path());
+
+        // Forge builds → the four coder tools, no web (selection comes back sorted).
+        let forge = agent_tools::selection(&conn, FORGE_ID)
+            .expect("sel")
+            .expect("configured");
+        assert_eq!(forge, vec!["bash", "edit", "read", "write"]);
+
+        // Critic reviews → read-only.
+        let critic = agent_tools::selection(&conn, CRITIC_ID)
+            .expect("sel")
+            .expect("configured");
+        assert_eq!(critic, vec!["read"]);
+
+        // Scout researches + writes → coder tools plus the web tools.
+        let scout = agent_tools::selection(&conn, SCOUT_ID)
+            .expect("sel")
+            .expect("configured");
+        for needed in ["read", "write", "edit", "search", "fetch"] {
+            assert!(scout.contains(&needed.to_owned()), "scout missing {needed}");
+        }
+        // None of the workers fall back to the implicit "all tools" default.
+        assert!(!forge.contains(&"search".to_owned()));
+    }
 }

@@ -320,7 +320,7 @@ fn live_card(events: &[&LiveEvent], streaming: &str) -> ElementBuilder {
     )
 }
 
-/// The run-control bar: Stop while live, Start/Restart when stopped, Restart when terminal.
+/// The run-control bar: Stop while live, Start/Restart when stopped, Archive/Unarchive when terminal.
 fn control_bar(detail: &TaskDetail) -> ElementBuilder {
     let id = detail.id.as_str();
     let buttons = match detail.status.as_str() {
@@ -333,8 +333,10 @@ fn control_bar(detail: &TaskDetail) -> ElementBuilder {
             action_button("Restart", restart(), id, false),
             action_button("Cancel", cancel(), id, false),
         ],
-        // Terminal (done | failed | rejected | cancelled): a clean-slate Restart.
-        _ => vec![action_button("Restart", restart(), id, true)],
+        // Terminal (done | failed | rejected | cancelled): done is done — archive to declutter the
+        // board (and restore it if archived). No restart: a finished task stays finished.
+        _ if detail.archived => vec![action_button("Unarchive", unarchive(), id, false)],
+        _ => vec![action_button("Archive", archive(), id, true)],
     };
     card(
         "Controls",
@@ -457,6 +459,26 @@ fn restart(app: &mut App, ctx: &EventContext) {
     let _ = app;
     if let Some(task) = ctx.data("task") {
         bridge::send(Command::RestartTask {
+            id: task.to_owned(),
+        });
+    }
+}
+
+#[handler]
+fn archive(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(task) = ctx.data("task") {
+        bridge::send(Command::ArchiveTask {
+            id: task.to_owned(),
+        });
+    }
+}
+
+#[handler]
+fn unarchive(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(task) = ctx.data("task") {
+        bridge::send(Command::UnarchiveTask {
             id: task.to_owned(),
         });
     }

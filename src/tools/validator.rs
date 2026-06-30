@@ -78,6 +78,28 @@ pub fn parse_verdict(invocations: &[ToolInvocation]) -> Option<(String, String)>
         })
 }
 
+/// Fallback for a model that wrote its decision as prose instead of calling the tool: pull
+/// `(decision, feedback)` from a `Verdict: <decision> — <feedback>` line (the form models like
+/// deepseek actually emit). Looks at the *last* such line (the conclusion); `None` if there's no
+/// recognisable decision word on it. Without this a perfectly good review is read as "no verdict".
+#[must_use]
+pub fn parse_verdict_prose(text: &str) -> Option<(String, String)> {
+    let lower = text.to_lowercase();
+    let after = &text[lower.rfind("verdict")? + "verdict".len()..];
+    // The rest of the "Verdict…" line carries the decision (and usually the feedback).
+    let line = &after[..after.find('\n').unwrap_or(after.len())];
+    let line_lower = line.to_lowercase();
+    let (at, decision) = ["pass", "revise", "reject"]
+        .into_iter()
+        .filter_map(|word| line_lower.find(word).map(|at| (at, word)))
+        .min_by_key(|(at, _)| *at)?;
+    let feedback = line[at + decision.len()..]
+        .trim_start_matches([' ', ':', '-', '—', '–', '\t', '.'])
+        .trim()
+        .to_owned();
+    Some((decision.to_owned(), feedback))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +154,30 @@ mod tests {
         assert!(tb.call(VERDICT, r#"{"decision":"pass"}"#).ok);
         assert!(!tb.call(VERDICT, r#"{"decision":"nope"}"#).ok);
         assert!(!tb.call("other", "{}").ok);
+    }
+
+    #[test]
+    fn prose_verdict_recovers_decision_and_feedback() {
+        // The real deepseek shape: a precise review ending in a `Verdict:` line, no tool call.
+        let text = "The inner match arm is wrong.\n\n\
+                    Verdict: revise — change the inner `_ => continue` to `_ => return None`.";
+        assert_eq!(
+            parse_verdict_prose(text),
+            Some((
+                "revise".to_owned(),
+                "change the inner `_ => continue` to `_ => return None`.".to_owned()
+            ))
+        );
+        // A bare pass with no feedback still routes.
+        assert_eq!(
+            parse_verdict_prose("Looks correct against the spec. Verdict: pass"),
+            Some(("pass".to_owned(), String::new()))
+        );
+    }
+
+    #[test]
+    fn prose_verdict_is_none_without_a_decision_word() {
+        assert_eq!(parse_verdict_prose("I couldn't reach a verdict here"), None);
+        assert_eq!(parse_verdict_prose("just some prose, no decision"), None);
     }
 }

@@ -9,6 +9,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 mod control;
+pub mod proposal;
 pub use control::*;
 
 /// A task's lifecycle status.
@@ -113,13 +114,16 @@ pub struct Task {
     /// A reviewable "Plan" gate task (R3): it carries no pipeline work; its held children await a
     /// human verdict in the Review inbox.
     pub is_plan: bool,
-    /// For a held child of a plan (R3): the id of the plan task it belongs to.
+    /// For a task materialised from a plan (R3): the id of the plan it came from.
     pub plan_id: Option<String>,
+    /// When set, the task is **archived** — hidden from the board to declutter it.
+    pub archived_at: Option<String>,
 }
 
 const SELECT: &str = "SELECT id, workspace_id, agent_group_id, title, spec, kind, schedule, \
                       status, result, priority, origin_chat_id, next_run, step_position, \
-                      iteration, run_epoch, auto_retries, max_retries, attempt, is_plan, plan_id \
+                      iteration, run_epoch, auto_retries, max_retries, attempt, is_plan, plan_id, \
+                      archived_at \
                       FROM tasks";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
@@ -144,6 +148,7 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         attempt: row.get(17)?,
         is_plan: row.get::<_, i64>(18)? != 0,
         plan_id: row.get(19)?,
+        archived_at: row.get(20)?,
     })
 }
 
@@ -187,9 +192,10 @@ pub fn create(conn: &Connection, task: &NewTask) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Create a **held child** of a plan (R3): identical to [`create`] but parked `stopped` and tagged
-/// with `plan_id`, so it sits out of the scheduler until the plan is approved (which releases it).
-pub fn create_child(conn: &Connection, task: &NewTask, plan_id: &str) -> rusqlite::Result<()> {
+/// Create a task **materialised from an approved plan** (R3, Option A): identical to [`create`]
+/// (queued `pending`, picked up by the scheduler) but tagged with `plan_id` for traceability.
+/// Before approval a plan holds only its JSON [`proposal`] — no child rows exist.
+pub fn create_planned(conn: &Connection, task: &NewTask, plan_id: &str) -> rusqlite::Result<()> {
     let kind = if task.schedule.is_some() {
         TaskKind::Recurrent
     } else {
@@ -199,7 +205,7 @@ pub fn create_child(conn: &Connection, task: &NewTask, plan_id: &str) -> rusqlit
         "INSERT INTO tasks
            (id, workspace_id, agent_group_id, title, spec, kind, schedule, status,
             origin_chat_id, max_retries, plan_id, priority, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'stopped', ?8, ?9, ?10, 0,
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9, ?10, 0,
                  strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         params![
             task.id,
@@ -238,15 +244,6 @@ pub fn create_plan(
     Ok(())
 }
 
-/// The held children proposed by a plan (R3), oldest first.
-pub fn children_of_plan(conn: &Connection, plan_id: &str) -> rusqlite::Result<Vec<Task>> {
-    let mut stmt = conn.prepare(&format!(
-        "{SELECT} WHERE plan_id = ?1 ORDER BY created_at ASC, id ASC"
-    ))?;
-    let rows = stmt.query_map(params![plan_id], from_row)?;
-    rows.collect()
-}
-
 pub fn get(conn: &Connection, id: &str) -> rusqlite::Result<Option<Task>> {
     conn.query_row(&format!("{SELECT} WHERE id = ?1"), params![id], from_row)
         .optional()
@@ -256,7 +253,7 @@ pub fn get(conn: &Connection, id: &str) -> rusqlite::Result<Option<Task>> {
 /// priority, then oldest), then the finished/cancelled tail.
 pub fn list_for_workspace(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Vec<Task>> {
     let mut stmt = conn.prepare(&format!(
-        "{SELECT} WHERE workspace_id = ?1
+        "{SELECT} WHERE workspace_id = ?1 AND archived_at IS NULL
           ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
                    priority DESC, created_at ASC"
     ))?;
@@ -269,6 +266,17 @@ pub fn set_status(conn: &Connection, id: &str, status: TaskStatus) -> rusqlite::
         "UPDATE tasks SET status = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
           WHERE id = ?1",
         params![id, status.as_str()],
+    )?;
+    Ok(())
+}
+
+/// Set a task's `result` note without changing its status — used to record *why* a task parked at
+/// a human gate (e.g. an on-exhaust escalation reason), so the board/detail can show it.
+pub fn set_result(conn: &Connection, id: &str, result: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE tasks SET result = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?1",
+        params![id, result],
     )?;
     Ok(())
 }

@@ -679,8 +679,8 @@ fn control_buttons(task: &TaskView) -> Vec<ElementBuilder> {
             icon(icons::Icon::Edit, edit_task()),
             icon(icons::Icon::Close, cancel_task()),
         ],
-        // Terminal (done | failed | rejected | cancelled): a clean-slate Restart.
-        _ => vec![restart_button(&task.id)],
+        // Terminal (done | failed | rejected | cancelled): done is done — archive to declutter.
+        _ => vec![icon(icons::Icon::Archive, archive_task())],
     }
 }
 
@@ -714,6 +714,14 @@ fn restart_task(app: &mut App, ctx: &EventContext) {
     let _ = app;
     if let Some(id) = ctx.data("task") {
         bridge::send(Command::RestartTask { id: id.to_owned() });
+    }
+}
+
+#[handler]
+fn archive_task(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(id) = ctx.data("task") {
+        bridge::send(Command::ArchiveTask { id: id.to_owned() });
     }
 }
 

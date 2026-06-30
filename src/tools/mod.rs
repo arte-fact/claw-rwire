@@ -13,7 +13,7 @@ pub use coder::CoderToolbox;
 pub use concierge::{ConciergeToolbox, Delegate};
 pub use exec::ExecStrategy;
 pub use planning::PlanningToolbox;
-pub use validator::{ValidatorToolbox, parse_verdict};
+pub use validator::{ValidatorToolbox, parse_verdict, parse_verdict_prose};
 
 /// The workspace tool names, in display order — the static half of the selectable catalog.
 /// They operate on the agent's workspace (`coder` module), so they're only offered when the

@@ -1,7 +1,8 @@
 //! The workspace owner's **planning** toolbox, used during the planning turn a `Command::Ask`
-//! spins up: it turns a delegated request into task cards on the owner's lane. Scoped to one
-//! workspace — `create_task` / `list_tasks` / `cancel_task` all act within it, and the
-//! assignee enum is exactly that workspace's members (membership is the file-access boundary).
+//! spins up: it turns a delegated request into a **proposed** task breakdown (R3 Option A) the
+//! user reviews before anything runs. Scoped to one workspace — `propose_tasks` / `list_tasks` /
+//! `cancel_task` all act within it, and the assignee enum is exactly that workspace's members
+//! (membership is the file-access boundary).
 //!
 //! Unlike the coder/MCP toolboxes this one owns a `rusqlite` connection (behind a `Mutex`, so
 //! the box stays `Sync`): the planning turn runs on a worker thread without the bridge's DB
@@ -13,20 +14,18 @@ use std::sync::Mutex;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use crate::db::tasks::{self, NewTask};
-use crate::db::{agent_prompts, agents, workspaces};
-use crate::id;
+use crate::db::tasks::proposal::{self, ProposalItem};
+use crate::db::{agent_prompts, agents, tasks, workspaces};
 
 use super::{ToolDef, ToolOutcome, Toolbox};
 
-pub const CREATE_TASK: &str = "create_task";
+pub const PROPOSE_TASKS: &str = "propose_tasks";
 pub const LIST_TASKS: &str = "list_tasks";
 pub const CANCEL_TASK: &str = "cancel_task";
 
 /// One assignable member of the workspace, with the persona (identity prompt) the model
 /// routes by.
 struct Member {
-    id: String,
     name: String,
     persona: String,
 }
@@ -35,31 +34,22 @@ struct Member {
 pub struct PlanningToolbox {
     conn: Mutex<Connection>,
     workspace: String,
-    /// The chat the delegation came from — stamped on created tasks so the concierge can
-    /// notify there on completion.
-    origin_chat: Option<String>,
-    /// When set (R3 review mode), `create_task` creates **held children** of this plan task rather
-    /// than queuing them directly — the user approves the plan before they run.
+    /// The plan task whose JSON proposal `propose_tasks` appends to (R3 Option A). Always set while
+    /// planning; the user approves the plan to materialise the proposal into real tasks.
     plan_id: Option<String>,
 }
 
 impl PlanningToolbox {
     #[must_use]
-    pub fn new(
-        conn: Connection,
-        workspace: impl Into<String>,
-        origin_chat: Option<String>,
-        plan_id: Option<String>,
-    ) -> Self {
+    pub fn new(conn: Connection, workspace: impl Into<String>, plan_id: Option<String>) -> Self {
         Self {
             conn: Mutex::new(conn),
             workspace: workspace.into(),
-            origin_chat,
             plan_id,
         }
     }
 
-    /// The workspace's members as routing candidates (id + name + persona snippet).
+    /// The workspace's members as routing candidates (name + persona snippet).
     fn members(&self, conn: &Connection) -> Vec<Member> {
         let ids = workspaces::members_of(conn, &self.workspace).unwrap_or_default();
         ids.into_iter()
@@ -70,7 +60,6 @@ impl PlanningToolbox {
                     .flatten()
                     .unwrap_or_default();
                 Some(Member {
-                    id: agent.id,
                     name: agent.name,
                     persona,
                 })
@@ -78,75 +67,67 @@ impl PlanningToolbox {
             .collect()
     }
 
-    fn create(&self, conn: &Connection, args: &Value) -> ToolOutcome {
-        let title = field(args, "title");
-        let spec = field(args, "spec");
-        if title.is_empty() || spec.is_empty() {
-            return ToolOutcome::error("error: create_task needs a non-empty title and spec");
+    fn propose(&self, conn: &Connection, args: &Value) -> ToolOutcome {
+        let Some(plan_id) = &self.plan_id else {
+            return ToolOutcome::error("error: propose_tasks is only available while planning");
+        };
+        // Accept either `{tasks:[...]}` (the whole breakdown at once) or a single `{title,spec,…}`.
+        let raw: Vec<Value> = match args.get("tasks").and_then(Value::as_array) {
+            Some(items) => items.clone(),
+            None if args.get("title").is_some() => vec![args.clone()],
+            None => return ToolOutcome::error("error: propose_tasks needs a `tasks` array"),
+        };
+        if raw.is_empty() {
+            return ToolOutcome::error("error: propose_tasks needs at least one task");
         }
         let members = self.members(conn);
-        // An assignee, if named, must be a member; absent → the owner (NULL).
-        let agent_id = match args.get("agent").and_then(Value::as_str) {
-            Some(name) if !name.trim().is_empty() => {
-                match members.iter().find(|m| m.name == name.trim()) {
-                    Some(member) => Some(member.id.clone()),
-                    None => {
-                        return ToolOutcome::error(format!(
-                            "error: {name:?} is not a member of this workspace"
-                        ));
+        let mut items = Vec::with_capacity(raw.len());
+        for value in &raw {
+            let title = field(value, "title");
+            let spec = field(value, "spec");
+            if title.is_empty() || spec.is_empty() {
+                return ToolOutcome::error(
+                    "error: every proposed task needs a non-empty title and spec",
+                );
+            }
+            // An assignee, if named, must be a member; absent → the owner.
+            let agent = match value.get("agent").and_then(Value::as_str) {
+                Some(name) if !name.trim().is_empty() => {
+                    match members.iter().find(|m| m.name == name.trim()) {
+                        Some(member) => Some(member.name.clone()),
+                        None => {
+                            return ToolOutcome::error(format!(
+                                "error: {:?} is not a member of this workspace",
+                                name.trim()
+                            ));
+                        }
                     }
                 }
-            }
-            _ => None,
-        };
-        let schedule = args
-            .get("schedule")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let blockers = blocker_ids(args);
-        // Blockers must be tasks in this same workspace (cross-workspace would couple lanes).
-        for blocker in &blockers {
-            match tasks::get(conn, blocker).ok().flatten() {
-                Some(task) if task.workspace_id == self.workspace => {}
-                _ => {
-                    return ToolOutcome::error(format!(
-                        "error: blocker {blocker:?} is not a task in this workspace"
-                    ));
-                }
-            }
+                _ => None,
+            };
+            let schedule = value
+                .get("schedule")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            items.push(ProposalItem {
+                title: title.trim().to_owned(),
+                spec: spec.trim().to_owned(),
+                agent,
+                schedule,
+                blockers: blocker_titles(value),
+            });
         }
-        let Ok(new_id) = id::new_id() else {
-            return ToolOutcome::error("error: could not mint a task id");
-        };
-        let new = NewTask {
-            id: &new_id,
-            workspace_id: &self.workspace,
-            agent: agent_id.as_deref(),
-            title: title.trim(),
-            spec: spec.trim(),
-            schedule,
-            origin_chat: self.origin_chat.as_deref(),
-            max_retries: None,
-        };
-        // In review mode, create a held child of the plan (released on approval); otherwise queue
-        // it directly.
-        let created = match &self.plan_id {
-            Some(plan_id) => tasks::create_child(conn, &new, plan_id),
-            None => tasks::create(conn, &new),
-        };
-        if let Err(err) = created {
-            return ToolOutcome::error(format!("error: create_task failed: {err}"));
+        let titles: Vec<String> = items.iter().map(|item| item.title.clone()).collect();
+        match proposal::append(conn, plan_id, &items) {
+            Ok(total) => ToolOutcome::text(format!(
+                "proposed {} task(s) ({total} in the plan): {}",
+                items.len(),
+                titles.join(", ")
+            )),
+            Err(err) => ToolOutcome::error(format!("error: propose_tasks failed: {err}")),
         }
-        for blocker in &blockers {
-            let _ = tasks::add_blocker(conn, &new_id, blocker);
-        }
-        let verb = if self.plan_id.is_some() {
-            "proposed"
-        } else {
-            "queued"
-        };
-        ToolOutcome::text(format!("{verb} #{new_id}: {}", title.trim()))
     }
 
     fn list(&self, conn: &Connection) -> ToolOutcome {
@@ -227,26 +208,37 @@ impl Toolbox for PlanningToolbox {
         }
         vec![
             ToolDef {
-                name: CREATE_TASK.to_owned(),
+                name: PROPOSE_TASKS.to_owned(),
                 description: format!(
-                    "Queue a task on this workspace's lane. {roster_desc}\nUse `schedule` (a \
-                     cron expression) for a recurring task, and `blockers` (task ids in this \
-                     workspace) for one that must wait."
+                    "Propose the task breakdown for this plan. The user reviews and approves it \
+                     before anything runs — call this once with the whole list. {roster_desc}\nUse \
+                     `schedule` (a cron expression) for a recurring task, and `blockers` (the \
+                     titles of other proposed tasks) for one that must wait on earlier steps."
                 ),
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "title": { "type": "string", "description": "Short card label." },
-                        "spec": { "type": "string", "description": "The instruction the assignee runs." },
-                        "agent": agent_schema,
-                        "schedule": { "type": "string", "description": "Cron expression for a recurring task; omit for one-shot." },
-                        "blockers": {
+                        "tasks": {
                             "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Ids of tasks in this workspace that must finish first."
+                            "description": "The proposed tasks, in order.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": { "type": "string", "description": "Short card label (also how blockers reference it)." },
+                                    "spec": { "type": "string", "description": "The instruction the assignee runs." },
+                                    "agent": agent_schema,
+                                    "schedule": { "type": "string", "description": "Cron expression for a recurring task; omit for one-shot." },
+                                    "blockers": {
+                                        "type": "array",
+                                        "items": { "type": "string" },
+                                        "description": "Titles of other proposed tasks that must finish first."
+                                    }
+                                },
+                                "required": ["title", "spec"]
+                            }
                         }
                     },
-                    "required": ["title", "spec"]
+                    "required": ["tasks"]
                 }),
             },
             ToolDef {
@@ -271,7 +263,7 @@ impl Toolbox for PlanningToolbox {
         let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
         let conn = self.conn.lock().expect("planning conn");
         match name {
-            CREATE_TASK => self.create(&conn, &args),
+            PROPOSE_TASKS => self.propose(&conn, &args),
             LIST_TASKS => self.list(&conn),
             CANCEL_TASK => self.cancel(&conn, &args),
             other => ToolOutcome::error(format!("error: no tool named {other}")),
@@ -283,7 +275,7 @@ fn field<'a>(args: &'a Value, key: &str) -> &'a str {
     args.get(key).and_then(Value::as_str).unwrap_or("").trim()
 }
 
-fn blocker_ids(args: &Value) -> Vec<String> {
+fn blocker_titles(args: &Value) -> Vec<String> {
     args.get("blockers")
         .and_then(Value::as_array)
         .map(|items| {
@@ -312,65 +304,92 @@ mod tests {
         workspaces::set_owner(&conn, "ws", "owner").expect("own");
         workspaces::add_member(&conn, "writer", "ws").expect("member");
         agent_prompts::set(&conn, "writer", "You write crisp prose.").expect("persona");
+        tasks::create_plan(&conn, "plan1", "ws", "Plan: x", "do x", None).expect("plan");
         conn
     }
 
+    /// A planning toolbox bound to the seeded plan (proposal mode — always the case now).
     fn toolbox() -> PlanningToolbox {
-        PlanningToolbox::new(seeded(), "ws", None, None)
+        PlanningToolbox::new(seeded(), "ws", Some("plan1".to_owned()))
+    }
+
+    fn proposal_of(tb: &PlanningToolbox) -> Vec<ProposalItem> {
+        let conn = tb.conn.lock().expect("conn");
+        proposal::get(&conn, "plan1").expect("proposal")
     }
 
     #[test]
-    fn create_task_queues_a_card_assigned_to_a_member() {
+    fn propose_records_a_task_assigned_to_a_member() {
         let tb = toolbox();
         let out = tb.call(
-            CREATE_TASK,
-            r#"{"title":"Draft","spec":"write it","agent":"Writer"}"#,
+            PROPOSE_TASKS,
+            r#"{"tasks":[{"title":"Draft","spec":"write it","agent":"Writer"}]}"#,
         );
         assert!(out.ok, "{}", out.result);
-        // The card landed in the workspace, assigned to the named member.
-        let listed = tb.call(LIST_TASKS, "{}");
-        assert!(listed.result.contains("Draft"));
-        assert!(listed.result.contains("Writer"));
+        let proposal = proposal_of(&tb);
+        assert_eq!(proposal.len(), 1);
+        assert_eq!(proposal[0].title, "Draft");
+        assert_eq!(proposal[0].agent.as_deref(), Some("Writer"));
     }
 
     #[test]
-    fn create_task_defaults_to_the_owner_when_unassigned() {
+    fn propose_appends_across_calls_and_keeps_blocker_titles() {
         let tb = toolbox();
-        assert!(tb.call(CREATE_TASK, r#"{"title":"T","spec":"s"}"#).ok);
-        let listed = tb.call(LIST_TASKS, "{}");
-        assert!(listed.result.contains("→ owner"), "{}", listed.result);
+        assert!(
+            tb.call(PROPOSE_TASKS, r#"{"tasks":[{"title":"A","spec":"s"}]}"#)
+                .ok
+        );
+        assert!(
+            tb.call(
+                PROPOSE_TASKS,
+                r#"{"tasks":[{"title":"B","spec":"s","blockers":["A"]}]}"#
+            )
+            .ok
+        );
+        let proposal = proposal_of(&tb);
+        assert_eq!(proposal.len(), 2);
+        assert_eq!(proposal[1].blockers, vec!["A".to_owned()]);
     }
 
     #[test]
-    fn create_task_rejects_a_non_member_assignee() {
+    fn propose_defaults_to_the_owner_when_unassigned() {
+        let tb = toolbox();
+        assert!(
+            tb.call(PROPOSE_TASKS, r#"{"tasks":[{"title":"T","spec":"s"}]}"#)
+                .ok
+        );
+        assert_eq!(proposal_of(&tb)[0].agent, None);
+    }
+
+    #[test]
+    fn propose_rejects_a_non_member_assignee() {
         let tb = toolbox();
         let out = tb.call(
-            CREATE_TASK,
-            r#"{"title":"T","spec":"s","agent":"Stranger"}"#,
+            PROPOSE_TASKS,
+            r#"{"tasks":[{"title":"T","spec":"s","agent":"Stranger"}]}"#,
         );
         assert!(!out.ok);
         assert!(out.result.contains("not a member"));
     }
 
     #[test]
-    fn create_task_rejects_an_empty_spec() {
+    fn propose_rejects_an_empty_spec() {
         let tb = toolbox();
-        let out = tb.call(CREATE_TASK, r#"{"title":"T","spec":"  "}"#);
+        let out = tb.call(PROPOSE_TASKS, r#"{"tasks":[{"title":"T","spec":"  "}]}"#);
         assert!(!out.ok);
     }
 
     #[test]
-    fn create_task_with_a_schedule_is_recurrent() {
+    fn propose_carries_a_schedule() {
         let tb = toolbox();
         assert!(
             tb.call(
-                CREATE_TASK,
-                r#"{"title":"Digest","spec":"summarise","schedule":"0 8 * * *"}"#
+                PROPOSE_TASKS,
+                r#"{"tasks":[{"title":"Digest","spec":"summarise","schedule":"0 8 * * *"}]}"#
             )
             .ok
         );
-        let listed = tb.call(LIST_TASKS, "{}");
-        assert!(listed.result.contains("Digest"));
+        assert_eq!(proposal_of(&tb)[0].schedule.as_deref(), Some("0 8 * * *"));
     }
 
     #[test]
@@ -380,7 +399,7 @@ mod tests {
         workspaces::create(&conn, "other", "Other").expect("other");
         tasks::create(
             &conn,
-            &NewTask {
+            &tasks::NewTask {
                 id: "x1",
                 workspace_id: "other",
                 agent: None,
@@ -392,49 +411,23 @@ mod tests {
             },
         )
         .expect("foreign task");
-        let tb = PlanningToolbox::new(conn, "ws", None, None);
+        let tb = PlanningToolbox::new(conn, "ws", Some("plan1".to_owned()));
         let out = tb.call(CANCEL_TASK, r#"{"id":"x1"}"#);
         assert!(!out.ok, "must refuse a task from another workspace");
     }
 
     #[test]
-    fn create_task_stamps_the_origin_chat_for_notification() {
-        let tb = PlanningToolbox::new(seeded(), "ws", Some("chat-9".to_owned()), None);
-        assert!(tb.call(CREATE_TASK, r#"{"title":"T","spec":"s"}"#).ok);
-        // Read the stamped origin_chat back through the toolbox's own connection.
-        let conn = tb.conn.lock().expect("conn");
-        let row: String = conn
-            .query_row(
-                "SELECT origin_chat_id FROM tasks WHERE workspace_id='ws' LIMIT 1",
-                [],
-                |r| r.get(0),
-            )
-            .expect("origin");
-        assert_eq!(row, "chat-9");
-    }
-
-    #[test]
-    fn create_task_blocker_must_be_in_this_workspace() {
-        let tb = toolbox();
-        let out = tb.call(
-            CREATE_TASK,
-            r#"{"title":"T","spec":"s","blockers":["ghost"]}"#,
-        );
-        assert!(!out.ok);
-        assert!(out.result.contains("blocker"));
-    }
-
-    #[test]
-    fn defs_advertise_the_three_tools_with_a_member_enum() {
+    fn defs_advertise_propose_with_a_member_enum() {
         let tb = toolbox();
         let defs = tb.defs();
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&CREATE_TASK) && names.contains(&LIST_TASKS));
-        let create = defs
+        assert!(names.contains(&PROPOSE_TASKS) && names.contains(&LIST_TASKS));
+        let propose = defs
             .iter()
-            .find(|d| d.name == CREATE_TASK)
-            .expect("create def");
-        let enum_values = &create.parameters["properties"]["agent"]["enum"];
+            .find(|d| d.name == PROPOSE_TASKS)
+            .expect("propose def");
+        let enum_values =
+            &propose.parameters["properties"]["tasks"]["items"]["properties"]["agent"]["enum"];
         assert!(
             enum_values.to_string().contains("Writer"),
             "member enum should list Writer: {enum_values}"

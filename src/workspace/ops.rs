@@ -62,6 +62,51 @@ pub fn list(root: &Path, rel: &str) -> Result<Vec<Entry>, WorkspaceError> {
     Ok(entries)
 }
 
+/// Skipped directories when walking a workspace tree — VCS metadata and build output, which
+/// would bury the actual source under thousands of paths.
+const WALK_SKIP: [&str; 7] = [
+    ".git",
+    "target",
+    "node_modules",
+    "dist",
+    ".cache",
+    ".venv",
+    ".isola",
+];
+
+/// Every file under `root` as a workspace-relative, forward-slashed path — sorted, deduped, and
+/// capped at `limit` (so a huge tree can't blow up a prompt). Skips VCS/build noise. Used to give
+/// a reviewer the real file layout, and to resolve a guessed `read` path by its suffix.
+#[must_use]
+pub fn list_files(root: &Path, limit: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                let name = entry.file_name();
+                if !WALK_SKIP.contains(&name.to_string_lossy().as_ref()) {
+                    stack.push(entry.path());
+                }
+            } else if kind.is_file()
+                && let Ok(rel) = entry.path().strip_prefix(root)
+            {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out.truncate(limit);
+    out
+}
+
 /// Read `rel` as UTF-8 text for the editor. Rejects non-files, files over
 /// [`FILE_VIEW_MAX_BYTES`], and binary/non-UTF-8 content.
 pub fn read_text(root: &Path, rel: &str) -> Result<String, WorkspaceError> {
@@ -166,6 +211,32 @@ mod tests {
         mkdir(&r, "notes").unwrap();
         write_text(&r, "notes/hi.txt", "hello").unwrap();
         assert_eq!(read_text(&r, "notes/hi.txt").unwrap(), "hello");
+    }
+
+    #[test]
+    fn list_files_walks_recursively_skips_noise_and_caps() {
+        let r = root();
+        std::fs::create_dir_all(r.join("projects/rogue/src")).unwrap();
+        std::fs::write(r.join("projects/rogue/src/render.rs"), "x").unwrap();
+        std::fs::write(r.join("AGENT.md"), "x").unwrap();
+        std::fs::create_dir_all(r.join("target/debug")).unwrap();
+        std::fs::write(r.join("target/debug/junk.o"), "x").unwrap();
+        std::fs::create_dir_all(r.join(".git")).unwrap();
+        std::fs::write(r.join(".git/config"), "x").unwrap();
+
+        let files = list_files(&r, 100);
+        assert!(files.contains(&"projects/rogue/src/render.rs".to_owned()));
+        assert!(files.contains(&"AGENT.md".to_owned()));
+        assert!(
+            !files.iter().any(|f| f.starts_with("target/")),
+            "build output skipped"
+        );
+        assert!(
+            !files.iter().any(|f| f.starts_with(".git/")),
+            "VCS metadata skipped"
+        );
+        // The cap bounds the output.
+        assert_eq!(list_files(&r, 1).len(), 1);
     }
 
     #[test]

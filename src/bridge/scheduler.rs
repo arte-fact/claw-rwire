@@ -150,9 +150,10 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             inference.agent_prompt.clone(),
             super::memory_layer(conn, &inference.agent_id),
         );
+        let files = workspace::list_files(&workspace_dir, 200);
         let user = ChatMessage {
             role: MessageRole::User,
-            text: validator_context(&task.spec, output),
+            text: validator_context(&task.spec, output, &files),
             time: super::now_hm(),
         };
         let messages = agent::build_messages(&system_prompt, std::slice::from_ref(&user));
@@ -293,10 +294,24 @@ fn step_context(spec: &str, prior: &[task_runs::TaskRun], step_name: &str) -> St
 }
 
 /// The user turn for a validator run: the spec and the producer's output to review.
-fn validator_context(spec: &str, output: &str) -> String {
+fn validator_context(spec: &str, output: &str, files: &[String]) -> String {
+    // List the real workspace paths so the reviewer reads the actual files instead of guessing
+    // bare names (`render.rs`) that don't resolve — the producer knows the paths, the reviewer
+    // didn't. `read` also resolves a guessed suffix, but giving the layout up front avoids the
+    // flailing entirely.
+    let tree = if files.is_empty() {
+        String::new()
+    } else {
+        let lines: Vec<String> = files.iter().map(|path| format!("- {path}")).collect();
+        format!(
+            "\n\nWorkspace files (use these exact paths with `read`):\n{}",
+            lines.join("\n")
+        )
+    };
     format!(
-        "Task spec:\n{spec}\n\nThe assignee produced this for review:\n\n{output}\n\n\
-         Review it against the spec (read the files if needed) and call the `verdict` tool."
+        "Task spec:\n{spec}\n\nThe assignee produced this for review:\n\n{output}{tree}\n\n\
+         Review it against the spec (read the files above if needed) and call the `verdict` tool \
+         with your decision and concrete feedback."
     )
 }
 
@@ -321,12 +336,39 @@ pub(super) fn last_producer_output(conn: &rusqlite::Connection, task_id: &str) -
 /// with no closing prose — a short summary of what the tools did (files written, else the calls
 /// it ran), so a task that did real work never shows a blank result.
 fn effective_output(turn: &agent::TurnResult) -> String {
-    if let Some(reply) = &turn.reply
-        && !reply.trim().is_empty()
-    {
-        return reply.clone();
+    if let Some(reply) = &turn.reply {
+        let cleaned = strip_dsml(reply);
+        if !cleaned.trim().is_empty() {
+            return cleaned;
+        }
     }
     summarize_invocations(&turn.invocations)
+}
+
+/// Strip a model's leaked native tool-call framing (deepseek's fullwidth-pipe "DSML" tags) from a
+/// reply before it's stored/displayed — `client::recover_leaked_tool_calls` already pulls runnable
+/// calls out of well-formed markup, but a bare/partial wrapper can still leak as raw text.
+fn strip_dsml(text: &str) -> String {
+    if !text.contains("DSML") && !text.contains('｜') {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('<') {
+        let (before, tail) = rest.split_at(open);
+        out.push_str(before);
+        let Some(close) = tail.find('>') else {
+            out.push_str(tail);
+            return out.replace('｜', "").trim().to_owned();
+        };
+        let tag = &tail[..=close];
+        if !(tag.contains("DSML") || tag.contains('｜')) {
+            out.push_str(tag); // a legitimate `<…>` (rare in prose) — keep it
+        }
+        rest = &tail[close + 1..];
+    }
+    out.push_str(rest);
+    out.replace('｜', "").trim().to_owned()
 }
 
 fn summarize_invocations(invocations: &[agent::ToolInvocation]) -> String {
@@ -550,7 +592,10 @@ pub fn finished(
         Err(err) => (false, err, Vec::new()),
     };
     let verdict = if matches!(role, RunRole::Validator) && ok {
+        // Prefer the structured `verdict` tool call; fall back to a prose `Verdict: …` line so a
+        // good review that forgot the tool isn't read as "no verdict" (which burns iterations).
         crate::tools::parse_verdict(&invocations)
+            .or_else(|| crate::tools::parse_verdict_prose(&output))
     } else {
         None
     };
@@ -597,13 +642,18 @@ pub fn finished(
             if !ok {
                 retry_or_fail(conn, shared, &task, &output);
             } else if let Some(step) = &step {
-                if step.validator_kind.as_deref() == Some("human") {
+                let auto = workspace_auto_approves(conn, &task.workspace_id);
+                match gate_action(step.validator_kind.as_deref(), auto) {
+                    // Auto-approve workspace: pass the sign-off gate automatically (R3 auto-approve,
+                    // extended from the plan gate to the per-task gate) instead of parking.
+                    GateAction::AutoPass => auto_pass_gate(conn, shared, &task, step, &steps),
                     // A human gate: park for the reviewer (the inbox) instead of an agent run.
-                    park_awaiting(conn, shared, &task);
-                } else {
-                    launch_validator(conn, &task, step, &output);
-                    super::tasks::project_if_active(conn, shared, &task.workspace_id);
-                    super::tasks::refresh_detail_if_open(conn, shared, &task.id);
+                    GateAction::ParkForHuman => park_awaiting(conn, shared, &task, None),
+                    GateAction::LaunchAgentReview => {
+                        launch_validator(conn, &task, step, &output);
+                        super::tasks::project_if_active(conn, shared, &task.workspace_id);
+                        super::tasks::refresh_detail_if_open(conn, shared, &task.id);
+                    }
                 }
             }
         }
@@ -612,13 +662,16 @@ pub fn finished(
                 return terminal_finish(conn, shared, &task, TaskStatus::Failed, &output);
             }
             let Some(step) = step else { return };
-            route_verdict(conn, shared, &task, &step, &steps, verdict);
+            route_verdict(conn, shared, &task, &step, &steps, verdict, false);
         }
     }
 }
 
 /// Route a validator's verdict (defaulting a missing verdict to `revise`, so a confused
-/// reviewer is bounded by the iteration cap rather than passing silently).
+/// reviewer is bounded by the iteration cap rather than passing silently). `by_human` is set when
+/// a person resolved the gate from the review inbox — their `revise` always re-runs the producer,
+/// overriding the agent loop's exhausted cap (otherwise an escalated task would re-park forever
+/// with no correction run).
 fn route_verdict(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
@@ -626,6 +679,7 @@ fn route_verdict(
     step: &Step,
     steps: &[Step],
     verdict: Option<(String, String)>,
+    by_human: bool,
 ) {
     let (decision, feedback) = verdict.unwrap_or_else(|| {
         (
@@ -646,10 +700,15 @@ fn route_verdict(
         },
         "reject" => terminal_finish(conn, shared, task, TaskStatus::Rejected, &feedback),
         _ => {
-            // revise: iterate the producer. A human reviewer is never capped (they decide when
-            // to stop); an agent validator is bounded by `max_iterations`, then on-exhaust.
-            let human = step.validator_kind.as_deref() == Some("human");
-            if human || task.iteration + 1 < step.max_iterations {
+            // revise: re-run the producer. A human reviewer (gate step, or a person resolving an
+            // escalation) is never capped — they decide when to stop; an agent validator is bounded
+            // by `max_iterations`, then on-exhaust.
+            if revise_reruns(
+                by_human,
+                step.validator_kind.as_deref(),
+                task.iteration,
+                step.max_iterations,
+            ) {
                 let _ = tasks::set_iteration(conn, &task.id, task.iteration + 1);
                 if let Ok(Some(again)) = tasks::get(conn, &task.id) {
                     relaunch(conn, &again);
@@ -674,10 +733,100 @@ fn route_verdict(
                     ),
                 );
             } else {
-                park_awaiting(conn, shared, task);
+                // on_exhaust = human: escalate to a reviewer, saying *why* (the reviewer couldn't
+                // pass it after N attempts, with the last feedback) so the gate isn't opaque.
+                let reason = format!(
+                    "escalated — not approved after {} review attempt(s): {}",
+                    step.max_iterations,
+                    if feedback.trim().is_empty() {
+                        "no clear feedback from the reviewer"
+                    } else {
+                        feedback.trim()
+                    }
+                );
+                park_awaiting(conn, shared, task, Some(&reason));
             }
         }
     }
+}
+
+/// What a finished loop producer should do at its step's validator boundary — a pure decision so
+/// it can be unit-tested. An agent validator runs a review; a human validator parks for the inbox,
+/// unless the workspace auto-approves (R3), in which case the gate passes automatically.
+#[derive(Debug, PartialEq, Eq)]
+enum GateAction {
+    LaunchAgentReview,
+    ParkForHuman,
+    AutoPass,
+}
+
+fn gate_action(validator_kind: Option<&str>, auto_approve: bool) -> GateAction {
+    match validator_kind {
+        Some("human") if auto_approve => GateAction::AutoPass,
+        Some("human") => GateAction::ParkForHuman,
+        _ => GateAction::LaunchAgentReview,
+    }
+}
+
+/// Whether a `revise` verdict should re-run the producer (vs. exhaust → on-exhaust). A pure
+/// decision so it can be unit-tested. A person resolving the gate (`by_human`) or a human-validator
+/// step is uncapped; an agent loop is bounded by `max_iterations`. The escalation bug was that a
+/// human's `revise` on an exhausted *agent* loop hit neither uncapped case and so never re-ran.
+fn revise_reruns(
+    by_human: bool,
+    validator_kind: Option<&str>,
+    iteration: i64,
+    max_iterations: i64,
+) -> bool {
+    by_human || validator_kind == Some("human") || iteration + 1 < max_iterations
+}
+
+/// Whether the task's workspace auto-approves human gates (the R3 `auto_approve` flag).
+fn workspace_auto_approves(conn: &rusqlite::Connection, workspace_id: &str) -> bool {
+    workspaces::get(conn, workspace_id)
+        .ok()
+        .flatten()
+        .is_some_and(|ws| ws.auto_approve)
+}
+
+/// Auto-pass a human gate for an auto-approve workspace: record an `(auto) pass` validator run (so
+/// the run chain shows the gate was auto-approved, not silently skipped), then route the loop
+/// exactly like a human/agent `pass`. Mirrors [`human_verdict`]'s record-then-route.
+fn auto_pass_gate(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    task: &Task,
+    step: &Step,
+    steps: &[Step],
+) {
+    if let Ok(run_id) = crate::id::new_id() {
+        let _ = task_runs::append(
+            conn,
+            &task_runs::NewRun {
+                id: &run_id,
+                task_id: &task.id,
+                position: task.step_position,
+                role: "validator",
+                agent: None,
+                output: Some("(auto) pass"),
+                verdict: Some("pass"),
+                feedback: Some("(auto-approved)"),
+                iteration: task.iteration,
+                ok: true,
+                transcript: None,
+                attempt: task.attempt,
+            },
+        );
+    }
+    route_verdict(
+        conn,
+        shared,
+        task,
+        step,
+        steps,
+        Some(("pass".to_owned(), "(auto-approved)".to_owned())),
+        false,
+    );
 }
 
 /// Whether a task being (re)launched can claim the lane now, or must queue. A task resumed from a
@@ -821,21 +970,36 @@ fn cancel_stranded_dependents(
 }
 
 /// Park a task at a human gate (a human validator, or a loop's on-exhaust = human). Frees the
-/// lane; the review inbox lets the user resolve it. On the first park, pings the origin chat.
-fn park_awaiting(conn: &rusqlite::Connection, shared: &SharedServerState, task: &Task) {
+/// lane; the review inbox lets the user resolve it. `reason` is set on an **escalation** (the loop
+/// exhausted its attempts) — it's recorded on the task and surfaced in the ping + activity so the
+/// gate isn't a silent `awaiting` with no explanation.
+fn park_awaiting(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    task: &Task,
+    reason: Option<&str>,
+) {
     if let Err(err) = tasks::set_status(conn, &task.id, TaskStatus::Awaiting) {
         log_line(format!("scheduler: park {} failed: {err}", task.id));
     }
-    // A cheap, always-works ping (not an LLM turn) on the first park, so the gate is noticed.
-    if task.iteration == 0
+    if let Some(reason) = reason {
+        let _ = tasks::set_result(conn, &task.id, reason);
+    }
+    // Ping the origin chat (a cheap, always-works notice, not an LLM turn): on the first park, or
+    // whenever a task escalates — an escalation can land at iteration > 0, which would otherwise
+    // park silently.
+    if (task.iteration == 0 || reason.is_some())
         && let Some(chat) = &task.origin_chat
     {
+        let why = reason
+            .map(|reason| format!(" ({reason})"))
+            .unwrap_or_default();
         let _ = crate::db::chat::append_message(
             conn,
             chat,
             MessageRole::Agent,
             &format!(
-                "🔔 Task **{}** is ready for your review — open the **Review** tab.",
+                "🔔 Task **{}** needs your review{why} — open the **Review** tab.",
                 task.title
             ),
         );
@@ -847,7 +1011,7 @@ fn park_awaiting(conn: &rusqlite::Connection, shared: &SharedServerState, task: 
         shared,
         task,
         ActivityKind::Started,
-        "awaiting review".to_owned(),
+        reason.unwrap_or("awaiting review").to_owned(),
     );
 }
 
@@ -893,10 +1057,11 @@ pub fn human_verdict(
             },
         );
     }
-    // Route exactly like an agent verdict. The advance/revise paths go through `relaunch`, which
-    // re-claims the lane (status → running) only if it's free — otherwise it queues the task, so a
-    // resume never starts a second worker alongside one the scheduler launched while this task was
-    // parked. (The pre-verdict `task` carries the right step/iteration; status is unread here.)
+    // Route like an agent verdict, but flagged `by_human` so a `revise` always re-runs the producer
+    // even past an agent loop's exhausted cap (the escalation case). The advance/revise paths go
+    // through `relaunch`, which re-claims the lane (status → running) only if it's free — otherwise
+    // it queues the task, so a resume never starts a second worker alongside one the scheduler
+    // launched while this task was parked. (The pre-verdict `task` carries the right step/iteration.)
     route_verdict(
         conn,
         shared,
@@ -904,6 +1069,7 @@ pub fn human_verdict(
         &step,
         &steps,
         Some((decision.to_owned(), feedback.to_owned())),
+        true,
     );
     super::review::project_count(conn, shared);
 }
@@ -920,8 +1086,11 @@ fn plan_verdict(
 ) {
     match decision {
         "pass" => {
-            if let Err(err) = tasks::release_plan(conn, &task.id) {
-                log_line(format!("scheduler: release plan {} failed: {err}", task.id));
+            // Approve (R3 Option A): materialise the proposal into real queued tasks now — nothing
+            // existed on the board before this.
+            match tasks::proposal::materialize(conn, &task.id, task.origin_chat.as_deref()) {
+                Ok(count) => log_line(format!("scheduler: plan {} → {count} task(s)", task.id)),
+                Err(err) => log_line(format!("scheduler: materialize {} failed: {err}", task.id)),
             }
             let _ = tasks::finish(conn, &task.id, TaskStatus::Done, Some("approved"));
             activity(
@@ -932,9 +1101,8 @@ fn plan_verdict(
             );
         }
         "reject" => {
-            if let Err(err) = tasks::cancel_plan_children(conn, &task.id) {
-                log_line(format!("scheduler: cancel plan {} failed: {err}", task.id));
-            }
+            // Nothing was created — just discard the proposal and close the gate.
+            let _ = tasks::proposal::clear(conn, &task.id);
             let _ = tasks::finish(conn, &task.id, TaskStatus::Rejected, Some(feedback));
             activity(
                 shared,
@@ -946,9 +1114,7 @@ fn plan_verdict(
         _ => {
             // revise: discard the current proposal and re-plan with the feedback; the plan stays
             // at the gate for another review.
-            if let Err(err) = tasks::cancel_plan_children(conn, &task.id) {
-                log_line(format!("scheduler: clear plan {} failed: {err}", task.id));
-            }
+            let _ = tasks::proposal::clear(conn, &task.id);
             super::orchestrate::replan(conn, task, feedback);
             activity(
                 shared,
@@ -986,6 +1152,72 @@ mod tests {
         assert_eq!(next_action(1, 2, true), Next::Done); // last step → done
         assert_eq!(next_action(0, 1, true), Next::Done); // single (default) stage → done
         assert_eq!(next_action(0, 3, false), Next::Fail); // failure ends regardless of position
+    }
+
+    #[test]
+    fn strip_dsml_scrubs_leaked_control_tokens_but_keeps_prose() {
+        // A bare leaked wrapper scrubs to nothing (so it won't display as the result).
+        assert!(strip_dsml("<｜｜DSML｜｜tool_calls>").is_empty());
+        // Prose around a leaked tag keeps the prose, drops the tag + stray pipes.
+        let cleaned = strip_dsml("Reviewing <｜｜DSML｜｜invoke name=\"read\"> the code");
+        assert!(
+            !cleaned.contains("DSML") && !cleaned.contains('｜'),
+            "{cleaned}"
+        );
+        assert!(cleaned.contains("Reviewing") && cleaned.contains("the code"));
+        // Ordinary text is untouched.
+        assert_eq!(
+            strip_dsml("Verdict: pass — looks good."),
+            "Verdict: pass — looks good."
+        );
+    }
+
+    #[test]
+    fn validator_context_lists_the_real_file_paths() {
+        let files = vec!["projects/rogue/src/render.rs".to_owned()];
+        let ctx = validator_context("the spec", "the output", &files);
+        assert!(
+            ctx.contains("projects/rogue/src/render.rs"),
+            "lists real paths"
+        );
+        assert!(ctx.contains("verdict"));
+        // No files → no tree section (don't dangle an empty heading).
+        assert!(!validator_context("s", "o", &[]).contains("Workspace files"));
+    }
+
+    #[test]
+    fn revise_reruns_covers_human_override_and_the_agent_cap() {
+        // Agent loop within budget → re-run; once exhausted → don't (let on-exhaust handle it).
+        assert!(revise_reruns(false, Some("agent"), 0, 2));
+        assert!(
+            !revise_reruns(false, Some("agent"), 1, 2),
+            "exhausted agent loop stops"
+        );
+        // A human-validator step is never capped.
+        assert!(revise_reruns(false, Some("human"), 9, 2));
+        // The escalation fix: a *person* resolving an exhausted agent loop always re-runs.
+        assert!(
+            revise_reruns(true, Some("agent"), 1, 2),
+            "a human's revise must re-run even past the agent cap"
+        );
+    }
+
+    #[test]
+    fn gate_action_routes_agent_human_and_auto_approve() {
+        // Agent validator → always a review run, regardless of auto-approve.
+        assert_eq!(
+            gate_action(Some("agent"), false),
+            GateAction::LaunchAgentReview
+        );
+        assert_eq!(
+            gate_action(Some("agent"), true),
+            GateAction::LaunchAgentReview
+        );
+        // Human gate → park by default, auto-pass when the workspace auto-approves (R3).
+        assert_eq!(gate_action(Some("human"), false), GateAction::ParkForHuman);
+        assert_eq!(gate_action(Some("human"), true), GateAction::AutoPass);
+        // No validator (a plain stage shape) → never a human gate.
+        assert_eq!(gate_action(None, true), GateAction::LaunchAgentReview);
     }
 
     #[test]

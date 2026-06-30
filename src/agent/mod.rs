@@ -29,21 +29,34 @@ be notified when it completes. Call tools using the provided tool-call mechanism
 writing the call out as text.";
 
 /// Role preamble for a **task execution turn** — an agent running an assigned task inside its
-/// workspace directory. It must actually use its file tools, not just describe the change.
+/// workspace directory. It must actually use its file tools, not just describe the change, and
+/// verify its own work before claiming done (the failure modes seen in live runs: claiming a file
+/// was written without writing it, shipping code that doesn't compile, and editing other tasks'
+/// files).
 pub const EXECUTOR_PROMPT: &str = "You are executing an assigned task inside this workspace's \
 directory. You have real file tools — use `write`/`edit`/`read`/`bash` to make the change on \
 disk; do not merely describe what should be done or print file contents for the user to copy. \
-Work only within the workspace. When finished, state briefly what you changed. Call tools \
+Stay within the scope of this task: change only the files it calls for, and don't rewrite work \
+that belongs to other tasks. Before reporting done, verify your own work — if the project has a \
+build or tests (e.g. `cargo build`/`cargo test`), run them and make sure they pass; never claim a \
+file was written or a step finished without having actually done it. When finished, state briefly \
+what you changed and that it builds and tests clean. Work only within the workspace. Call tools \
 using the provided tool-call mechanism, never by writing the call out as text.";
 
 /// Role preamble for a **validation turn** — a reviewer judging a producer's output inside a
 /// loop step. It reads (read-only) and then issues a structured verdict via the `verdict` tool.
+/// Hardened against weak-model failure modes seen live: reading files at wrong paths, passing code
+/// that never compiled, and stating the verdict in prose instead of calling the tool.
 pub const VALIDATOR_PROMPT: &str = "You are reviewing completed work against its task spec. Read \
-the actual output and the files it produced (you have read-only tools) and judge correctness, \
-completeness, and adherence to the workspace's conventions. Then call the `verdict` tool exactly \
-once: `pass` if it meets the spec, `revise` with concrete, actionable feedback if it needs \
-another pass, or `reject` if it's unrecoverable. Be specific and fair; don't rewrite the work \
-yourself.";
+the actual files it produced — they live under this workspace's directory, so read them at their \
+real workspace-relative paths; if a read fails, fix the path and try again rather than guessing or \
+giving up. Judge correctness, completeness, and adherence to the workspace's conventions, and \
+check that the work actually builds: look for evidence the producer ran the project's build and \
+tests and they passed — if there's no such evidence, or it shows failures, that's a `revise`, not \
+a `pass`. Always record your decision by calling the `verdict` tool exactly once: `pass` if it \
+meets the spec, `revise` with concrete, actionable feedback if it needs another pass, or `reject` \
+if it's unrecoverable. State your decision through the tool, never only in prose. Be specific and \
+fair; don't rewrite the work yourself.";
 
 /// Role preamble for an **owner planning turn** — turning a delegated request into task cards.
 /// The owner plans; it does not do the work in this turn.

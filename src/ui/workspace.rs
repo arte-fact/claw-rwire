@@ -198,20 +198,22 @@ pub fn dashboard(app: &App) -> ElementBuilder {
         ])
 }
 
-/// The auto-approve toggle (R3): off = delegated work waits at the plan-review gate; on = the
-/// owner's tasks queue directly. Clicking flips it.
+/// The auto-approve toggle (R3): off = delegated work waits at the human gates; on = the plan is
+/// queued directly and per-task sign-off gates pass automatically, so the workspace runs hands-off
+/// (an agent reviewer in a loop step still reviews — only the *human* gates are skipped). Clicking
+/// flips it.
 fn auto_approve_toggle(workspace: &WorkspaceView) -> ElementBuilder {
     let on = workspace.auto_approve;
     let (label, hint, chip) = if on {
         (
             "Auto-approve · ON",
-            "Delegated work is queued directly — no plan review.",
+            "Runs hands-off — the plan and per-task sign-offs pass automatically (agent review still runs).",
             St::BgAccent,
         )
     } else {
         (
             "Auto-approve · OFF",
-            "Delegated work waits for your approval in the plan gate (Review).",
+            "Delegated work waits for your approval — at the plan gate and each task's sign-off.",
             St::BgApp,
         )
     };

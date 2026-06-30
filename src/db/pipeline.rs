@@ -142,7 +142,9 @@ pub fn insert(
     Ok(())
 }
 
-/// Insert a plain stage (used by the seed). `id` is caller-minted.
+/// Insert a plain stage. A thin `insert` wrapper kept as a test helper (the seed no longer uses
+/// stage steps — Studio's pipeline is two loop steps). `id` is caller-minted.
+#[cfg(test)]
 pub fn insert_stage(
     conn: &Connection,
     id: &str,

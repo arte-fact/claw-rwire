@@ -111,22 +111,20 @@ fn run_view(
     }
 }
 
-/// A plan's proposed (held) child tasks as view-models for the Review inbox (R3).
+/// A plan's proposed tasks as view-models for the Review inbox (R3, Option A) — read straight from
+/// the plan's JSON proposal, before any task rows exist. `agent` is already the member's name.
 pub(super) fn proposed_tasks(
     conn: &rusqlite::Connection,
     plan_id: &str,
 ) -> Vec<crate::state::ProposedTask> {
-    let names = agent_names(conn);
-    tasks::children_of_plan(conn, plan_id)
+    tasks::proposal::get(conn, plan_id)
         .unwrap_or_default()
         .into_iter()
-        .map(|task| crate::state::ProposedTask {
-            title: task.title,
-            spec: task.spec,
-            agent: task
-                .agent
-                .and_then(|id| names.iter().find(|(i, _)| *i == id).map(|(_, n)| n.clone())),
-            schedule: task.schedule,
+        .map(|item| crate::state::ProposedTask {
+            title: item.title,
+            spec: item.spec,
+            agent: item.agent,
+            schedule: item.schedule,
         })
         .collect()
 }
@@ -161,6 +159,7 @@ fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::sta
             title: task.title,
             spec: task.spec,
             awaiting: task.status == tasks::TaskStatus::Awaiting,
+            archived: task.archived_at.is_some(),
             status: task.status.as_str().to_owned(),
             runs,
         }
@@ -473,6 +472,28 @@ pub fn restart(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str
     };
     if let Err(err) = tasks::restart(conn, id) {
         return surface(shared, format!("restart task: {err}"));
+    }
+    reproject(conn, shared, id, &task.workspace_id);
+}
+
+/// Archive a terminal task — drop it from the board (the run chain is preserved, restorable).
+pub fn archive(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+    let Ok(Some(task)) = tasks::get(conn, id) else {
+        return;
+    };
+    if let Err(err) = tasks::archive(conn, id) {
+        return surface(shared, format!("archive task: {err}"));
+    }
+    reproject(conn, shared, id, &task.workspace_id);
+}
+
+/// Restore an archived task to the board.
+pub fn unarchive(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+    let Ok(Some(task)) = tasks::get(conn, id) else {
+        return;
+    };
+    if let Err(err) = tasks::unarchive(conn, id) {
+        return surface(shared, format!("unarchive task: {err}"));
     }
     reproject(conn, shared, id, &task.workspace_id);
 }

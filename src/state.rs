@@ -425,6 +425,8 @@ pub struct TaskDetail {
     pub status: String,
     /// Whether the task is parked at a human gate (the actions show).
     pub awaiting: bool,
+    /// Whether the task is archived (hidden from the board) — its control bar offers Unarchive.
+    pub archived: bool,
     pub runs: Vec<RunView>,
 }
 

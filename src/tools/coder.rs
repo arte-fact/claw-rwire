@@ -113,7 +113,7 @@ impl Toolbox for CoderToolbox {
 
 impl CoderToolbox {
     fn read(&self, args: &Value) -> Result<String, String> {
-        let path = self.resolve(str_arg(args, "path")?)?;
+        let path = self.locate(str_arg(args, "path")?)?;
         let content =
             std::fs::read_to_string(&path).map_err(|err| format!("error: cannot read: {err}"))?;
         let offset = usize_arg(args, "offset").unwrap_or(1).max(1);
@@ -160,6 +160,48 @@ impl CoderToolbox {
                 "error: old_string matched {n} times, must be unique"
             )),
         }
+    }
+
+    /// Resolve a path to **read**: the jailed path if it exists, else a unique workspace file
+    /// whose path ends with the request — so a reviewer's guessed `render.rs` finds the real
+    /// `projects/…/render.rs` instead of failing. Ambiguous or no match → the jailed path (the
+    /// read then errors clearly). Only `read` is forgiving; write/edit still demand an exact path.
+    fn locate(&self, path: &str) -> Result<PathBuf, String> {
+        let jailed = self.resolve(path)?;
+        if jailed.exists() {
+            return Ok(jailed);
+        }
+        Ok(self.find_by_suffix(path).unwrap_or(jailed))
+    }
+
+    /// A unique workspace file matching `raw` by path suffix (preferred) or, failing that, by
+    /// basename. `None` if there's no match or it's ambiguous (so the caller doesn't guess wrong).
+    fn find_by_suffix(&self, raw: &str) -> Option<PathBuf> {
+        let needle = raw.trim().trim_start_matches("./").trim_matches('/');
+        if needle.is_empty() {
+            return None;
+        }
+        let files = workspace::list_files(&self.workspace, 5000);
+        let suffix: Vec<&String> = files
+            .iter()
+            .filter(|rel| rel.as_str() == needle || rel.ends_with(&format!("/{needle}")))
+            .collect();
+        let rel = match suffix.as_slice() {
+            [only] => Some((*only).clone()),
+            [] => {
+                let base = needle.rsplit('/').next().unwrap_or(needle);
+                let by_base: Vec<&String> = files
+                    .iter()
+                    .filter(|rel| rel.rsplit('/').next() == Some(base))
+                    .collect();
+                match by_base.as_slice() {
+                    [only] => Some((*only).clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        rel.map(|rel| self.workspace.join(rel))
     }
 
     /// Jail a model-supplied path into the workspace, turning an escape into a tool-error
@@ -274,5 +316,39 @@ mod tests {
         let o = tb.call(WRITE, "not json");
         assert!(!o.ok);
         assert!(o.result.contains("invalid arguments"));
+    }
+
+    #[test]
+    fn read_resolves_a_guessed_path_by_suffix() {
+        let (tb, _) = toolbox();
+        tb.call(
+            WRITE,
+            r#"{"path":"projects/rogue/src/render.rs","content":"fn render(){}"}"#,
+        );
+        // A reviewer's bare guess resolves to the unique real file (the #1 friction).
+        let bare = tb.call(READ, r#"{"path":"render.rs"}"#);
+        assert!(bare.ok, "{}", bare.result);
+        assert!(bare.result.contains("fn render(){}"));
+        // A partial suffix resolves too.
+        let suffix = tb.call(READ, r#"{"path":"src/render.rs"}"#);
+        assert!(suffix.ok, "{}", suffix.result);
+    }
+
+    #[test]
+    fn read_does_not_guess_an_ambiguous_basename() {
+        let (tb, _) = toolbox();
+        tb.call(WRITE, r#"{"path":"a/mod.rs","content":"A"}"#);
+        tb.call(WRITE, r#"{"path":"b/mod.rs","content":"B"}"#);
+        // Two `mod.rs` — ambiguous, so no silent guess; the literal miss errors.
+        let r = tb.call(READ, r#"{"path":"mod.rs"}"#);
+        assert!(!r.ok, "ambiguous basename must not resolve: {}", r.result);
+    }
+
+    #[test]
+    fn read_suffix_fallback_never_escapes_the_workspace() {
+        let (tb, _) = toolbox();
+        // A basename that only matches outside the jail must not resolve to anything.
+        let r = tb.call(READ, r#"{"path":"passwd"}"#);
+        assert!(!r.ok);
     }
 }

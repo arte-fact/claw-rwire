@@ -234,7 +234,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   max_retries     INTEGER,                             -- per-task auto-retry budget; NULL = global default
   attempt         INTEGER NOT NULL DEFAULT 0,          -- manual-restart generation (isolates run-chain context)
   is_plan         INTEGER NOT NULL DEFAULT 0,          -- a reviewable "Plan" gate task (R3), not pipeline work
-  plan_id         TEXT,                                -- for a held child: the plan task it belongs to (R3)
+  plan_id         TEXT,                                -- a task materialised from a plan: the plan it came from (R3)
+  proposal        TEXT,                                -- a plan task's proposed breakdown as JSON, before approval (R3 Option A)
+  archived_at     TEXT,                                -- a terminal task hidden from the board to declutter it
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );

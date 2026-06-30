@@ -5,32 +5,40 @@
 > gate in front of that: the owner *proposes* a breakdown, the user **approves / revises / rejects**
 > it, and only on approval are the child tasks created and queued.
 
-## DECISION (chosen)
+## DECISION — Option A (breakdown-as-data), shipped
 
-**Option B — held child tasks**, plus a **per-workspace auto-approve** setting. (The doc below also
-describes Option A, which was *not* chosen; kept for context.)
+The first cut shipped **Option B** (held `stopped` child tasks). It was later **migrated to Option A**
+(the originally-recommended route) because revise left cancelled tombstones, held cards cluttered the
+board before approval, and a crash between create-held and gate could orphan children. Option A keeps
+the board empty until approval — the proposal is *pure data*.
 
-**Chosen flow:**
+**Shipped flow:**
 ```
 concierge ask ─► Command::Ask ─► orchestrate::ask
-   if workspace.auto_approve  ─► run owner planning turn, create children PENDING (today's behaviour)
-   else (default):
-     mint plan_id; create a PLAN task (is_plan=1) in column 1
-     run owner planning turn ─► create_task ×N create children STOPPED (held), plan_id = <plan id>
-     ─► PLAN task parks AWAITING (the gate); Review shows the held children (the breakdown)
-          ├─ approve ─► release: held children STOPPED→PENDING; plan task → done
-          ├─ reject  ─► cancel the held children; plan task → rejected
-          └─ revise  ─► cancel held children, re-run planning with feedback; re-park
+   mint plan_id; create a PLAN task (is_plan=1, parks AWAITING) in column 1
+   run owner planning turn ─► propose_tasks([...]) appends a JSON proposal onto the plan task
+     (tools/planning.rs → tasks::proposal::append) — NO child rows yet
+   ─► Review shows the proposal (tasks::proposal::get → ProposedTask cards)
+        ├─ approve ─► tasks::proposal::materialize: create real PENDING tasks (plan_id-tagged),
+        │             wire blockers by title; plan task → done
+        ├─ reject  ─► tasks::proposal::clear; plan task → rejected   (nothing to undo)
+        └─ revise  ─► tasks::proposal::clear; re-run planning with feedback; re-park
+   if workspace.auto_approve ─► orchestrate::planned materialises the proposal immediately
+                                (plan task → done "auto-approved"), no gate
 ```
 
-**Key implementation notes (B):**
-- `tasks` gains `plan_id TEXT` (child → its plan) and `is_plan INTEGER DEFAULT 0` (the gate task).
-- Held children are created with status `stopped` (the M0 state) so they sit out of the scheduler;
-  `next_ready` must also **skip `is_plan` tasks** (the plan card never "runs" as pipeline work).
-- `auto_approve` is a per-workspace flag (a `workspaces` column, default 0 = always gate). Its
-  toggle lives on the workspace Team tab. Core lands gate-always first; the toggle follows.
-- Review of a plan task renders its **held children** (not a producer run): the proposed cards
-  (title · assignee · blockers · schedule) with the existing Approve / Request-changes / Reject.
+**Key implementation notes (A, as built):**
+- `tasks` gains `proposal TEXT` (the plan's JSON breakdown before approval), alongside the existing
+  `is_plan` (the gate task) and `plan_id` (a *materialised* task → the plan it came from).
+- `propose_tasks([{title, spec, agent?, schedule?, blockers?}])` replaces `create_task` in the
+  planning toolbox; `blockers` reference other proposed tasks **by title** (no ids exist yet),
+  resolved to real ids at materialise time.
+- `next_ready` already **skips `is_plan` tasks**; materialised children are plain `pending` tasks
+  gated by the blocker graph, so they run as soon as their blockers finish.
+- `auto_approve` is a per-workspace flag (default 0 = always gate); ON also auto-passes per-task
+  human sign-off gates (`scheduler::gate_action`), so the workspace runs hands-off end to end.
+- Review of a plan renders the **proposal JSON** (title · assignee · blockers · schedule) with the
+  existing Approve / Request-changes / Reject.
 
 ---
 
