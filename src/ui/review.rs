@@ -4,13 +4,13 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, ReviewItem};
 use crate::ui::widgets::{accent_submit, page_header};
 use crate::ui::workspace::card;
-use rwire_components::{Button, ButtonSize};
+use rwire_components::{Button, ButtonSize, Input};
 
 pub fn page() -> ElementBuilder {
     el(El::Div)
@@ -81,16 +81,15 @@ fn review_card(item: &ReviewItem, toggled: &[String]) -> ElementBuilder {
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
                     el(El::Input)
-                        .attr("type", "hidden")
-                        .attr("name", "task")
-                        .attr("value", &item.task_id),
-                    el(El::Input)
-                        .attr("name", "feedback")
-                        .attr("placeholder", "What to change…")
-                        .attr("autocomplete", "off")
-                        .style(Style::new().set("font", "inherit").set("flex", "1"))
-                        .st(field_st())
-                        .focus([St::BorderAccent]),
+                        .at(At::Type, Av::Hidden)
+                        .at_str(At::Name, "task")
+                        .at_str(At::Value, &item.task_id),
+                    Input::text()
+                        .name("feedback")
+                        .placeholder("What to change…")
+                        .autocomplete("off")
+                        .build()
+                        .st([St::Flex1]),
                     submit_chip("Request changes"),
                 ]),
         ]);
@@ -190,18 +189,6 @@ fn plain(label: &str, on_click: rwire::HandlerSpec, task: &str) -> ElementBuilde
 
 fn submit_chip(label: &str) -> ElementBuilder {
     accent_submit(icons::Icon::ArrowUp, label)
-}
-
-fn field_st() -> [St; 7] {
-    [
-        St::PxSm,
-        St::PySm,
-        St::BorderDefault,
-        St::Rounded0,
-        St::BgApp,
-        St::TextHigh,
-        St::OutlineNone,
-    ]
 }
 
 #[handler]

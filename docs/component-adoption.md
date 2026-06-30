@@ -79,7 +79,9 @@ Component adoption is net-negative — the components absorb the styling/attrs c
 | task_detail (Peek modal) | −23 |
 | run_chain (mostly custom) | −3 |
 | mod (shell nav badge) | −7 |
-| **total (11 screens)** | **−385** (+265 / −650) |
+| review (feedback → Input) | −13 |
+| workspace_workflow (step editor → Drawer) | −51 |
+| **total (12 screens)** | **−449** (+290 / −739) |
 
 Trend: ~−40 lines/screen on form-heavy screens, less on text-only ones. Remaining screens
 (`workspace_tasks` is the big one) should keep the slope.
@@ -90,20 +92,20 @@ Tick a screen only when it lands green on the gate **and** is visually re-checke
 several sub-swaps (Button / Input / Select / Card / …); list them so partial progress is visible.
 
 - [ ] **`widgets.rs`** (shared helpers — highest leverage) — `accent_submit`/`icon_button`/`action`/`action_icon` → `Button`. _Blocked: owner's uncommitted token migration; coordinate first._
-- [x] **`workspace_workflow.rs`** — [x] `Alert` (lock notices) · [x] `Button` (add/move/delete via `icon_btn`/`add_btn`) · [x] `Input`/`Textarea`/`Select` (step form fields, pre-selection confirmed). [ ] submit + ✕-close stay raw (Button has no submit-type method; `icon_only` is uncommitted) · [ ] `labeled`→`FormField` deferred. _Gate-green (fmt/clippy/168 tests) **+ visually verified** (step editor renders all fields with correct pre-filled/selected values)._
+- [x] **`workspace_workflow.rs`** — [x] `Alert` (lock notices) · [x] `Button` (add/move/delete via `icon_btn`/`add_btn`) · [x] `Input`/`Textarea`/`Select` (step form fields, pre-selection confirmed) · [x] **step editor → `Drawer`** (the hand-rolled backdrop+panel+header replaced by `Drawer::new().position(Right).title().on_close().content()` — now matches `workspace_tasks::new_task_drawer`; drops `step_drawer_header` + the manual scaffolding, and the `At`/`Av`/`icons`/`Style`-width imports it needed). [ ] submit stays raw (Button has no submit-type method) · [ ] `labeled`→`FormField` deferred. _Gate-green (fmt/clippy/168 tests) **+ live-verified**: drawer slides in (`transform:none`, z1400 above backdrop, sharp `border-radius:0`), all fields pre-selected (Execute/Stage/Forge/Human/park), backdrop-close slides it out._
 - [~] **`workspace.rs`** — [x] `Card` (all Team/Overview blocks via `card()`) · [x] `Input` (name) · [x] `Select` (owner, pre-selection confirmed) · [x] `Text` (roster/hints/empties/errors via `Text::body`/`caption`). [ ] member toggle-chips + auto-approve toggle stay raw (state-styled buttons) · [ ] brief editor stays raw (custom `FontMono` + min-height) · [ ] delete uses shared `widgets::action` (migrate with widgets.rs). _Gate-green + visually verified._
 - [~] **`prompts.rs`** — [x] `Select` (agent picker) · [x] `Textarea` (role + memory editors) · [x] `Button` (`plain_button`). [ ] run-kind chips stay raw (toggle-state) · [ ] `text_block` stays raw (custom pre-wrap/word-break) · [ ] `Text` for headings/empties/context deferred. _Gate-green._
 - [~] **`system_map/agents.rs`** — [x] `Select` (endpoint + model) · [x] `Textarea` (persona). [ ] tool-chips stay raw (toggle-state) · [ ] `action`/`badge`/`text_input` are shared `system_map` helpers (migrate in `system_map/mod.rs`). _Gate-green._
 - [x] **`system_map/mod.rs`** — [x] `Input` (shared `text_input`/`field` → propagates to agents + endpoints tiers) · [x] `Select` (channel picker) · [x] `Alert` (error banner); drops `select_st()`. Already had `Text`/`Drawer`/`action`/`submit`. _Gate-green._
 - [~] **`workspace_tasks.rs`** — [x] create + edit forms → `Input`/`Textarea`/`Select` (drops `input_st()`/`owner_option`) · [x] `status_badge` → `Badge` · [x] Approve/Restart → `Button` · [x] empty states → `Text`. [ ] toggle/filter/view chips + icon "New task" + card-title buttons stay raw (toggle-state / icon+text). _Gate-green; live visual deferred (server wouldn't relaunch this session)._
-- [~] **`task_detail.rs`** — [x] `Button` (control bar + review gate) · [x] `Input` (feedback) · [x] `Text` (notes). [ ] tab chips → `Tabs` (needs server-driven active) · [ ] ✕-close raw (icon-only) · [ ] Peek overlay → `Modal` (rwire backdrop fix now committed — unblocked). _Gate-green._
-- [~] **`review.rs`** — [x] buttons → `Button` (approve/reject/open). [ ] feedback field → `Input`; [ ] `card()` → `Card`; [ ] submit chip → `Button`
+- [~] **`task_detail.rs`** — [x] `Button` (control bar + review gate) · [x] `Input` (feedback) · [x] `Text` (notes). [ ] tab chips → `Tabs` **blocked**: the `Tabs` component renders no click handler on its tab buttons (no `on_tab_change`) and always renders every panel — the Peek needs server-driven `set_detail_tab` and renders only the active body (Activity = live feed + run chain). Needs an `on_tab_change` API in rwire `Tabs` first. [ ] ✕-close raw (icon-only) · [ ] Peek overlay → `Modal` **stays custom by design**: `Modal` puts all content in a single scroll wrapper and only takes a `&str` title, so it can't host the Peek's fixed-height panel + **pinned head** (close/rich-header/tabs) over a separately-scrolling body, nor the rich header (avatar + status + live step). Migrating would regress the UX; the hand-rolled overlay already paints correctly above the backdrop. _Gate-green._
+- [x] **`review.rs`** — [x] buttons → `Button` (approve/reject/open) · [x] feedback field → `Input` (drops `field_st()` + manual font/flex styling; hidden input `.attr()`→`At`/`Av` tokens) · [x] `card()` → `Card` (the shared `workspace::card` helper already wraps `Card`) · [x] submit chip → `Button` (the shared `widgets::accent_submit` already wraps `Button` + `type=submit`). _Gate-green._
 - [~] **`run_chain.rs`** — [x] prose notes → `Text`. [ ] collapse/diffs/transcripts stay raw (custom by necessity; `Accordion` migration deliberately deferred). _Gate-green._
 - [~] **`dashboard.rs`** — [x] `Input` (create form) · [x] `Text` (name/owner/empty/needs-you). [ ] lane line stays raw (dynamic color incl. `TextLow`, no `Text` variant). _Gate-green._
 - [x] **`mod.rs`** (shell nav) — [x] `review_badge` → `Badge`. Nav rows/status/logout stay bespoke (would need `AppShell`/`NavMenu` restructure). _Gate-green._
 - [ ] _coordinate before touching:_ **`chat.rs`**, **`files.rs`**, **`widgets.rs`** — mid token-migration (owner's uncommitted work)
 
 **Cross-cutting (do once the components are adopted):**
-- [ ] Migrate Peek modal + step editor from custom overlays → `Modal` / `Drawer` (after the rwire `Modal` backdrop-z + `Drawer` fixes land — see `HANDOFF-from-claw.md`)
+- [~] Migrate Peek modal + step editor from custom overlays → `Modal` / `Drawer`. [x] **step editor → `Drawer`** (done — see `workspace_workflow.rs` above). [ ] **Peek → `Modal` stays custom by design** — `Modal` can't host the fixed-height panel with a pinned head (close/rich-header/tabs) over a separately-scrolling body, nor a rich (non-`&str`) header; migrating regresses the UX. See `task_detail.rs` above.
 - [ ] Replace remaining custom `status_badge`/`verdict_chip` → `Badge`/`Tag` consistently
 - [ ] Replace ad-hoc flex `el(El::Div).st([DisplayFlex…])` → `Stack` where it improves readability

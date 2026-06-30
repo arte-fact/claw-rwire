@@ -5,12 +5,14 @@
 //! `App.workflow_steps` / `workflow_locked` / `editing_step`.
 
 use rwire::style::Style;
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, StepForm, StepView, WorkspaceView};
 use crate::ui::widgets::page_header;
-use rwire_components::{Alert, Button, ButtonSize, Input, Select, Textarea};
+use rwire_components::{
+    Alert, Button, ButtonSize, Drawer, DrawerPosition, Input, Select, Textarea,
+};
 
 pub fn page() -> ElementBuilder {
     el(El::Div)
@@ -80,71 +82,18 @@ fn body(app: &App) -> ElementBuilder {
         .append(sections)
 }
 
-/// The in-situ step editor — a right-side overlay opened from a board column header. Shows the
+/// The in-situ step editor — a right-side `Drawer` opened from a board column header. Shows the
 /// step's edit form (plus move/delete), or a "locked" note while the workspace has tasks in flight.
-/// Built by hand (backdrop + panel as siblings, toggled by `editing_step`) — the same reliable
-/// pattern as the Peek modal, rather than the `Drawer` component.
+/// Matches the new-task drawer (`workspace_tasks::new_task_drawer`); the component supplies the
+/// backdrop, slide animation, and the titled close header.
 pub(crate) fn step_drawer(app: &App) -> ElementBuilder {
-    if app.editing_step.is_none() {
-        return el(El::Div).st([St::DisplayNone]);
-    }
-    el(El::Div)
-        .st([
-            St::PositionFixed,
-            St::Inset0,
-            St::Z1400,
-            St::DisplayFlex,
-            St::JustifyEnd,
-        ])
-        .append([
-            el(El::Div)
-                .st([
-                    St::PositionAbsolute,
-                    St::Inset0,
-                    St::BgOverlay50,
-                    St::CursorPointer,
-                ])
-                .on(Ev::Click, close_step_edit()),
-            el(El::Div)
-                .style(Style::new().set("width", "24rem").set("max-width", "100%"))
-                .st([
-                    St::PositionRelative,
-                    St::DisplayFlex,
-                    St::FlexCol,
-                    St::GapMd,
-                    St::BgApp,
-                    St::BorderDefault,
-                    St::OverflowYAuto,
-                    St::PLg,
-                ])
-                .append([step_drawer_header(), step_drawer_body(app)]),
-        ])
-}
-
-/// The overlay header: a title and a close (✕) button.
-fn step_drawer_header() -> ElementBuilder {
-    el(El::Div)
-        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-        .append([
-            el(El::Span)
-                .st([St::Flex1, St::TextLg, St::TextHigh, St::FontSemibold])
-                .text("Edit pipeline step"),
-            el(El::Button)
-                .at(At::Type, Av::Button)
-                .at_str(At::AriaLabel, "Close")
-                .on(Ev::Click, close_step_edit())
-                .st([
-                    St::DisplayFlex,
-                    St::ItemsCenter,
-                    St::BgTransparent,
-                    St::BorderNone,
-                    St::P0,
-                    St::TextMuted,
-                    St::CursorPointer,
-                ])
-                .hover([St::TextHigh])
-                .append([icons::icon_sized(icons::Icon::Close, 18)]),
-        ])
+    Drawer::new()
+        .position(DrawerPosition::Right)
+        .open(app.editing_step.is_some())
+        .title("Edit pipeline step")
+        .on_close(close_step_edit())
+        .content(step_drawer_body(app))
+        .build()
 }
 
 fn step_drawer_body(app: &App) -> ElementBuilder {
