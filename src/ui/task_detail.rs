@@ -6,7 +6,7 @@
 //! `/w/:wid/tasks/:tid` (the bridge sets `selected_task`). Renders from `App.task_detail`.
 
 use rwire::style::Style;
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 use rwire_components::{Avatar, AvatarSize, Button, ButtonSize, Input, Text};
 
 use super::thread;
@@ -254,9 +254,10 @@ fn thread_entries(app: &App, detail: &TaskDetail) -> Vec<ElementBuilder> {
     for (index, run) in detail.runs.iter().enumerate() {
         entries.push(run_entry(run, &format!("a{index}"), &app.tool_toggled));
     }
-    if detail.status == "running" {
-        entries.push(live_entry(app, detail));
-    }
+    // The live run is its own `#[renderer]`, so a token flush repaints only this entry — not the
+    // whole board/modal. It reads the live stream itself and self-hides when nothing is streaming,
+    // so it's included unconditionally (the board never subscribes to `live_turns`).
+    entries.push(live_entry());
     entries
 }
 
@@ -301,7 +302,21 @@ fn run_entry(run: &crate::state::RunView, key: &str, toggled: &[String]) -> Elem
 
 /// The live run as the newest thread entry: the agent + current step, a `● running` marker, its
 /// in-progress tool events, and the reply as it streams in (the typewriter `▌`).
-fn live_entry(app: &App, detail: &TaskDetail) -> ElementBuilder {
+#[renderer]
+fn live_entry(app: &App) -> ElementBuilder {
+    // Self-contained synced region: only this reads `live_turns`, so a token flush repaints just
+    // the live line. Show nothing unless the *selected* task is running.
+    let hidden = || el(El::Div).st([St::DisplayNone]);
+    let Some(detail) = app
+        .task_detail
+        .as_ref()
+        .filter(|d| app.selected_task.as_deref() == Some(d.id.as_str()))
+    else {
+        return hidden();
+    };
+    if detail.status != "running" {
+        return hidden();
+    }
     let items: &[LiveItem] = app
         .live_turns
         .iter()
