@@ -426,6 +426,24 @@ pub fn count_awaiting_by_workspace(conn: &Connection) -> rusqlite::Result<Vec<(S
     rows.collect()
 }
 
+/// Per effective-assignee counts of in-flight tasks — `(agent_id, running, awaiting)` — for the
+/// nav's agent status dot + approval badge. The effective assignee is the explicit
+/// `agent_group_id`, or the workspace owner when the task is unassigned. Rows whose assignee
+/// resolves to nothing (unassigned in an unowned workspace) are dropped.
+pub fn count_inflight_by_agent(conn: &Connection) -> rusqlite::Result<Vec<(String, i64, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(t.agent_group_id, w.owner_agent_id) AS agent,
+                SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN t.status = 'awaiting' THEN 1 ELSE 0 END)
+           FROM tasks t JOIN workspaces w ON w.id = t.workspace_id
+          WHERE t.status IN ('running', 'awaiting')
+          GROUP BY agent
+          HAVING agent IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+    rows.collect()
+}
+
 /// Whether a workspace has a task **mid-pipeline** (`running` or `awaiting`) — the pipeline
 /// editor is locked only while these exist, so a task actively flowing through the steps never
 /// sees them change under it. A `pending` task is just queued: it picks up the pipeline fresh
@@ -903,5 +921,38 @@ mod tests {
         counts.sort();
         // Only `awaiting` tasks count; the pending one and the empty workspace are absent.
         assert_eq!(counts, vec![("ws".to_owned(), 2), ("ws2".to_owned(), 1)]);
+    }
+
+    #[test]
+    fn count_inflight_by_agent_resolves_the_effective_assignee() {
+        let conn = seeded();
+        agents::create(&conn, "ag-b", "Writer", Some("e"), Some("m")).expect("b");
+        // ag-a owns ws → an unassigned running task counts against ag-a.
+        workspaces::set_owner(&conn, "ws", "ag-a").expect("own");
+        create(&conn, &task("owned-run")).expect("owned-run");
+        set_status(&conn, "owned-run", TaskStatus::Running).expect("run");
+        // ag-b is explicitly assigned an awaiting task.
+        create(
+            &conn,
+            &NewTask {
+                id: "b-await",
+                agent: Some("ag-b"),
+                ..task("b-await")
+            },
+        )
+        .expect("b-await");
+        set_status(&conn, "b-await", TaskStatus::Awaiting).expect("park");
+        // A pending task is not in-flight → excluded.
+        create(&conn, &task("pending")).expect("pending");
+
+        let mut rows = count_inflight_by_agent(&conn).expect("counts");
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![
+                ("ag-a".to_owned(), 1, 0), // owner's unassigned running task
+                ("ag-b".to_owned(), 0, 1), // assignee's awaiting task
+            ]
+        );
     }
 }

@@ -15,6 +15,7 @@ use std::sync::mpsc::{self, Sender};
 use rwire::{ChangeSet, SharedServerState};
 
 mod admin;
+mod agent_nav;
 mod agent_thread;
 mod files;
 mod notify;

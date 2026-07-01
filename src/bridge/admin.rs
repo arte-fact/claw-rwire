@@ -63,6 +63,8 @@ pub fn project_registry(conn: &rusqlite::Connection, shared: &SharedServerState)
             app.workspaces = workspace_views;
         },
     );
+    // Membership / agent edits reshape the agent-list nav (grouping + the concierge).
+    super::agent_nav::project(conn, shared);
 }
 
 pub fn upsert_endpoint(

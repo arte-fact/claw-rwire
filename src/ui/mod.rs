@@ -175,7 +175,6 @@ fn nav_drawer(app: &App) -> ElementBuilder {
             new_chat_bar(),
             drawer_threads(),
             agents_nav(),
-            workspaces_nav(),
             nav_footer(),
             drawer_foot(),
         ])
@@ -195,90 +194,31 @@ fn section_label(text: &str) -> ElementBuilder {
         .text(text)
 }
 
-/// The Workspaces group: a labelled list of workspace links (each → its dashboard),
-/// highlighting the one the current route is in, plus a create affordance. Sits between
-/// the conversation list and the app-level nav footer.
-#[renderer]
-fn workspaces_nav(app: &App) -> ElementBuilder {
-    let active = app.active_workspace.as_deref();
-    let mut rows: Vec<ElementBuilder> = vec![
-        el(El::Div)
-            .st([
-                St::PxMd,
-                St::PbXs,
-                St::TextXs,
-                St::TextMuted,
-                St::TextUppercase,
-                St::TrackingWide,
-            ])
-            .text("Workspaces"),
-    ];
-    for workspace in &app.workspaces {
-        rows.push(workspace_row(
-            &workspace.id,
-            &workspace.name,
-            active == Some(workspace.id.as_str()),
-            app.awaiting_for(&workspace.id),
-        ));
-    }
-    // Create lives on the dashboard; per-workspace settings on its Team tab.
-    rows.push(
-        Link::route("/dashboard")
-            .on(Ev::Click, close_nav())
-            .st([
-                St::DisplayFlex,
-                St::ItemsCenter,
-                St::GapSm,
-                St::PyXs,
-                St::PxMd,
-                St::TextSm,
-                St::TextMuted,
-                St::NoUnderline,
-                St::CursorPointer,
-            ])
-            .hover([St::TextHigh])
-            .append([
-                chat::accent_bar(false),
-                chat::icon_slot(icons::icon_sized(icons::Icon::Plus, 16)),
-                el(El::Span).text("New workspace"),
-            ]),
-    );
-    el(El::Div)
-        .st([
-            St::BorderTSubtle,
-            St::PySm,
-            St::DisplayFlex,
-            St::FlexCol,
-            St::GapXs,
-        ])
-        .append(rows)
-}
-
-/// Phase-1 stub for the agent-centric nav: a flat list of agents, each deep-linking to its thread
-/// page (`/agent/:id`). Phase 2 replaces this with the full agent list — grouped by workspace, the
-/// Concierge pinned on top, per-agent status + a live pulse + an approval badge.
+/// The agent-list nav (Phase 2): the **Concierge** pinned on top, then agents grouped under the
+/// workspace they belong to. Each group header links to that workspace's board (boards stay
+/// reachable), and each agent row deep-links to its thread with a live status dot + approval badge.
+/// Projected by `bridge::agent_nav` into `app.agent_nav`.
 #[renderer]
 fn agents_nav(app: &App) -> ElementBuilder {
-    let active = app.open_agent.as_deref();
-    let mut rows: Vec<ElementBuilder> = vec![
-        el(El::Div)
-            .st([
-                St::PxMd,
-                St::PbXs,
-                St::TextXs,
-                St::TextMuted,
-                St::TextUppercase,
-                St::TrackingWide,
-            ])
-            .text("Agents"),
-    ];
-    for agent in &app.agents {
-        rows.push(agent_row(
-            &agent.id,
-            &agent.name,
-            active == Some(agent.id.as_str()),
-        ));
+    let open = app.open_agent.as_deref();
+    let active_ws = app.active_workspace.as_deref();
+    let nav = &app.agent_nav;
+    let mut rows: Vec<ElementBuilder> = vec![section_label("Concierge")];
+    if let Some(concierge) = &nav.concierge {
+        rows.push(agent_row(concierge, open == Some(concierge.id.as_str())));
     }
+    for group in &nav.groups {
+        rows.push(group_header(
+            &group.workspace_id,
+            &group.workspace_name,
+            active_ws == Some(group.workspace_id.as_str()),
+            group.awaiting,
+        ));
+        for agent in &group.agents {
+            rows.push(agent_row(agent, open == Some(agent.id.as_str())));
+        }
+    }
+    rows.push(new_workspace_link());
     el(El::Div)
         .st([
             St::BorderTSubtle,
@@ -290,30 +230,9 @@ fn agents_nav(app: &App) -> ElementBuilder {
         .append(rows)
 }
 
-fn agent_row(id: &str, name: &str, active: bool) -> ElementBuilder {
-    let color = if active { St::TextHigh } else { St::TextMuted };
-    Link::route(&format!("/agent/{id}"))
-        .on(Ev::Click, close_nav())
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::PyXs,
-            St::PxMd,
-            St::CursorPointer,
-            St::TextSm,
-            St::NoUnderline,
-            color,
-        ])
-        .hover([St::TextHigh])
-        .append([
-            chat::accent_bar(active),
-            chat::icon_slot(icons::icon_sized(icons::Icon::User, 16)),
-            el(El::Span).st([St::Flex1]).text(name),
-        ])
-}
-
-fn workspace_row(id: &str, name: &str, active: bool, awaiting: usize) -> ElementBuilder {
+/// A workspace group header — a clickable section label linking to the workspace's board (so every
+/// board stays reachable), with the workspace's "needs you" badge on the right.
+fn group_header(id: &str, name: &str, active: bool, awaiting: usize) -> ElementBuilder {
     let color = if active { St::TextHigh } else { St::TextMuted };
     Link::route(&format!("/w/{id}"))
         .on(Ev::Click, close_nav())
@@ -321,6 +240,33 @@ fn workspace_row(id: &str, name: &str, active: bool, awaiting: usize) -> Element
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
+            St::PxMd,
+            St::PtSm,
+            St::PbXs,
+            St::TextXs,
+            St::TextUppercase,
+            St::TrackingWide,
+            St::NoUnderline,
+            St::CursorPointer,
+            color,
+        ])
+        .hover([St::TextHigh])
+        .append([
+            el(El::Span).st([St::Flex1]).text(name),
+            awaiting_badge(awaiting),
+        ])
+}
+
+/// One agent row: the leading gutter (accent rail + status dot), the name, and — when it has tasks
+/// parked at a gate — the approval badge. Deep-links to the agent's thread (`/agent/:id`).
+fn agent_row(row: &crate::state::AgentNavRow, active: bool) -> ElementBuilder {
+    let color = if active { St::TextHigh } else { St::TextMuted };
+    Link::route(&format!("/agent/{}", row.id))
+        .on(Ev::Click, close_nav())
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
             St::PyXs,
             St::PxMd,
             St::CursorPointer,
@@ -331,10 +277,43 @@ fn workspace_row(id: &str, name: &str, active: bool, awaiting: usize) -> Element
         .hover([St::TextHigh])
         .append([
             chat::accent_bar(active),
-            chat::icon_slot(icons::icon_sized(icons::Icon::Folder, 16)),
-            // The name grows to fill the row so the "needs you" badge sits flush at the right.
-            el(El::Span).st([St::Flex1]).text(name),
-            awaiting_badge(awaiting),
+            chat::icon_slot(status_dot(row.status)),
+            el(El::Span).st([St::Flex1]).text(&row.name),
+            awaiting_badge(row.awaiting),
+        ])
+}
+
+/// The leading status glyph: an accent **pulsing** dot while the agent is working, else a muted
+/// dot (an awaiting agent is idle-but-parked — its approval badge carries that signal).
+fn status_dot(status: crate::state::AgentStatus) -> ElementBuilder {
+    let dot = el(El::Span).st([St::WSp2, St::HSp2, St::RoundedFull]);
+    match status {
+        crate::state::AgentStatus::Working => dot.st([St::BgAccent, St::AnimatePulse]),
+        _ => dot.st([St::BgMuted]),
+    }
+}
+
+/// The create affordance at the tail of the agent nav — workspaces are created on the dashboard.
+fn new_workspace_link() -> ElementBuilder {
+    Link::route("/dashboard")
+        .on(Ev::Click, close_nav())
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::PyXs,
+            St::PxMd,
+            St::PtSm,
+            St::TextSm,
+            St::TextMuted,
+            St::NoUnderline,
+            St::CursorPointer,
+        ])
+        .hover([St::TextHigh])
+        .append([
+            chat::accent_bar(false),
+            chat::icon_slot(icons::icon_sized(icons::Icon::Plus, 16)),
+            el(El::Span).text("New workspace"),
         ])
 }
 

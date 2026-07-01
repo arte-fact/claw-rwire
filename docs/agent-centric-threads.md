@@ -164,12 +164,16 @@ Prove the unified view as a pure projection over existing data.
 - [x] Re-projects live on task lifecycle events (piggy-backed on `refresh_detail_if_open`)
 - [x] Tests: projection ordering + entry mapping + assignee resolution; `fmt`/`clippy`/`test` green
 
-### Phase 2 — Nav becomes an agent list
-- [ ] `workspaces_nav` → `agents_nav`: agents grouped by workspace, **Concierge pinned on top**
-- [ ] Per-agent status (idle / working / awaiting) + live pulse dot
-- [ ] Re-key the `awaiting` projection from per-workspace to **per-agent**; approval badge on the row
-- [ ] Boards/workspaces stay reachable (secondary lens, not removed)
-- [ ] `fmt`/`clippy`/`test` green
+### Phase 2 — Nav becomes an agent list ✅
+- [x] `workspaces_nav` → `agents_nav`: agents grouped by workspace, **Concierge pinned on top**
+      (the concierge = the web agent, excluded from the groups so it shows once)
+- [x] Per-agent status (idle / working / awaiting) — an accent **pulsing** dot while working
+      (`St::AnimatePulse`), muted otherwise (awaiting is signalled by its badge)
+- [x] Re-keyed the `awaiting` projection from per-workspace to **per-agent**: retired
+      `WorkspaceAwaiting`/`app.awaiting`; the agent-list nav (`bridge/agent_nav.rs`,
+      `tasks::count_inflight_by_agent`) now carries the per-agent badge + the per-workspace group total
+- [x] Boards stay reachable — each workspace group header links to its board; "New workspace" kept
+- [x] `fmt`/`clippy`/`test` green (219 tests, +3)
 
 ### Phase 3 — Inline approval in the agent thread
 - [ ] Surface the existing `review_gate` in the agent thread when one of its tasks is `awaiting`

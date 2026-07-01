@@ -288,14 +288,6 @@ pub struct WorkspaceView {
     pub auto_approve: bool,
 }
 
-/// How many tasks are parked at a human gate in one workspace — the sidebar row's "needs you"
-/// count badge. Only workspaces with a non-zero count are projected.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct WorkspaceAwaiting {
-    pub id: String,
-    pub count: usize,
-}
-
 /// One task card in a workspace's lane (projected from the `tasks` table). `agent` is the
 /// assignee's display name (or `None` = the owner); `status` is the lifecycle string.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -520,6 +512,46 @@ pub struct AgentThread {
     pub live: Vec<AgentLive>,
 }
 
+/// An agent's live status in the nav, derived from its in-flight tasks. `Awaiting` (a task parked
+/// at a human gate) takes precedence over `Working` — it's the state that needs the operator.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AgentStatus {
+    #[default]
+    Idle,
+    Working,
+    Awaiting,
+}
+
+/// One agent row in the agent-list nav: identity, live status, and how many of its tasks are
+/// parked awaiting the operator (the approval badge).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentNavRow {
+    pub id: String,
+    pub name: String,
+    pub status: AgentStatus,
+    pub awaiting: usize,
+}
+
+/// One workspace group in the nav: the workspace (its board reachable via the group header) and
+/// its member agents — the concierge excluded (it's pinned on top). `awaiting` is the workspace's
+/// total parked-task count, for the header badge.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentNavGroup {
+    pub workspace_id: String,
+    pub workspace_name: String,
+    pub awaiting: usize,
+    pub agents: Vec<AgentNavRow>,
+}
+
+/// The agent-list nav model (Phase 2): the concierge pinned on top, then agents grouped by the
+/// workspace they belong to. Projected by `bridge::agent_nav`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentNav {
+    /// The concierge (the web agent you route through), pinned first. `None` until one is set.
+    pub concierge: Option<AgentNavRow>,
+    pub groups: Vec<AgentNavGroup>,
+}
+
 /// One pipeline step in the Workflow editor (the configured row). `kind` is `stage`/`loop`;
 /// the validator fields apply to loops. Agent ids (not names) so the form's selects pre-fill.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -702,10 +734,6 @@ pub struct App {
     pub prompt_preview: Option<PromptPreview>,
     /// The editable global role preambles (effective values), for the Prompts defaults section.
     pub role_defaults: RoleDefaults,
-    /// Per-workspace counts of tasks parked at a human gate — the sidebar rows' "needs you"
-    /// badges. Only workspaces with a non-zero count appear; review itself is managed in the
-    /// workspace (board + Peek), so there's no global inbox.
-    pub awaiting: Vec<WorkspaceAwaiting>,
     /// The task whose detail view (run chain) is open, or `None`.
     pub task_detail: Option<TaskDetail>,
     /// The agent whose thread page (`/agent/:id`) is open, or `None` — so background lifecycle
@@ -713,6 +741,9 @@ pub struct App {
     pub open_agent: Option<String>,
     /// The open agent's merged, time-ordered thread (its tasks + runs + live runs), or `None`.
     pub agent_thread: Option<AgentThread>,
+    /// The agent-list nav (Phase 2): the concierge pinned on top, then agents grouped by
+    /// workspace, each with a live status + approval badge. Projected by `bridge::agent_nav`.
+    pub agent_nav: AgentNav,
     /// The task whose **Peek** modal is open over the board, or `None` (closed).
     pub selected_task: Option<String>,
     /// The Peek modal's active tab: 0 = Overview, 1 = Activity, 2 = Review.
@@ -768,18 +799,6 @@ pub struct App {
     /// Whether the mobile slide-in nav drawer is open. The desktop sidebar is always
     /// visible (a breakpoint override), so this only governs mobile.
     pub nav_open: bool,
-}
-
-impl App {
-    /// The count of tasks parked at a human gate in workspace `id` — the sidebar row's badge
-    /// (0 when the workspace has none).
-    #[must_use]
-    pub fn awaiting_for(&self, id: &str) -> usize {
-        self.awaiting
-            .iter()
-            .find(|w| w.id == id)
-            .map_or(0, |w| w.count)
-    }
 }
 
 #[cfg(test)]
