@@ -124,12 +124,22 @@ pub(super) fn validator_thread(
             _ => {}
         }
     }
-    msgs.push(ChatMessage::text(
-        Role::User,
-        validator_context(spec, current_output, files),
-    ));
+    let mut current = validator_context(spec, current_output, files);
+    // On a re-review the validator already inspected an earlier version (above), so point it at
+    // the delta instead of a full re-inspection — cheaper, and it still runs the build/tests.
+    if run_idx > 0 {
+        current.push_str(RE_REVIEW_FOCUS);
+    }
+    msgs.push(ChatMessage::text(Role::User, current));
     msgs
 }
+
+/// Appended to the current review turn only when the validator has already reviewed an earlier
+/// version in this thread — keeps re-reviews incremental without weakening the first pass.
+const RE_REVIEW_FOCUS: &str = "\n\nYou already reviewed an earlier version above. This is a \
+re-review: focus on whether the feedback you gave was addressed and that the project still builds \
+and its tests still pass (run them) — you don't need to re-inspect from scratch what you already \
+checked and were satisfied with. Then call the `verdict` tool.";
 
 /// A compact re-presentation of an already-reviewed output for the validator's history — no
 /// file tree or instructions (those belong only on the current turn), just the deliverable.
@@ -283,6 +293,8 @@ mod tests {
         let turn = msgs[1].content.as_deref().unwrap_or("");
         assert!(turn.contains("projects/x/src/lib.rs"));
         assert!(turn.contains("verdict"));
+        // A first review is not a re-review — no incremental-focus note.
+        assert!(!turn.contains("re-review"));
     }
 
     #[test]
@@ -316,6 +328,8 @@ mod tests {
         let last = msgs.last().expect("non-empty");
         assert!(last.content.as_deref().unwrap_or("").contains("v2"));
         assert!(last.content.as_deref().unwrap_or("").contains("verdict"));
+        // Second time around the reviewer is told to focus on the delta, not re-inspect.
+        assert!(last.content.as_deref().unwrap_or("").contains("re-review"));
     }
 
     #[test]
