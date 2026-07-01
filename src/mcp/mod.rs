@@ -36,6 +36,16 @@ pub enum McpError {
     NoPipes,
 }
 
+/// The outcome of one `tools/call`: the flattened text plus whether the server marked it a
+/// tool-level failure (`isError`). The toolbox maps `is_error` to a failed [`ToolOutcome`] so a
+/// backend crash (e.g. the web server's headless browser) reaches the agent as an error, not as
+/// an ok result whose text merely *reads* like one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolResult {
+    pub text: String,
+    pub is_error: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpTool {
     pub name: String,
@@ -109,9 +119,9 @@ impl McpClient {
         &self.tools
     }
 
-    /// Calls a tool by its bare name and returns the flattened text. A poisoned lock
-    /// (a previous call panicked) is reported as a closed connection.
-    pub fn call(&self, tool: &str, arguments: Value) -> Result<String, McpError> {
+    /// Calls a tool by its bare name and returns its text plus the server's `isError` flag. A
+    /// poisoned lock (a previous call panicked) is reported as a closed connection.
+    pub fn call(&self, tool: &str, arguments: Value) -> Result<ToolResult, McpError> {
         let mut conn = self.conn.lock().map_err(|_| McpError::Closed)?;
         conn.call_tool(tool, arguments)
     }

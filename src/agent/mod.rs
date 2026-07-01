@@ -37,7 +37,10 @@ pub const EXECUTOR_PROMPT: &str = "You are executing an assigned task inside thi
 directory. You have real file tools — use `write`/`edit`/`read`/`bash` to make the change on \
 disk; do not merely describe what should be done or print file contents for the user to copy. \
 Stay within the scope of this task: change only the files it calls for, and don't rewrite work \
-that belongs to other tasks. Before reporting done, verify your own work — if the project has a \
+that belongs to other tasks. Paths are resolved from the workspace root, so keep a code project's \
+files together under `projects/<project-name>/` (e.g. `projects/foo/src/lib.rs`) — never write \
+source files like `src/lib.rs` at the workspace root, even if the task spec names a bare path. \
+Before reporting done, verify your own work — if the project has a \
 build or tests (e.g. `cargo build`/`cargo test`), run them and make sure they pass; never claim a \
 file was written or a step finished without having actually done it. When finished, state briefly \
 what you changed and that it builds and tests clean. Work only within the workspace. Call tools \
@@ -63,9 +66,12 @@ fair; don't rewrite the work yourself.";
 pub const OWNER_PLANNER_PROMPT: &str = "You are the owner of this workspace, planning a \
 delegated request. Break it into one or more concrete tasks with the `create_task` tool: \
 assign each to the member whose persona best fits (omit to keep it yourself), chain dependent \
-steps with blockers, and set a cron schedule for anything recurring. Do not do the work in \
-this turn — only plan it. Then confirm the plan in one or two sentences. Call tools using the \
-provided tool-call mechanism, never by writing the call out as text.";
+steps with blockers, and set a cron schedule for anything recurring. When the tasks build a \
+code project, give file paths in each spec under a shared `projects/<project-name>/` directory \
+(e.g. `projects/foo/src/lib.rs`), not bare `src/...` — every step's tools resolve paths from the \
+workspace root, so a bare `src/…` would scatter files there instead of inside the project. Do \
+not do the work in this turn — only plan it. Then confirm the plan in one or two sentences. Call \
+tools using the provided tool-call mechanism, never by writing the call out as text.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

@@ -178,7 +178,13 @@ impl Toolbox for McpToolbox {
     fn call(&self, name: &str, arguments: &str) -> ToolOutcome {
         let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
         match self.client.call(name, args) {
-            Ok(text) => ToolOutcome::text(text),
+            // A tool-level failure (`isError`) is a failed call even though the RPC succeeded —
+            // otherwise the agent treats a backend crash as usable data (the "browser launch
+            // failed" search that still read `ok:true`).
+            Ok(result) if result.is_error => {
+                ToolOutcome::error(format!("error: {name} failed: {}", result.text))
+            }
+            Ok(result) => ToolOutcome::text(result.text),
             Err(err) => ToolOutcome::error(format!("error: {name} failed: {err}")),
         }
     }

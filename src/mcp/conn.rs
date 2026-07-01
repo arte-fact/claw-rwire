@@ -8,7 +8,7 @@ use std::io::{BufRead, Write};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{McpError, McpTool};
+use super::{McpError, McpTool, ToolResult};
 
 /// MCP protocol revision we advertise in `initialize`. Servers echo the version
 /// they'll actually use; most proceed even on a minor mismatch.
@@ -135,12 +135,22 @@ impl<W: Write, R: BufRead> Conn<W, R> {
         Ok(serde_json::from_value(tools)?)
     }
 
-    pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<String, McpError> {
+    pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<ToolResult, McpError> {
         let result = self.request(
             "tools/call",
             Some(json!({ "name": name, "arguments": arguments })),
         )?;
-        Ok(flatten_content(&result))
+        // MCP marks a *tool-level* failure (as opposed to a protocol error) with `isError:true`
+        // and puts the message in `content`. Honour it: a headless-browser crash the web server
+        // reports this way must reach the agent as a failed call, not as an ok result whose text
+        // happens to read "browser launch failed" — the agent would take that as data and march on.
+        Ok(ToolResult {
+            text: flatten_content(&result),
+            is_error: result
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })
     }
 }
 
@@ -197,7 +207,19 @@ mod tests {
         let out = conn
             .call_tool("search", json!({ "q": "rust" }))
             .expect("call");
-        assert_eq!(out, "ran with rust");
+        assert_eq!(out.text, "ran with rust");
+        assert!(!out.is_error, "a plain result is not an error");
+    }
+
+    #[test]
+    fn call_tool_flags_is_error_results() {
+        // A tool-level failure the server marks with `isError:true` (e.g. the web server's
+        // headless browser dying) must surface as an error, not a normal result.
+        let reply = r#"{"jsonrpc":"2.0","id":1,"result":{"isError":true,"content":[{"type":"text","text":"browser launch failed"}]}}"#;
+        let mut conn = Conn::new(Vec::new(), Cursor::new(reply.as_bytes().to_vec()));
+        let out = conn.call_tool("search", json!({})).expect("call");
+        assert!(out.is_error, "isError:true must be reported");
+        assert_eq!(out.text, "browser launch failed");
     }
 
     #[test]

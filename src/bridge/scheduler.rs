@@ -157,11 +157,19 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             time: super::now_hm(),
         };
         let messages = agent::build_messages(&system_prompt, std::slice::from_ref(&user));
-        // Read-only: the workspace `read` tool plus the `verdict` tool — no writing.
-        let read = build_toolbox(Some(vec!["read".to_owned()]), Some(workspace_dir), false);
+        // `read` + `bash` (to actually run the project's build/tests) plus the `verdict` tool.
+        // A reviewer asked to confirm code "builds and tests clean" can't do so with `read` alone
+        // — the live failure was a validator calling `bash` (cargo build), getting "no tool named
+        // bash", and passing anyway. `bash` runs in the workspace but the reviewer has no `write`/
+        // `edit`, so it can verify without rewriting the deliverable.
+        let checks = build_toolbox(
+            Some(vec!["read".to_owned(), "bash".to_owned()]),
+            Some(workspace_dir),
+            false,
+        );
         let toolbox: Box<dyn Toolbox> = Box::new(CompositeToolbox::new(vec![
             Box::new(ValidatorToolbox),
-            read,
+            checks,
         ]));
         Ok((inference, messages, toolbox))
     })();
@@ -310,8 +318,10 @@ fn validator_context(spec: &str, output: &str, files: &[String]) -> String {
     };
     format!(
         "Task spec:\n{spec}\n\nThe assignee produced this for review:\n\n{output}{tree}\n\n\
-         Review it against the spec (read the files above if needed) and call the `verdict` tool \
-         with your decision and concrete feedback."
+         Review it against the spec: `read` the files above, and if it's code, use `bash` to run \
+         the project's build and tests yourself (e.g. `cargo build`/`cargo test`) rather than \
+         trusting the report. Then call the `verdict` tool with your decision and concrete \
+         feedback."
     )
 }
 
@@ -343,6 +353,13 @@ fn effective_output(turn: &agent::TurnResult) -> String {
         }
     }
     summarize_invocations(&turn.invocations)
+}
+
+/// Whether a turn made at least one tool call and *every* one failed — it tried to act but
+/// nothing it did succeeded, so the task hasn't actually been done. An empty call list (a
+/// pure-reasoning turn that just answers) is not "all failed" and stays a success.
+fn all_calls_failed(invocations: &[agent::ToolInvocation]) -> bool {
+    !invocations.is_empty() && invocations.iter().all(|inv| !inv.ok)
 }
 
 /// Strip a model's leaked native tool-call framing (deepseek's fullwidth-pipe "DSML" tags) from a
@@ -588,7 +605,20 @@ pub fn finished(
     let (ok, output, invocations) = match result {
         // A model that ends on tool calls often returns no final text — don't store a blank
         // result; synthesize one from what the tools did so the task shows what happened.
-        Ok(turn) => (true, effective_output(&turn), turn.invocations),
+        Ok(turn) => {
+            // A turn whose *every* tool call failed did no real work, whatever its closing prose
+            // claims — the research run whose writes all bounced off the jail and whose searches
+            // all errored, yet whose reply still said "wrote docs/report.md". Route it as a
+            // failure (retry / surface) instead of finishing `done` with no deliverable.
+            let productive = !all_calls_failed(&turn.invocations);
+            let output = effective_output(&turn);
+            let output = if productive {
+                output
+            } else {
+                format!("No work was completed — every tool call failed.\n\n{output}")
+            };
+            (productive, output, turn.invocations)
+        }
         Err(err) => (false, err, Vec::new()),
     };
     let verdict = if matches!(role, RunRole::Validator) && ok {
@@ -1169,6 +1199,50 @@ mod tests {
         assert_eq!(
             strip_dsml("Verdict: pass — looks good."),
             "Verdict: pass — looks good."
+        );
+    }
+
+    #[test]
+    fn all_calls_failed_flags_a_run_where_nothing_succeeded() {
+        let inv = |ok: bool| agent::ToolInvocation {
+            name: "write".to_owned(),
+            arguments: "{}".to_owned(),
+            result: "error".to_owned(),
+            ok,
+        };
+        // Every call failed → unproductive (the research run: writes bounced, searches errored).
+        assert!(all_calls_failed(&[inv(false), inv(false)]));
+        // At least one success → productive.
+        assert!(!all_calls_failed(&[inv(false), inv(true)]));
+        // No calls at all (a pure-reasoning answer) is not "all failed".
+        assert!(!all_calls_failed(&[]));
+    }
+
+    #[test]
+    fn validator_toolbox_can_run_build_checks_but_not_write() {
+        // Regression: a code reviewer must be able to actually build/test, not just read — the
+        // live failure was a validator calling `bash` for `cargo build`, getting "no tool named
+        // bash", and passing anyway. It gets `read` + `bash` + `verdict`, but no `write`/`edit`,
+        // so it can verify without rewriting the deliverable. Mirrors `launch_validator`'s wiring.
+        use crate::tools::{
+            CoderToolbox, CompositeToolbox, ExecStrategy, FilteredToolbox, ValidatorToolbox,
+        };
+        let dir = std::env::temp_dir().join(format!("claw-val-tb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let coder = CoderToolbox::with_exec(dir.clone(), ExecStrategy::Host { root: dir });
+        let checks =
+            FilteredToolbox::new(Box::new(coder), vec!["read".to_owned(), "bash".to_owned()]);
+        let tb = CompositeToolbox::new(vec![Box::new(ValidatorToolbox), Box::new(checks)]);
+        let names: Vec<String> = tb.defs().into_iter().map(|d| d.name).collect();
+        assert!(
+            names.iter().any(|n| n == "bash"),
+            "can run builds: {names:?}"
+        );
+        assert!(names.iter().any(|n| n == "verdict"), "records a verdict");
+        assert!(names.iter().any(|n| n == "read"), "reads files");
+        assert!(
+            !names.iter().any(|n| n == "write" || n == "edit"),
+            "reviewer must not rewrite the deliverable: {names:?}"
         );
     }
 

@@ -1,7 +1,8 @@
 //! The coder toolbox: `bash` / `read` / `write` / `edit`, scoped to an agent's
 //! workspace. Added to a run only when its `tool_profile` is `Coder`. Unlike rust-claw,
 //! the file tools resolve paths through [`workspace::jail`] — the workspace is an
-//! *enforced* boundary, not a convention (`..` and absolute paths are rejected). `bash`
+//! *enforced* boundary, not a convention (`..` and paths outside the workspace are rejected;
+//! an absolute path is accepted only when it lands inside the workspace). `bash`
 //! keeps `cwd = workspace` but is not jailed (it can reach anywhere — the sandbox seam is
 //! left at the spawn point for a future `bwrap`/container).
 
@@ -208,7 +209,10 @@ impl CoderToolbox {
     /// string (the loop continues; the model sees why).
     fn resolve(&self, path: &str) -> Result<PathBuf, String> {
         workspace::jail(&self.workspace, path).map_err(|err| match err {
-            WorkspaceError::Escape => "error: path escapes the workspace".to_owned(),
+            WorkspaceError::Escape => "error: path is outside the workspace — use a path inside \
+                it, either relative to the workspace root (e.g. `projects/foo/src/lib.rs`) or an \
+                absolute path that stays within the workspace"
+                .to_owned(),
             other => format!("error: {other}"),
         })
     }
@@ -304,10 +308,28 @@ mod tests {
         ] {
             let o = tb.call(WRITE, args);
             assert!(!o.ok, "escape should be rejected: {args}");
-            assert!(o.result.contains("escapes the workspace"), "{}", o.result);
+            assert!(o.result.contains("outside the workspace"), "{}", o.result);
         }
         let r = tb.call(READ, r#"{"path":"../../etc/passwd"}"#);
-        assert!(!r.ok && r.result.contains("escapes the workspace"));
+        assert!(!r.ok && r.result.contains("outside the workspace"));
+    }
+
+    #[test]
+    fn write_accepts_an_absolute_path_inside_the_workspace() {
+        // Regression: a model that passes the workspace's own absolute path (as weaker models do,
+        // echoing `pwd`/`ls`) must write to that file rather than getting "outside the workspace".
+        let (tb, dir) = toolbox();
+        let abs = dir.join("docs/report.md");
+        let args = format!(
+            "{{\"path\":{:?},\"content\":\"the report\"}}",
+            abs.to_str().expect("utf-8")
+        );
+        let o = tb.call(WRITE, &args);
+        assert!(o.ok, "{}", o.result);
+        assert_eq!(
+            std::fs::read_to_string(&abs).expect("written"),
+            "the report"
+        );
     }
 
     #[test]

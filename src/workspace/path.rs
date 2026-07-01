@@ -5,30 +5,51 @@
 //!
 //! Unlike rust-claw — whose file tools deliberately *don't* call this — claw-rwire's
 //! `read`/`write`/`edit` tools apply it, so the workspace is an enforced boundary.
+//!
+//! An **absolute** path is accepted when it points *inside* the workspace and rejected
+//! otherwise, rather than rejected outright: weaker models routinely echo the absolute
+//! path they saw from `pwd`/`ls` (e.g. `<data>/workspaces/foo/docs/x.md`), and failing
+//! every such call — the dominant real-world failure — taught them nothing. The `..`
+//! escape check applies to absolute paths too, so a climb out is still blocked.
 
 use std::path::{Component, Path, PathBuf};
 
 use super::WorkspaceError;
 
-/// Resolve `rel` (a model-supplied path) against `root`, returning the absolute path
-/// only if it stays within `root`. Rejects absolute paths and `..` escapes lexically,
-/// then canonicalizes the deepest existing ancestor to defeat symlinks pointing out.
+/// Resolve `rel` (a model-supplied path) against `root`, returning the absolute target
+/// only if it stays within `root`. Folds `.`/`..` lexically (any climb above the root —
+/// relative *or* absolute — is an escape), then canonicalizes the deepest existing
+/// ancestor to defeat symlinks pointing out. A leading `/` is taken as an absolute path
+/// that must itself resolve inside the workspace.
 pub fn jail(root: &Path, rel: &str) -> Result<PathBuf, WorkspaceError> {
     let candidate = Path::new(rel);
     let mut normalized = PathBuf::new();
+    let mut absolute = false;
     for component in candidate.components() {
         match component {
             Component::Normal(part) => normalized.push(part),
             Component::CurDir => {}
             Component::ParentDir => {
+                // Popping the root itself (`/..`, or `a/../..`) climbs out — reject.
                 if !normalized.pop() {
                     return Err(WorkspaceError::Escape);
                 }
             }
-            Component::RootDir | Component::Prefix(_) => return Err(WorkspaceError::Escape),
+            // A leading `/`: an absolute path. Keep it (so `verify_within` compares real
+            // absolutes) rather than rejecting — but it still has to land inside `root`.
+            Component::RootDir => {
+                absolute = true;
+                normalized.push(std::path::MAIN_SEPARATOR_STR);
+            }
+            // A Windows drive prefix (`C:`) can't be inside a unix workspace root — reject.
+            Component::Prefix(_) => return Err(WorkspaceError::Escape),
         }
     }
-    let joined = root.join(&normalized);
+    let joined = if absolute {
+        normalized
+    } else {
+        root.join(&normalized)
+    };
     verify_within(root, &joined)?;
     Ok(joined)
 }
@@ -93,12 +114,34 @@ mod tests {
     }
 
     #[test]
-    fn absolute_paths_are_rejected() {
+    fn absolute_paths_outside_the_root_are_rejected() {
         let r = root();
         assert!(matches!(
             jail(&r, "/etc/passwd"),
             Err(WorkspaceError::Escape)
         ));
+    }
+
+    #[test]
+    fn absolute_paths_inside_the_root_are_accepted() {
+        // Regression: a model that echoes the workspace's own absolute path (from `pwd`/`ls`)
+        // must resolve to that exact file, not be rejected as an escape.
+        let r = root();
+        let inside = r.join("projects/rust-color/src/lib.rs");
+        let raw = inside.to_str().expect("utf-8");
+        assert_eq!(jail(&r, raw).expect("inside"), inside);
+        // The root itself, given absolutely, resolves to the root.
+        assert_eq!(jail(&r, r.to_str().expect("utf-8")).expect("root"), r);
+    }
+
+    #[test]
+    fn absolute_path_climbing_out_with_dotdot_is_rejected() {
+        // An absolute path that starts inside but `..`s past the root must still be blocked.
+        let r = root();
+        let sneaky = format!("{}/../../etc/passwd", r.to_str().expect("utf-8"));
+        assert!(matches!(jail(&r, &sneaky), Err(WorkspaceError::Escape)));
+        // A bare `/..` can't climb above filesystem root either.
+        assert!(matches!(jail(&r, "/.."), Err(WorkspaceError::Escape)));
     }
 
     #[test]
