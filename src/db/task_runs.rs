@@ -21,6 +21,8 @@ pub struct TaskRun {
     pub transcript: Option<String>,
     /// The task attempt (manual-restart generation) this run belongs to.
     pub attempt: i64,
+    /// ISO-8601 UTC creation stamp — the thread view shows it as the entry's `HH:MM`.
+    pub created_at: String,
 }
 
 /// What a run produced, recorded after it finishes.
@@ -70,7 +72,7 @@ pub fn append(conn: &Connection, run: &NewRun) -> rusqlite::Result<()> {
 pub fn list_for_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Vec<TaskRun>> {
     let mut stmt = conn.prepare(
         "SELECT id, position, role, agent_id, output, verdict, feedback, iteration, ok, \
-         transcript, attempt
+         transcript, attempt, created_at
            FROM task_runs WHERE task_id = ?1 ORDER BY created_at ASC, id ASC",
     )?;
     let rows = stmt.query_map(params![task_id], from_row)?;
@@ -86,7 +88,7 @@ pub fn list_for_task_attempt(
 ) -> rusqlite::Result<Vec<TaskRun>> {
     let mut stmt = conn.prepare(
         "SELECT id, position, role, agent_id, output, verdict, feedback, iteration, ok, \
-         transcript, attempt
+         transcript, attempt, created_at
            FROM task_runs WHERE task_id = ?1 AND attempt = ?2 ORDER BY created_at ASC, id ASC",
     )?;
     let rows = stmt.query_map(params![task_id, attempt], from_row)?;
@@ -106,6 +108,7 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskRun> {
         ok: row.get::<_, i64>(8)? != 0,
         transcript: row.get(9)?,
         attempt: row.get(10)?,
+        created_at: row.get(11)?,
     })
 }
 

@@ -1395,6 +1395,7 @@ mod tests {
             ok: true,
             transcript: None,
             attempt: 0,
+            created_at: String::new(),
         }];
         let ctx = step_context("make X", &prior, "Refine");
         assert!(ctx.contains("Task: make X"));

@@ -17,6 +17,7 @@ mod prompts;
 mod run_chain;
 mod system_map;
 mod task_detail;
+mod thread;
 mod widgets;
 mod workspace;
 mod workspace_tasks;

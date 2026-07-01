@@ -108,6 +108,8 @@ fn run_view(
         ok: run.ok,
         tools: parse_transcript(run.transcript.as_deref()),
         attempt: run.attempt,
+        // `2026-06-22T08:00:…Z` → `08:00`, matching the chat transcript's HH:MM stamps.
+        time: run.created_at.get(11..16).unwrap_or_default().to_owned(),
     }
 }
 
@@ -549,6 +551,52 @@ mod tests {
         assert_eq!(detail.proposed.len(), 1);
         assert_eq!(detail.proposed[0].title, "First step");
         assert_eq!(detail.proposed[0].agent.as_deref(), Some("Scout"));
+    }
+
+    #[test]
+    fn build_detail_stamps_each_run_with_its_hh_mm_time() {
+        use crate::db::task_runs::{self, NewRun};
+        let conn = seeded();
+        tasks::create(
+            &conn,
+            &NewTask {
+                id: "t1",
+                workspace_id: "ws",
+                agent: None,
+                title: "Task",
+                spec: "do it",
+                schedule: None,
+                origin_chat: None,
+                max_retries: None,
+            },
+        )
+        .expect("create");
+        task_runs::append(
+            &conn,
+            &NewRun {
+                id: "r1",
+                task_id: "t1",
+                position: 0,
+                role: "producer",
+                agent: None,
+                output: Some("done"),
+                verdict: None,
+                feedback: None,
+                iteration: 0,
+                ok: true,
+                transcript: None,
+                attempt: 0,
+            },
+        )
+        .expect("run");
+
+        let detail = build_detail(&conn, "t1").expect("detail");
+        let run = &detail.runs[0];
+        // The thread stamp is the run's created_at time-of-day, `HH:MM`.
+        let created = &task_runs::list_for_task(&conn, "t1").expect("runs")[0].created_at;
+        assert_eq!(run.time, &created[11..16]);
+        assert_eq!(run.time.len(), 5);
+        assert_eq!(run.time.as_bytes()[2], b':');
     }
 
     #[test]

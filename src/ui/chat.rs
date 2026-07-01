@@ -9,8 +9,9 @@ use rwire::style::Style;
 use rwire::{At, Av, El, ElementBuilder, Ev, HandlerSpec, Pc, St, el, handler, icons, renderer};
 use rwire_components::{Spinner, SpinnerSize, Text};
 
+use super::thread;
 use crate::bridge::{self, Command};
-use crate::state::{App, ChatMessage, MessageRole, ToolCardView, TranscriptItem};
+use crate::state::{App, ChatMessage, MessageRole, TranscriptItem};
 
 /// The reading width of the whole chat — transcript and composer share it, centered,
 /// so lines don't sprawl on wide screens.
@@ -29,23 +30,7 @@ pub fn surface() -> ElementBuilder {
             St::FlexCol,
             St::OverflowHidden,
         ])
-        .append([transcript_scroll(), composer_bar()])
-}
-
-/// The scrolling transcript area. `column-reverse` is the no-JS autoscroll: it makes the
-/// bottom the scroll origin, so the view stays pinned to the newest turn as content
-/// grows — yet a reader who scrolls up keeps their place (new turns land below, off
-/// screen). The single inner [`transcript`] keeps normal top-to-bottom message order.
-fn transcript_scroll() -> ElementBuilder {
-    el(El::Div)
-        .st([
-            St::MinH0,
-            St::OverflowAuto,
-            St::Flex1,
-            St::DisplayFlex,
-            St::FlexColReverse,
-        ])
-        .append([transcript()])
+        .append([thread::scroll(transcript()), composer_bar()])
 }
 
 /// The composer row: an elevated, centered, width-limited card sitting below the
@@ -97,7 +82,12 @@ fn transcript(app: &App) -> ElementBuilder {
     let items: Vec<ElementBuilder> = if app.open_chat.is_none() {
         vec![hint("Pick a conversation or start a new one.")]
     } else {
-        let mut messages: Vec<ElementBuilder> = app.messages.iter().map(transcript_row).collect();
+        let mut messages: Vec<ElementBuilder> = app
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(index, item)| transcript_row(item, index, &app.tool_toggled))
+            .collect();
         if app.sending {
             messages.push(sending_row());
         }
@@ -157,90 +147,20 @@ fn hint(text: &str) -> ElementBuilder {
         .append([Text::body(text.to_owned()).muted().build()])
 }
 
-/// One transcript entry: a chat turn or an inline tool card.
-fn transcript_row(item: &TranscriptItem) -> ElementBuilder {
+/// One transcript entry: a chat turn, or an inline tool call rendered with the **shared**
+/// collapsible tool row (so chat tool calls read exactly like the task thread's).
+fn transcript_row(item: &TranscriptItem, index: usize, toggled: &[String]) -> ElementBuilder {
     match item {
         TranscriptItem::Message(message) => message_row(message),
-        TranscriptItem::Tool(card) => tool_card(card),
+        TranscriptItem::Tool(card) => {
+            crate::ui::run_chain::tool_row(card, &format!("chat.{index}"), toggled)
+        }
     }
 }
 
-/// A tool invocation rendered inline: a `🔧 name · args · status` header over a capped,
-/// scrollable result box. Subtle (it's secondary to the conversation). Reused by the task
-/// detail's run transcript.
-pub(crate) fn tool_card(card: &ToolCardView) -> ElementBuilder {
-    let (status, status_color) = if card.ok {
-        ("ok", St::TextAccent)
-    } else {
-        ("failed", St::TextError)
-    };
-    let header = el(El::Div)
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::TextXs,
-            St::FontMono,
-        ])
-        .append([
-            el(El::Span)
-                .st([St::TextMuted])
-                .text(&format!("🔧 {}", card.name)),
-            el(El::Span)
-                .st([St::MinW0, St::TextLow, St::Flex1, St::Truncate])
-                .text(&preview(&card.arguments, 80)),
-            el(El::Span).st([status_color]).text(status),
-            el(El::Span).st([St::TextLow]).text(&card.time),
-        ]);
-    let body = el(El::Pre)
-        // `max-height: 8rem` — caps the result box; no token for the 8rem cap.
-        .style(Style::new().set("max-height", "8rem"))
-        .st([
-            St::TextXs,
-            St::TextLow,
-            St::FontMono,
-            St::WhitespacePreWrap,
-            St::M0,
-            St::OverflowAuto,
-        ])
-        .text(&clip(&card.result, 800));
-    el(El::Div)
-        .st([
-            St::SelfStart,
-            St::MaxWFull,
-            St::DisplayFlex,
-            St::FlexCol,
-            St::GapXs,
-            St::PSm,
-            St::BorderDefault,
-            St::Rounded0,
-            St::BgSurface,
-            St::WFull,
-        ])
-        .append([header, body])
-}
-
-/// One-line preview for the card header: collapses whitespace runs, then truncates.
-fn preview(text: &str, max_chars: usize) -> String {
-    clip(
-        &text.split_whitespace().collect::<Vec<_>>().join(" "),
-        max_chars,
-    )
-}
-
-/// Char-aware truncation with a trailing ellipsis, preserving newlines (used for the
-/// multi-line result body).
-fn clip(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_owned();
-    }
-    let head: String = text.chars().take(max_chars).collect();
-    format!("{head}…")
-}
-
-/// Flat terminal style (rust-claw): a bold sender label over the body, no bubbles.
-/// The left accent bar marks *your* turns; the agent's reply runs full-width with no
-/// bar, so the two are easy to tell apart at a glance.
+/// Flat terminal style (rust-claw): a bold sender label over the body, no bubbles — built on the
+/// shared [`thread::entry`] so a chat turn and a task-thread entry are the same widget. The left
+/// accent bar marks *your* turns; the agent's reply runs full-width with no bar.
 fn message_row(message: &ChatMessage) -> ElementBuilder {
     let (sender, sender_color) = match message.role {
         MessageRole::User => ("you", St::TextHigh),
@@ -256,43 +176,28 @@ fn message_row(message: &ChatMessage) -> ElementBuilder {
             .append([el(El::Span).text(&message.text)]),
         MessageRole::Agent => crate::ui::widgets::markdown(message.text.clone()),
     };
-    let header = el(El::Div)
-        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-        .append([
-            el(El::Span).st([St::FontBold, sender_color]).text(sender),
-            el(El::Span)
-                .st([St::TextLow, St::TextXs])
-                .text(&message.time),
-        ]);
-    let block = el(El::Div)
-        // `MinW0` lets the column shrink below its content's intrinsic width and
-        // `BreakWords` breaks long unbroken tokens (URLs, inline code) — together they
-        // stop a reply from forcing a horizontal scroll on a narrow viewport. Code blocks
-        // keep their own `white-space: pre` + inner horizontal scroll.
-        .st([
-            St::DisplayFlex,
-            St::FlexCol,
-            St::GapXs,
-            St::MinW0,
-            St::BreakWords,
-        ])
-        .append([header, body]);
-    match message.role {
+    let is_user = matches!(message.role, MessageRole::User);
+    let entry = thread::entry(
+        sender,
+        sender_color,
+        None,
+        &message.time,
+        None,
+        is_user,
+        vec![body],
+    );
+    if is_user {
         // Right-aligned, capped at 40rem but never wider than the column, so on mobile it
         // wraps within the viewport instead of spilling past it.
-        MessageRole::User => el(El::Div)
+        el(El::Div)
             .style(
                 Style::new()
                     .set("align-self", "flex-end")
                     .set("max-width", "min(40rem, 100%)"),
             )
-            .st([St::DisplayFlex, St::GapMd])
-            .append([accent_bar(true), block]),
-        // Full-width; `Flex1` over the block's `MinW0` lets the prose wrap at the column
-        // edge instead of pushing it wider.
-        MessageRole::Agent => el(El::Div)
-            .st([St::DisplayFlex, St::MinW0])
-            .append([block.st([St::Flex1])]),
+            .append([entry])
+    } else {
+        entry
     }
 }
 

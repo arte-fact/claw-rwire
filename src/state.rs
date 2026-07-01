@@ -398,6 +398,8 @@ pub struct RunView {
     pub tools: Vec<ToolCardView>,
     /// The task attempt this run belongs to — the detail view groups runs by attempt.
     pub attempt: i64,
+    /// `HH:MM` (UTC) the run was recorded — the thread entry's timestamp.
+    pub time: String,
 }
 
 /// A task's detail view: its spec, status, and the full run chain (the audit trail).

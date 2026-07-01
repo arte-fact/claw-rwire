@@ -1,13 +1,15 @@
-//! The task **Peek** modal (Phase F-4 / UX overhaul U2): a task's one-page view — spec, the
-//! live tool feed, the full run chain (each producer/validator run with its transcript, diffs
-//! and verdict), and the run controls / review gate — rendered as a custom overlay over the board
-//! so you never leave the kanban. Opened by a card click (`open_peek`) or a deep link to
+//! The task **Peek** modal (Phase F-4 / UX overhaul U2): a task's one-page view over the board.
+//! Two tabs — **Overview** (spec + run controls) and **Thread**, a chat log of the task built on
+//! the shared [`thread`] widgets: each run is an authored, phase-tagged entry with collapsible
+//! tool rows; the live run streams into the newest entry; and review happens inline in a pinned
+//! composer at the bottom. Opened by a card click (`open_peek`) or a deep link to
 //! `/w/:wid/tasks/:tid` (the bridge sets `selected_task`). Renders from `App.task_detail`.
 
 use rwire::style::Style;
 use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons};
 use rwire_components::{Avatar, AvatarSize, Button, ButtonSize, Input, Text};
 
+use super::thread;
 use crate::bridge::{self, Command};
 use crate::state::{App, LiveEvent, ProposedTask, TaskDetail};
 use crate::ui::workspace::card;
@@ -84,9 +86,10 @@ fn peek_content(app: &App, detail: &TaskDetail) -> ElementBuilder {
                     peek_header(app, detail),
                     peek_tabs(app.detail_tab),
                 ]),
+            // The body fills the remaining height; each tab owns its own scroll (Overview scrolls
+            // as one pane, the Thread autoscrolls above a pinned gate bar).
             el(El::Div)
-                .st([St::Flex1, St::MinH0, St::OverflowYAuto, St::PxMd, St::PbMd])
-                .md([St::PxLg, St::PbLg])
+                .st([St::Flex1, St::MinH0, St::DisplayFlex, St::FlexCol])
                 .append([peek_tab_body(app, detail)]),
         ])
 }
@@ -148,7 +151,7 @@ fn peek_header(app: &App, detail: &TaskDetail) -> ElementBuilder {
         .append(row)
 }
 
-/// The Overview / Activity / Review tab strip.
+/// The Overview / Thread tab strip. Activity + Review are unified into the chat-log **Thread**.
 fn peek_tabs(active: usize) -> ElementBuilder {
     el(El::Div)
         .st([
@@ -160,8 +163,7 @@ fn peek_tabs(active: usize) -> ElementBuilder {
         ])
         .append([
             tab_chip("Overview", 0, active),
-            tab_chip("Activity", 1, active),
-            tab_chip("Review", 2, active),
+            tab_chip("Thread", 1, active),
         ])
 }
 
@@ -187,13 +189,20 @@ fn tab_chip(label: &str, index: usize, active: usize) -> ElementBuilder {
     }
 }
 
-/// The active tab's content.
+/// The active tab's content, filling the modal body.
 fn peek_tab_body(app: &App, detail: &TaskDetail) -> ElementBuilder {
     match app.detail_tab {
-        1 => peek_activity(app, detail),
-        2 => peek_review(detail),
-        _ => peek_overview(detail),
+        1 => peek_thread(app, detail),
+        _ => scroll_pane(peek_overview(detail)),
     }
+}
+
+/// A simple scrolling pane for the Overview tab (the Thread supplies its own scroll).
+fn scroll_pane(inner: ElementBuilder) -> ElementBuilder {
+    el(El::Div)
+        .st([St::Flex1, St::MinH0, St::OverflowYAuto, St::PxMd, St::PbMd])
+        .md([St::PxLg, St::PbLg])
+        .append([inner])
 }
 
 /// Overview: the spec (markdown) and the run controls.
@@ -206,73 +215,183 @@ fn peek_overview(detail: &TaskDetail) -> ElementBuilder {
         ])
 }
 
-/// Activity: the live tool feed (while running) on top, then the persisted run chain in a
-/// bounded scroll area so a long chain stays inside the modal.
-fn peek_activity(app: &App, detail: &TaskDetail) -> ElementBuilder {
-    let mut sections = Vec::new();
-    if detail.status == "running" {
-        let mut live: Vec<&LiveEvent> = app
-            .live_activity
-            .iter()
-            .filter(|event| event.task_id == detail.id)
-            .collect();
-        live.reverse(); // ring is newest-first; show chronological
-        let streaming = app
-            .live_text
-            .iter()
-            .find(|text| text.task_id == detail.id)
-            .map(|text| text.text.as_str())
-            .unwrap_or("");
-        sections.push(live_card(&live, streaming));
-    }
-    let last_run = detail.runs.len().saturating_sub(1);
-    let runs: Vec<ElementBuilder> = detail
-        .runs
-        .iter()
-        .enumerate()
-        .map(|(index, run)| {
-            crate::ui::run_chain::run_card(
-                run,
-                &format!("a{index}"),
-                index == last_run,
-                &app.tool_toggled,
-            )
-        })
-        .collect();
-    let chain = if runs.is_empty() {
-        Text::body("No runs recorded yet.").muted().build()
-    } else {
-        // No own scroll — the modal body scrolls (the fixed-height panel owns the single scroll).
-        el(El::Div)
-            .st([St::DisplayFlex, St::FlexCol, St::GapSm])
-            .append(runs)
-    };
-    sections.push(card("Run chain", chain));
+/// Thread: the task as a chat log. An autoscrolling column of authored, phase-tagged entries —
+/// the originating spec, a plan's proposal, each persisted run, and (while running) the live run
+/// streaming in — above a pinned gate bar (review composer when parked, else run controls).
+fn peek_thread(app: &App, detail: &TaskDetail) -> ElementBuilder {
+    let column = el(El::Div)
+        .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
+        .md([St::PLg])
+        .append(thread_entries(app, detail));
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapMd])
-        .append(sections)
+        .st([St::Flex1, St::MinH0, St::DisplayFlex, St::FlexCol])
+        .append([thread::scroll(column), gate_bar(detail)])
 }
 
-/// Review: the gate actions when parked, else a note. A parked **plan** (R3) lists its proposed
-/// tasks above the actions, so approving/rejecting the plan is an informed decision.
-fn peek_review(detail: &TaskDetail) -> ElementBuilder {
-    if !detail.awaiting {
-        return card(
-            "Review",
-            Text::body("This task isn't waiting on your review right now.")
-                .muted()
+/// The ordered thread entries: the spec (as the originating request), a plan's proposed tasks,
+/// each run as an authored entry, then the live run when one is in flight.
+fn thread_entries(app: &App, detail: &TaskDetail) -> Vec<ElementBuilder> {
+    let mut entries = vec![thread::entry(
+        "you",
+        St::TextHigh,
+        Some("request"),
+        "",
+        None,
+        true,
+        vec![crate::ui::widgets::markdown(detail.spec.clone())],
+    )];
+    if detail.is_plan {
+        entries.push(thread::entry(
+            "claw",
+            St::TextAccent,
+            Some("Plan"),
+            "",
+            None,
+            false,
+            vec![proposed_view(&detail.proposed)],
+        ));
+    }
+    for (index, run) in detail.runs.iter().enumerate() {
+        entries.push(run_entry(run, &format!("a{index}"), &app.tool_toggled));
+    }
+    if detail.status == "running" {
+        entries.push(live_entry(app, detail));
+    }
+    entries
+}
+
+/// One persisted run as an authored, phase-tagged thread entry: author (agent) + role tag +
+/// timestamp + verdict chip, over its collapsible tool rows, Markdown reply and any feedback.
+fn run_entry(run: &crate::state::RunView, key: &str, toggled: &[String]) -> ElementBuilder {
+    let mut body: Vec<ElementBuilder> = run
+        .tools
+        .iter()
+        .enumerate()
+        .map(|(index, tool)| {
+            crate::ui::run_chain::tool_row(tool, &format!("{key}.{index}"), toggled)
+        })
+        .collect();
+    if run.output.trim().is_empty() {
+        body.push(Text::caption("(no output)").muted().build());
+    } else {
+        body.push(crate::ui::widgets::markdown(run.output.clone()));
+    }
+    if let Some(feedback) = run.feedback.as_deref().filter(|f| !f.trim().is_empty()) {
+        body.push(
+            Text::caption(format!("feedback: {feedback}"))
+                .accent()
                 .build(),
         );
     }
-    if detail.is_plan {
-        return el(El::Div)
-            .st([St::DisplayFlex, St::FlexCol, St::GapMd])
-            .append([
-                card("Proposed tasks", proposed_view(&detail.proposed)),
-                actions(&detail.id),
-            ]);
+    let author_color = if run.agent == "you" {
+        St::TextHigh
+    } else {
+        St::TextAccent
+    };
+    thread::entry(
+        &run.agent,
+        author_color,
+        Some(&crate::ui::run_chain::role_tag(run)),
+        &run.time,
+        Some(crate::ui::run_chain::verdict_chip(run)),
+        false,
+        body,
+    )
+}
+
+/// The live run as the newest thread entry: the agent + current step, a `● running` marker, its
+/// in-progress tool events, and the reply as it streams in (the typewriter `▌`).
+fn live_entry(app: &App, detail: &TaskDetail) -> ElementBuilder {
+    let mut live: Vec<&LiveEvent> = app
+        .live_activity
+        .iter()
+        .filter(|event| event.task_id == detail.id)
+        .collect();
+    live.reverse(); // ring is newest-first; show chronological
+    let streaming = app
+        .live_text
+        .iter()
+        .find(|text| text.task_id == detail.id)
+        .map(|text| text.text.as_str())
+        .unwrap_or("");
+    let task = app.tasks.iter().find(|t| t.id == detail.id);
+    let author = task.and_then(|t| t.agent.as_deref()).unwrap_or("owner");
+    let mut tag = task
+        .and_then(|t| app.pipeline_columns.get(t.step_position.max(0) as usize))
+        .cloned()
+        .unwrap_or_else(|| "Running".to_owned());
+    if let Some(task) = task.filter(|t| t.iteration > 0) {
+        tag.push_str(&format!(" · iter {}", task.iteration + 1));
     }
-    actions(&detail.id)
+    let mut body: Vec<ElementBuilder> = Vec::new();
+    if live.is_empty() && streaming.is_empty() {
+        body.push(
+            el(El::Div)
+                .st([St::TextXs, St::TextMuted])
+                .text("The agent is working…"),
+        );
+    }
+    for event in live {
+        body.push(live_event_row(event));
+    }
+    if !streaming.is_empty() {
+        body.push(streaming_text(streaming));
+    }
+    thread::entry(
+        author,
+        St::TextAccent,
+        Some(&tag),
+        "",
+        Some(running_dot()),
+        false,
+        body,
+    )
+}
+
+/// A small `● running` marker for the live entry's header.
+fn running_dot() -> ElementBuilder {
+    el(El::Span)
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::TextXs,
+            St::TextAccent,
+        ])
+        .append([
+            el(El::Span).st([St::WSp2, St::HSp2, St::RoundedFull, St::BgAccent]),
+            el(El::Span).text("running"),
+        ])
+}
+
+/// One live tool event: an in-progress / ok / failed mark, its time, and the humanized action.
+fn live_event_row(event: &LiveEvent) -> ElementBuilder {
+    let (mark, color) = if event.in_progress {
+        ("▷", St::TextMuted)
+    } else if event.ok {
+        ("✓", St::TextAccent)
+    } else {
+        ("✗", St::TextLow)
+    };
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::TextXs])
+        .append([
+            el(El::Span).st([color]).text(mark),
+            el(El::Span).st([St::TextMuted]).text(&event.time),
+            el(El::Span).st([St::TextHigh]).text(&event.action),
+        ])
+}
+
+/// The streaming reply text with a trailing cursor block.
+fn streaming_text(streaming: &str) -> ElementBuilder {
+    el(El::Div)
+        .style(
+            Style::new()
+                .set("white-space", "pre-wrap")
+                .set("word-break", "break-word"),
+        )
+        .st([St::TextXs, St::TextHigh, St::PtXs])
+        .text(&format!("{streaming}▌"))
 }
 
 /// A plan's proposed tasks as a small list of cards (title · assignee · schedule · spec) — the
@@ -318,63 +437,11 @@ fn proposed_view(proposed: &[ProposedTask]) -> ElementBuilder {
         .append(cards)
 }
 
-/// The live tool-activity feed for a running task — what the agent is doing now, plus its reply
-/// as it streams in (the typewriter).
-fn live_card(events: &[&LiveEvent], streaming: &str) -> ElementBuilder {
-    let mut rows = vec![
-        el(El::Div)
-            .st([St::TextXs, St::TextAccent, St::FontSemibold])
-            .text("▶ Running — live activity"),
-    ];
-    if events.is_empty() && streaming.is_empty() {
-        rows.push(
-            el(El::Div)
-                .st([St::TextXs, St::TextMuted])
-                .text("The agent is working… (activity will appear here)"),
-        );
-    }
-    for event in events {
-        let (mark, color) = if event.in_progress {
-            ("▷", St::TextMuted)
-        } else if event.ok {
-            ("✓", St::TextAccent)
-        } else {
-            ("✗", St::TextLow)
-        };
-        rows.push(
-            el(El::Div)
-                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::TextXs])
-                .append([
-                    el(El::Span).st([color]).text(mark),
-                    el(El::Span).st([St::TextMuted]).text(&event.time),
-                    el(El::Span).st([St::TextHigh]).text(&event.action),
-                ]),
-        );
-    }
-    if !streaming.is_empty() {
-        rows.push(
-            el(El::Div)
-                .style(
-                    Style::new()
-                        .set("white-space", "pre-wrap")
-                        .set("word-break", "break-word"),
-                )
-                .st([St::TextXs, St::TextHigh, St::PtXs])
-                .text(&format!("{streaming}▌")),
-        );
-    }
-    card(
-        "Live",
-        el(El::Div)
-            .st([St::DisplayFlex, St::FlexCol, St::GapXs])
-            .append(rows),
-    )
-}
-
-/// The run-control bar: Stop while live, Start/Restart when stopped, Archive/Unarchive when terminal.
-fn control_bar(detail: &TaskDetail) -> ElementBuilder {
+/// The status-appropriate run-control buttons: Stop while live, Start/Restart when stopped,
+/// Archive/Unarchive when terminal. Shared by the Overview control bar and the Thread's gate bar.
+fn control_buttons(detail: &TaskDetail) -> Vec<ElementBuilder> {
     let id = detail.id.as_str();
-    let buttons = match detail.status.as_str() {
+    match detail.status.as_str() {
         "running" | "pending" => vec![
             action_button("Stop", stop(), id, false),
             action_button("Cancel", cancel(), id, false),
@@ -388,18 +455,39 @@ fn control_bar(detail: &TaskDetail) -> ElementBuilder {
         // board (and restore it if archived). No restart: a finished task stays finished.
         _ if detail.archived => vec![action_button("Unarchive", unarchive(), id, false)],
         _ => vec![action_button("Archive", archive(), id, true)],
-    };
+    }
+}
+
+/// The Overview tab's run-control bar (the same buttons, in a titled card).
+fn control_bar(detail: &TaskDetail) -> ElementBuilder {
     card(
         "Controls",
         el(El::Div)
             .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-            .append(buttons),
+            .append(control_buttons(detail)),
     )
 }
 
-/// The gate actions for a parked task: Approve / Request-changes(notes) / Reject.
-fn actions(task_id: &str) -> ElementBuilder {
-    let buttons = el(El::Div)
+/// The Thread's pinned bottom bar — the review composer when the task is parked at a human gate,
+/// else the run controls. A `FlexShrink0` sibling below the scroll, like the chat composer.
+fn gate_bar(detail: &TaskDetail) -> ElementBuilder {
+    let inner = if detail.awaiting {
+        review_gate(&detail.id)
+    } else {
+        el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+            .append(control_buttons(detail))
+    };
+    el(El::Div)
+        .st([St::FlexShrink0, St::BorderT, St::PMd])
+        .md([St::PxLg])
+        .append([inner])
+}
+
+/// The inline review composer for a parked task: Approve / Reject, then a "what to change…" field
+/// that submits a change request in flux — the re-run then streams into the thread above it.
+fn review_gate(task_id: &str) -> ElementBuilder {
+    el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
             el(El::Div)
@@ -438,8 +526,7 @@ fn actions(task_id: &str) -> ElementBuilder {
                         .hover([St::TextHigh])
                         .text("Request changes"),
                 ]),
-        ]);
-    card("Your review", buttons)
+        ])
 }
 
 fn action_button(
