@@ -1,9 +1,11 @@
-//! The agent thread page (`/agent/:id`, Phase 1 — read-only): an agent's whole working life as
-//! one autoscrolling timeline. Built on the shared [`thread`] widgets and the same `run_entry` the
-//! Peek modal uses, so a run reads identically here. Each of the agent's tasks is a section marker
-//! (deep-linking to its board) followed by that task's runs; a running task streams live at the
-//! tail via the isolated [`agent_live_entry`] renderer. Renders from the projected
-//! `App.agent_thread` (see `bridge::agent_thread`).
+//! The agent thread page (`/agent/:id`): an agent's whole working life as one autoscrolling,
+//! chat-like timeline — its tasks (each a section marker deep-linking to its board) with their
+//! runs, inline review composers for tasks parked at a gate, and the live run streaming at the
+//! tail. Built on the shared [`thread`] widgets and the same `run_entry` the Peek modal uses, so a
+//! run reads identically here. Renders from `App.agent_thread` + `App.live_turns`.
+//!
+//! One renderer, keyed by agent id — the same shape the chat thread uses (a keyed subtree of plain
+//! rows), so switching agents replaces the timeline cleanly and streaming re-renders in place.
 
 use rwire::router::Link;
 use rwire::{El, ElementBuilder, St, el, renderer};
@@ -20,49 +22,65 @@ pub fn page() -> ElementBuilder {
         .append([agent_view()])
 }
 
-/// The agent header + timeline. Reads `agent_thread` (re-projected on task lifecycle events), not
-/// `live_turns` — so a streaming token repaints only the nested [`agent_live_entry`], not the list.
+/// The agent header + timeline. A single synced region (like the chat transcript): it reads the
+/// projected `agent_thread` and the live `live_turns`, so a lifecycle change or a streamed token
+/// re-renders the keyed subtree in place. The key (agent id) makes switching agents swap cleanly.
 #[renderer]
 fn agent_view(app: &App) -> ElementBuilder {
-    let Some(thread) = app.agent_thread.as_ref() else {
-        return el(El::Div)
-            .st([St::PMd, St::Flex1])
-            .append([Text::body("Loading…").muted().build()]);
-    };
+    // Always the same shape — header over a keyed, scrolling column — so the morph never has to
+    // reconcile two different structures (the loading/empty states are just a row in the column).
+    let thread = app.agent_thread.as_ref();
+    let name = thread.map_or("", |t| t.agent_name.as_str());
+    let key = thread.map_or("loading", |t| t.agent_id.as_str());
     let mut entries: Vec<ElementBuilder> = Vec::new();
-    for (index, item) in thread.items.iter().enumerate() {
-        entries.push(match item {
-            AgentThreadItem::Task {
-                id,
-                workspace_id,
-                title,
-                status,
-            } => task_marker(id, workspace_id, title, status),
-            AgentThreadItem::Run(run) => run_entry(run, &format!("a{index}"), &app.tool_toggled),
-            AgentThreadItem::ReviewGate { task_id } => review_prompt(task_id),
-        });
+    match thread {
+        None => entries.push(Text::body("Loading…").muted().build()),
+        Some(thread) => {
+            for (index, item) in thread.items.iter().enumerate() {
+                entries.push(match item {
+                    AgentThreadItem::Task {
+                        id,
+                        workspace_id,
+                        title,
+                        status,
+                    } => task_marker(id, workspace_id, title, status),
+                    AgentThreadItem::Run(run) => {
+                        run_entry(run, &format!("a{index}"), &app.tool_toggled)
+                    }
+                    AgentThreadItem::ReviewGate { task_id } => review_prompt(task_id),
+                });
+            }
+            // The live run(s) stream at the tail — plain entries (no nested renderer), so the keyed
+            // subtree stays a flat list of rows the morph can swap positionally, like chat.
+            for live in &thread.live {
+                let items: &[LiveItem] = app
+                    .live_turns
+                    .iter()
+                    .find(|turn| turn.task_id == live.task_id)
+                    .map(|turn| turn.items.as_slice())
+                    .unwrap_or(&[]);
+                entries.push(live_entry_row(&thread.agent_name, &live.tag, items));
+            }
+            if entries.is_empty() {
+                entries.push(
+                    el(El::Div)
+                        .st([St::TextSm, St::TextMuted])
+                        .text("No activity yet — this agent hasn't run any tasks."),
+                );
+            }
+        }
     }
-    if entries.is_empty() {
-        entries.push(
-            el(El::Div)
-                .st([St::TextSm, St::TextMuted])
-                .text("No activity yet — this agent hasn't run any tasks."),
-        );
-    }
-    // The live run streams into its own renderer, appended unconditionally (it self-hides when the
-    // agent has nothing running), so a token flush never repaints the timeline above.
-    entries.push(agent_live_entry());
     // Key the timeline by agent id: switching agents yields a new id, so the DOM morph replaces the
-    // whole subtree instead of positionally reusing the previous agent's nodes (leaving them stale).
-    // Same pattern the chat thread uses for switching conversations.
+    // whole subtree instead of positionally reusing the previous agent's nodes. Same pattern the
+    // chat thread uses for switching conversations.
     let column = el(El::Div)
-        .id(&format!("agent-thread-{}", thread.agent_id))
+        .id(&format!("agent-thread-{key}"))
         .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
         .md([St::PLg])
         .append(entries);
     el(El::Div)
         .st([St::Flex1, St::MinH0, St::DisplayFlex, St::FlexCol])
-        .append([agent_header(&thread.agent_name), thread::scroll(column)])
+        .append([agent_header(name), thread::scroll(column)])
 }
 
 /// The pinned page header: the agent's name.
@@ -148,39 +166,17 @@ fn status_chip(status: &str) -> ElementBuilder {
         .text(status)
 }
 
-/// The agent's running tasks streaming live, in their own synced region — so a token flush repaints
-/// only this entry, not the whole timeline. Self-hides when the agent has nothing running.
-#[renderer]
-fn agent_live_entry(app: &App) -> ElementBuilder {
-    let hidden = || el(El::Div).st([St::DisplayNone]);
-    let Some(thread) = app.agent_thread.as_ref() else {
-        return hidden();
-    };
-    if thread.live.is_empty() {
-        return hidden();
-    }
-    let entries: Vec<ElementBuilder> = thread
-        .live
-        .iter()
-        .map(|live| {
-            let items: &[LiveItem] = app
-                .live_turns
-                .iter()
-                .find(|turn| turn.task_id == live.task_id)
-                .map(|turn| turn.items.as_slice())
-                .unwrap_or(&[]);
-            thread::entry(
-                &thread.agent_name,
-                St::TextAccent,
-                Some(&live.tag),
-                "",
-                Some(running_dot()),
-                false,
-                live_stream_body(items),
-            )
-        })
-        .collect();
-    el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapLg])
-        .append(entries)
+/// One running task's live entry: the agent + current step, a running dot, and its interleaved
+/// text/tool stream (the typewriter). A plain builder — the enclosing `agent_view` re-renders it
+/// as tokens arrive, exactly as the chat transcript re-renders while a reply streams.
+fn live_entry_row(agent_name: &str, tag: &str, items: &[LiveItem]) -> ElementBuilder {
+    thread::entry(
+        agent_name,
+        St::TextAccent,
+        Some(tag),
+        "",
+        Some(running_dot()),
+        false,
+        live_stream_body(items),
+    )
 }
