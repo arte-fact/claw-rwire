@@ -155,8 +155,6 @@ pub enum Command {
     },
     /// Project every workspace's lane summary into `App.dashboard_lanes` (the dashboard opening).
     LoadDashboard,
-    /// Project the review inbox (tasks parked at a human gate) — the `/review` page opening.
-    LoadReview,
     /// Project one task's detail (spec + run chain) — the detail view opening.
     LoadTaskDetail {
         task_id: String,
@@ -692,7 +690,6 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadBrief { workspace } => files::load_brief(conn, shared, &workspace),
         Command::LoadTasks { workspace } => tasks::load(conn, shared, &workspace),
         Command::LoadDashboard => tasks::project_dashboard(conn, shared),
-        Command::LoadReview => review::load_inbox(conn, shared),
         Command::LoadTaskDetail { task_id } => tasks::load_detail(conn, shared, &task_id),
         Command::LoadWorkflow { workspace } => workflow::load(conn, shared, &workspace),
         Command::AddStep { workspace, kind } => workflow::add(conn, shared, &workspace, &kind),
@@ -711,7 +708,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             feedback,
         } => {
             scheduler::human_verdict(conn, shared, &task_id, &decision, &feedback);
-            review::load_inbox(conn, shared);
+            review::project_awaiting(conn, shared);
             tasks::load_detail(conn, shared, &task_id);
         }
         Command::LoadPrompt { agent, run } => prompts::load(conn, shared, agent, run),

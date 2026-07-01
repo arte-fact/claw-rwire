@@ -152,7 +152,7 @@ fn revise_brief(request: &str, feedback: &str) -> String {
 
 /// The owner's planning turn finished. For an auto-approve workspace, materialise the proposal
 /// immediately (hands-off); otherwise the plan stays parked at the review gate. Either way,
-/// re-project the lane + Review inbox and record the plan in the Activity log.
+/// re-project the lane + the sidebar "needs you" badge and record the plan in the Activity log.
 pub fn planned(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
@@ -184,8 +184,8 @@ pub fn planned(
         }
     }
     super::tasks::project_if_active(conn, shared, workspace);
-    // The plan parked at a human gate — refresh the Review inbox + badge so it shows.
-    super::review::project_count(conn, shared);
+    // The plan parked at a human gate — refresh the sidebar "needs you" badge so it shows.
+    super::review::project_awaiting(conn, shared);
     let _ = origin_chat; // the notify turn (C-3b) will speak into this thread
     let title = format!("planning · {workspace}");
     let (kind, detail) = match result {

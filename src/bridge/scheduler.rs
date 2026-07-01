@@ -57,7 +57,7 @@ pub fn tick(conn: &rusqlite::Connection, shared: &SharedServerState) {
     }
     // Keep the dashboard's all-lanes view + the review badge live regardless of route.
     super::tasks::project_dashboard(conn, shared);
-    super::review::project_count(conn, shared);
+    super::review::project_awaiting(conn, shared);
 }
 
 /// Claim a task for its lane (flip to `running`), reflect it, then dispatch the worker. A
@@ -332,7 +332,7 @@ fn validator_context(spec: &str, output: &str, files: &[String]) -> String {
 }
 
 /// The most recent successful producer/stage output of the task's **current attempt** — the work
-/// an `approve` accepts, and what the review inbox shows.
+/// an `approve` accepts, and what the board's Peek modal shows.
 pub(super) fn last_producer_output(conn: &rusqlite::Connection, task_id: &str) -> String {
     let attempt = tasks::get(conn, task_id)
         .ok()
@@ -705,7 +705,7 @@ pub fn finished(
 
 /// Route a validator's verdict (defaulting a missing verdict to `revise`, so a confused
 /// reviewer is bounded by the iteration cap rather than passing silently). `by_human` is set when
-/// a person resolved the gate from the review inbox — their `revise` always re-runs the producer,
+/// a person resolved the gate from the board — their `revise` always re-runs the producer,
 /// overriding the agent loop's exhausted cap (otherwise an escalated task would re-park forever
 /// with no correction run).
 fn route_verdict(
@@ -1006,7 +1006,7 @@ fn cancel_stranded_dependents(
 }
 
 /// Park a task at a human gate (a human validator, or a loop's on-exhaust = human). Frees the
-/// lane; the review inbox lets the user resolve it. `reason` is set on an **escalation** (the loop
+/// lane; the workspace board lets the user resolve it. `reason` is set on an **escalation** (the loop
 /// exhausted its attempts) — it's recorded on the task and surfaced in the ping + activity so the
 /// gate isn't a silent `awaiting` with no explanation.
 fn park_awaiting(
@@ -1035,14 +1035,15 @@ fn park_awaiting(
             chat,
             MessageRole::Agent,
             &format!(
-                "🔔 Task **{}** needs your review{why} — open the **Review** tab.",
+                "🔔 Task **{}** needs your review{why} — open its workspace board (the \
+                 \"Needs you\" filter) to approve or send it back.",
                 task.title
             ),
         );
     }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
     super::tasks::refresh_detail_if_open(conn, shared, &task.id);
-    super::review::project_count(conn, shared);
+    super::review::project_awaiting(conn, shared);
     activity(
         shared,
         task,
@@ -1051,8 +1052,8 @@ fn park_awaiting(
     );
 }
 
-/// Apply a human reviewer's verdict (from the review inbox) to a task parked at a human gate:
-/// record it as a validator run and drive the loop exactly like an agent verdict.
+/// Apply a human reviewer's verdict (from the board / Peek modal) to a task parked at a human
+/// gate: record it as a validator run and drive the loop exactly like an agent verdict.
 pub fn human_verdict(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
@@ -1107,7 +1108,7 @@ pub fn human_verdict(
         Some((decision.to_owned(), feedback.to_owned())),
         true,
     );
-    super::review::project_count(conn, shared);
+    super::review::project_awaiting(conn, shared);
 }
 
 /// Apply a verdict to a reviewable **Plan** task (R3): approve releases its held children (they
@@ -1162,8 +1163,7 @@ fn plan_verdict(
     }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
     super::tasks::refresh_detail_if_open(conn, shared, &task.id);
-    super::review::project_count(conn, shared);
-    super::review::load_inbox(conn, shared);
+    super::review::project_awaiting(conn, shared);
 }
 
 fn activity(shared: &SharedServerState, task: &Task, kind: ActivityKind, detail: String) {

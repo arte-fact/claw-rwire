@@ -17,7 +17,6 @@ pub enum Tab {
     #[default]
     Chat,
     Dashboard,
-    Review,
     Archived,
     Prompts,
     System,
@@ -28,10 +27,10 @@ pub enum Tab {
 impl Tab {
     /// The app-level surfaces shown in the nav footer. Chat is intentionally absent — the
     /// conversation list above the nav *is* the chat surface. Dashboard leads (the
-    /// cross-workspace overview); Files is gone (it's now a per-workspace tab).
-    pub const NAV: [Tab; 7] = [
+    /// cross-workspace overview); Files is gone (it's now a per-workspace tab), and review is
+    /// managed per-workspace (board + Peek), so there's no global Review surface.
+    pub const NAV: [Tab; 6] = [
         Tab::Dashboard,
-        Tab::Review,
         Tab::Archived,
         Tab::Prompts,
         Tab::System,
@@ -43,7 +42,6 @@ impl Tab {
         match self {
             Tab::Chat => "Chat",
             Tab::Dashboard => "Dashboard",
-            Tab::Review => "Review",
             Tab::Archived => "Archived",
             Tab::Prompts => "Prompts",
             Tab::System => "System",
@@ -57,7 +55,6 @@ impl Tab {
         match self {
             Tab::Chat => "/",
             Tab::Dashboard => "/dashboard",
-            Tab::Review => "/review",
             Tab::Archived => "/archived",
             Tab::Prompts => "/prompts",
             Tab::System => "/system",
@@ -73,7 +70,6 @@ impl Tab {
         match self {
             Tab::Chat => Icon::MessageSquare,
             Tab::Dashboard => Icon::Home,
-            Tab::Review => Icon::Check,
             Tab::Archived => Icon::Archive,
             Tab::Prompts => Icon::Terminal,
             Tab::System => Icon::Cpu,
@@ -232,6 +228,14 @@ pub struct WorkspaceView {
     pub auto_approve: bool,
 }
 
+/// How many tasks are parked at a human gate in one workspace — the sidebar row's "needs you"
+/// count badge. Only workspaces with a non-zero count are projected.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceAwaiting {
+    pub id: String,
+    pub count: usize,
+}
+
 /// One task card in a workspace's lane (projected from the `tasks` table). `agent` is the
 /// assignee's display name (or `None` = the owner); `status` is the lifecycle string.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -366,27 +370,8 @@ pub struct RoleDefaults {
     pub validator: String,
 }
 
-/// One task parked at a human gate, shown in the cross-workspace Review inbox.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ReviewItem {
-    pub task_id: String,
-    pub title: String,
-    /// The workspace id (for links) and display name.
-    pub workspace_id: String,
-    pub workspace: String,
-    pub spec: String,
-    /// The producer's latest output — the work to review (fallback when `run` is absent).
-    pub output: String,
-    /// The producer's latest run — its tool transcript + output, so the inbox shows the full
-    /// story (what files/commands), not just a snippet. `None` if no run was recorded yet.
-    pub run: Option<RunView>,
-    /// Whether this is a reviewable **Plan** task (R3) — the inbox shows its proposed tasks.
-    pub is_plan: bool,
-    /// For a plan: the proposed (held) child tasks the user is approving.
-    pub proposed: Vec<ProposedTask>,
-}
-
-/// One proposed task in a plan under review (R3) — shown as a card in the Review inbox.
+/// One proposed task in a plan under review (R3) — shown in the Peek modal's Review tab when a
+/// plan task is parked at its gate.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProposedTask {
     pub title: String,
@@ -427,6 +412,10 @@ pub struct TaskDetail {
     pub awaiting: bool,
     /// Whether the task is archived (hidden from the board) — its control bar offers Unarchive.
     pub archived: bool,
+    /// Whether this is a reviewable **Plan** task (R3) — the Review tab lists its proposed tasks.
+    pub is_plan: bool,
+    /// For a plan: the proposed (held) child tasks the user is approving (empty otherwise).
+    pub proposed: Vec<ProposedTask>,
     pub runs: Vec<RunView>,
 }
 
@@ -612,9 +601,10 @@ pub struct App {
     pub prompt_preview: Option<PromptPreview>,
     /// The editable global role preambles (effective values), for the Prompts defaults section.
     pub role_defaults: RoleDefaults,
-    /// Tasks parked at a human gate (the Review inbox) + the count (for the nav badge).
-    pub review_inbox: Vec<ReviewItem>,
-    pub review_count: usize,
+    /// Per-workspace counts of tasks parked at a human gate — the sidebar rows' "needs you"
+    /// badges. Only workspaces with a non-zero count appear; review itself is managed in the
+    /// workspace (board + Peek), so there's no global inbox.
+    pub awaiting: Vec<WorkspaceAwaiting>,
     /// The task whose detail view (run chain) is open, or `None`.
     pub task_detail: Option<TaskDetail>,
     /// The task whose **Peek** modal is open over the board, or `None` (closed).
@@ -671,4 +661,16 @@ pub struct App {
     /// Whether the mobile slide-in nav drawer is open. The desktop sidebar is always
     /// visible (a breakpoint override), so this only governs mobile.
     pub nav_open: bool,
+}
+
+impl App {
+    /// The count of tasks parked at a human gate in workspace `id` — the sidebar row's badge
+    /// (0 when the workspace has none).
+    #[must_use]
+    pub fn awaiting_for(&self, id: &str) -> usize {
+        self.awaiting
+            .iter()
+            .find(|w| w.id == id)
+            .map_or(0, |w| w.count)
+    }
 }

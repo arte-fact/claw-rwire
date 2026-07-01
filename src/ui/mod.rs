@@ -14,7 +14,6 @@ mod dashboard;
 mod files;
 mod logs;
 mod prompts;
-mod review;
 mod run_chain;
 mod system_map;
 mod task_detail;
@@ -90,7 +89,6 @@ pub fn routes() -> Router {
             view(workspace::shell(wid(p), WsTab::Team, workspace::team()))
         })
         .page("/archived", |_| view(archived::page()))
-        .page("/review", |_| view(review::page()))
         .page("/prompts", |_| view(prompts::page()))
         .page("/system", |_| view(system_map::page()))
         .page("/activity", |_| view(activity::page()))
@@ -216,6 +214,7 @@ fn workspaces_nav(app: &App) -> ElementBuilder {
             &workspace.id,
             &workspace.name,
             active == Some(workspace.id.as_str()),
+            app.awaiting_for(&workspace.id),
         ));
     }
     // Create lives on the dashboard; per-workspace settings on its Team tab.
@@ -251,7 +250,7 @@ fn workspaces_nav(app: &App) -> ElementBuilder {
         .append(rows)
 }
 
-fn workspace_row(id: &str, name: &str, active: bool) -> ElementBuilder {
+fn workspace_row(id: &str, name: &str, active: bool, awaiting: usize) -> ElementBuilder {
     let color = if active { St::TextHigh } else { St::TextMuted };
     Link::route(&format!("/w/{id}"))
         .on(Ev::Click, close_nav())
@@ -270,7 +269,9 @@ fn workspace_row(id: &str, name: &str, active: bool) -> ElementBuilder {
         .append([
             chat::accent_bar(active),
             chat::icon_slot(icons::icon_sized(icons::Icon::Folder, 16)),
-            el(El::Span).text(name),
+            // The name grows to fill the row so the "needs you" badge sits flush at the right.
+            el(El::Span).st([St::Flex1]).text(name),
+            awaiting_badge(awaiting),
         ])
 }
 
@@ -413,14 +414,11 @@ fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
     // `Link::route` is rwire's client-routed `<a>`: the client router intercepts the
     // click, pushes history, and re-renders the matched view into the outlet. The
     // extra `close_nav` collapses the mobile drawer once you've picked a destination.
-    let mut row = vec![
+    let row = vec![
         chat::accent_bar(active),
         chat::icon_slot(icons::icon_sized(tab.icon(), 16)),
         el(El::Span).st([St::Flex1]).text(tab.label()),
     ];
-    if tab == Tab::Review {
-        row.push(review_badge());
-    }
     Link::route(tab.path())
         .on(Ev::Click, close_nav())
         .st([
@@ -438,11 +436,10 @@ fn nav_row(tab: Tab, active: bool) -> ElementBuilder {
         .append(row)
 }
 
-/// The Review nav row's count badge — how many tasks are parked at a human gate. Its own
-/// `App` renderer so it stays live; empty (a zero-width span) when nothing's waiting.
-#[renderer]
-fn review_badge(app: &App) -> ElementBuilder {
-    if app.review_count == 0 {
+/// A workspace row's "needs you" count badge — how many of its tasks are parked at a human gate.
+/// Empty (a zero-width span) when nothing's waiting.
+fn awaiting_badge(count: usize) -> ElementBuilder {
+    if count == 0 {
         return el(El::Span);
     }
     el(El::Span)
@@ -453,7 +450,7 @@ fn review_badge(app: &App) -> ElementBuilder {
             St::BgAccent,
             St::TextOnAccent,
         ])
-        .text(&app.review_count.to_string())
+        .text(&count.to_string())
 }
 
 #[renderer]
@@ -581,10 +578,6 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     // Opening the global dashboard refreshes its all-lanes task view.
     if path == "/dashboard" {
         bridge::send(Command::LoadDashboard);
-    }
-    // Opening the review inbox loads the tasks parked at a human gate.
-    if path == "/review" {
-        bridge::send(Command::LoadReview);
     }
     // Opening the Prompts inspector composes the current selection (picking up any edits) and
     // loads the editable global role defaults.

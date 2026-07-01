@@ -85,7 +85,7 @@ fn parse_transcript(json: Option<&str>) -> Vec<crate::state::ToolCardView> {
 }
 
 /// Map one persisted run to its view-model — agent id resolved to a name, transcript parsed into
-/// tool cards. Shared by the detail run chain and the Review inbox.
+/// tool cards, for the Peek modal's run chain.
 fn run_view(
     names: &[(String, String)],
     run: crate::db::task_runs::TaskRun,
@@ -111,8 +111,8 @@ fn run_view(
     }
 }
 
-/// A plan's proposed tasks as view-models for the Review inbox (R3, Option A) — read straight from
-/// the plan's JSON proposal, before any task rows exist. `agent` is already the member's name.
+/// A plan's proposed tasks as view-models for the Peek modal's Review tab (R3, Option A) — read
+/// straight from the plan's JSON proposal, before any task rows exist. `agent` is the member's name.
 pub(super) fn proposed_tasks(
     conn: &rusqlite::Connection,
     plan_id: &str,
@@ -129,22 +129,8 @@ pub(super) fn proposed_tasks(
         .collect()
 }
 
-/// The producer's latest successful run (current attempt) as a view-model — the work the Review
-/// inbox shows, with its tool transcript. `None` if no such run was recorded.
-pub(super) fn latest_producer_run_view(
-    conn: &rusqlite::Connection,
-    task_id: &str,
-) -> Option<crate::state::RunView> {
-    let task = tasks::get(conn, task_id).ok().flatten()?;
-    let run = crate::db::task_runs::list_for_task_attempt(conn, task_id, task.attempt)
-        .ok()?
-        .into_iter()
-        .rev()
-        .find(|run| run.ok && (run.role == "stage" || run.role == "producer"))?;
-    Some(run_view(&agent_names(conn), run))
-}
-
-/// Build one task's detail (spec + the full run chain). `None` if the task is gone.
+/// Build one task's detail (spec + the full run chain, and — for a plan gate — its proposed
+/// children so the Peek modal's Review tab can show them). `None` if the task is gone.
 fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::state::TaskDetail> {
     let names = agent_names(conn);
     tasks::get(conn, task_id).ok().flatten().map(|task| {
@@ -153,6 +139,11 @@ fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::sta
             .into_iter()
             .map(|run| run_view(&names, run))
             .collect();
+        let proposed = if task.is_plan {
+            proposed_tasks(conn, &task.id)
+        } else {
+            Vec::new()
+        };
         crate::state::TaskDetail {
             id: task.id,
             workspace_id: task.workspace_id,
@@ -160,6 +151,8 @@ fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::sta
             spec: task.spec,
             awaiting: task.status == tasks::TaskStatus::Awaiting,
             archived: task.archived_at.is_some(),
+            is_plan: task.is_plan,
+            proposed,
             status: task.status.as_str().to_owned(),
             runs,
         }
@@ -519,4 +512,68 @@ fn surface(shared: &SharedServerState, error: String) {
     shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_ERROR]), move |app| {
         app.error = Some(error)
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::open_in_memory;
+    use crate::db::tasks::proposal::{self, ProposalItem};
+
+    fn seeded() -> rusqlite::Connection {
+        let conn = open_in_memory().expect("db");
+        workspaces::create(&conn, "ws", "Project").expect("ws");
+        conn
+    }
+
+    #[test]
+    fn build_detail_carries_a_plans_proposed_children() {
+        let conn = seeded();
+        tasks::create_plan(&conn, "p1", "ws", "Plan", "the goal", None).expect("plan");
+        proposal::append(
+            &conn,
+            "p1",
+            &[ProposalItem {
+                title: "First step".to_owned(),
+                spec: "do the first thing".to_owned(),
+                agent: Some("Scout".to_owned()),
+                schedule: None,
+                blockers: Vec::new(),
+            }],
+        )
+        .expect("append");
+
+        let detail = build_detail(&conn, "p1").expect("detail");
+        assert!(detail.is_plan, "a plan gate is flagged as a plan");
+        assert!(detail.awaiting, "a plan gate parks awaiting review");
+        assert_eq!(detail.proposed.len(), 1);
+        assert_eq!(detail.proposed[0].title, "First step");
+        assert_eq!(detail.proposed[0].agent.as_deref(), Some("Scout"));
+    }
+
+    #[test]
+    fn build_detail_leaves_an_ordinary_task_without_proposed_tasks() {
+        let conn = seeded();
+        tasks::create(
+            &conn,
+            &NewTask {
+                id: "t1",
+                workspace_id: "ws",
+                agent: None,
+                title: "Task",
+                spec: "do it",
+                schedule: None,
+                origin_chat: None,
+                max_retries: None,
+            },
+        )
+        .expect("create");
+
+        let detail = build_detail(&conn, "t1").expect("detail");
+        assert!(!detail.is_plan);
+        assert!(
+            detail.proposed.is_empty(),
+            "no proposed tasks for a non-plan"
+        );
+    }
 }

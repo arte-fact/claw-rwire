@@ -9,7 +9,7 @@ use rwire_markdown::{Markdown, ProseSize};
 /// Render model output as **compact** markdown. The markdown component's heading scale
 /// (`xl`/`2xl`) is far larger than the app's small UI text, so we shrink the size-scale CSS
 /// vars (`--T*`) on the wrapper: everything renders a notch down, headings only slightly above
-/// the body. One helper so chat, the task detail, and the review inbox stay consistent.
+/// the body. One helper so chat and the task detail stay consistent.
 pub fn markdown(text: String) -> ElementBuilder {
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol])

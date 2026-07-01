@@ -1,62 +1,26 @@
-//! The review inbox (Phase F-3): the cross-workspace surface for tasks parked at a human gate.
-//! Projects the inbox list (the `/review` page) and the nav count badge; a verdict from a row
-//! drives the loop via `scheduler::human_verdict`.
+//! Review projection: tasks parked at a human gate are reviewed *in the workspace* (the board's
+//! "Needs you" filter + the Peek modal's Review tab), so there's no cross-workspace inbox. All
+//! that's projected here is the per-workspace "needs you" count for the sidebar badges; a verdict
+//! from the board/Peek drives the loop via `scheduler::human_verdict`.
 
 use rwire::{ChangeSet, SharedServerState};
 
-use crate::db::{tasks, workspaces};
-use crate::state::{App, ReviewItem};
+use crate::db::tasks;
+use crate::state::{App, WorkspaceAwaiting};
 
-/// Project just the count of awaiting tasks — the nav badge. Cheap; refreshed on each tick and
-/// whenever a task parks or resolves.
-pub fn project_count(conn: &rusqlite::Connection, shared: &SharedServerState) {
-    let count = tasks::count_awaiting(conn).unwrap_or(0).max(0) as usize;
-    shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_REVIEW_COUNT]),
-        move |app| app.review_count = count,
-    );
-}
-
-/// Project the full inbox — every task parked at a human gate, with the work to review. Loaded
-/// when the `/review` page opens and after a verdict.
-pub fn load_inbox(conn: &rusqlite::Connection, shared: &SharedServerState) {
-    let items: Vec<ReviewItem> = tasks::list_awaiting(conn)
+/// Project the per-workspace count of awaiting tasks — the sidebar rows' "needs you" badges.
+/// Cheap (one grouped query); refreshed on each tick and whenever a task parks or resolves.
+pub fn project_awaiting(conn: &rusqlite::Connection, shared: &SharedServerState) {
+    let awaiting: Vec<WorkspaceAwaiting> = tasks::count_awaiting_by_workspace(conn)
         .unwrap_or_default()
         .into_iter()
-        .map(|task| {
-            let workspace = workspaces::get(conn, &task.workspace_id)
-                .ok()
-                .flatten()
-                .map(|ws| ws.name)
-                .unwrap_or_else(|| task.workspace_id.clone());
-            // A plan task shows its proposed children; an ordinary task shows its producer run.
-            let (run, proposed) = if task.is_plan {
-                (None, super::tasks::proposed_tasks(conn, &task.id))
-            } else {
-                (
-                    super::tasks::latest_producer_run_view(conn, &task.id),
-                    Vec::new(),
-                )
-            };
-            ReviewItem {
-                output: super::scheduler::last_producer_output(conn, &task.id),
-                run,
-                is_plan: task.is_plan,
-                proposed,
-                task_id: task.id,
-                title: task.title,
-                workspace_id: task.workspace_id,
-                workspace,
-                spec: task.spec,
-            }
+        .map(|(id, count)| WorkspaceAwaiting {
+            id,
+            count: count.max(0) as usize,
         })
         .collect();
-    let count = items.len();
-    shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_REVIEW_INBOX, App::FIELD_REVIEW_COUNT]),
-        move |app| {
-            app.review_inbox = items;
-            app.review_count = count;
-        },
-    );
+    shared
+        .update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_AWAITING]), move |app| {
+            app.awaiting = awaiting
+        });
 }

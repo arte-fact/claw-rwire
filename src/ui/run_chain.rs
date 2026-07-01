@@ -1,5 +1,5 @@
-//! Shared rendering of a task run as a **collapsible card** — used by both the task-detail run
-//! chain and the Review inbox. Whole runs collapse to a one-line header (role + files-changed
+//! Shared rendering of a task run as a **collapsible card** — used by the task-detail run
+//! chain (the Peek modal's Activity tab). Whole runs collapse to a one-line header (role + files-changed
 //! summary + verdict); only the latest run is open by default. Inside an open run, tool calls are
 //! one-line rows (a humanized summary, not raw JSON) collapsed by default; click anything to toggle.
 

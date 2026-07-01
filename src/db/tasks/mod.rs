@@ -112,7 +112,7 @@ pub struct Task {
     /// earlier attempts.
     pub attempt: i64,
     /// A reviewable "Plan" gate task (R3): it carries no pipeline work; its held children await a
-    /// human verdict in the Review inbox.
+    /// human verdict on the workspace board (the Peek modal's Review tab).
     pub is_plan: bool,
     /// For a task materialised from a plan (R3): the id of the plan it came from.
     pub plan_id: Option<String>,
@@ -400,23 +400,15 @@ pub fn next_ready(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Opt
     .optional()
 }
 
-/// Every task parked at a human gate (`awaiting`), across all workspaces, newest first — the
-/// cross-workspace review inbox.
-pub fn list_awaiting(conn: &Connection) -> rusqlite::Result<Vec<Task>> {
-    let mut stmt = conn.prepare(&format!(
-        "{SELECT} WHERE status = 'awaiting' ORDER BY updated_at DESC"
-    ))?;
-    let rows = stmt.query_map([], from_row)?;
+/// How many tasks are parked at a human gate (`awaiting`) in each workspace that has any —
+/// the per-workspace "needs you" count for the sidebar badge. Workspaces with none are omitted.
+pub fn count_awaiting_by_workspace(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT workspace_id, COUNT(*) FROM tasks WHERE status = 'awaiting' \
+         GROUP BY workspace_id",
+    )?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
     rows.collect()
-}
-
-/// How many tasks are parked at a human gate — for the nav badge.
-pub fn count_awaiting(conn: &Connection) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE status = 'awaiting'",
-        [],
-        |row| row.get(0),
-    )
 }
 
 /// Whether a workspace has a task **mid-pipeline** (`running` or `awaiting`) — the pipeline
@@ -819,5 +811,31 @@ mod tests {
             .map(|t| t.id)
             .collect();
         assert_eq!(ids, vec!["t2".to_owned(), "t3".to_owned(), "t1".to_owned()]);
+    }
+
+    #[test]
+    fn count_awaiting_by_workspace_groups_only_parked_tasks() {
+        let conn = seeded();
+        workspaces::create(&conn, "ws2", "Other").expect("ws2");
+        // ws: two parked + one still pending; ws2: one parked; a third workspace has none.
+        for id in ["a1", "a2", "pending"] {
+            create(&conn, &task(id)).expect("create");
+        }
+        create(
+            &conn,
+            &NewTask {
+                workspace_id: "ws2",
+                ..task("b1")
+            },
+        )
+        .expect("create");
+        for id in ["a1", "a2", "b1"] {
+            set_status(&conn, id, TaskStatus::Awaiting).expect("park");
+        }
+
+        let mut counts = count_awaiting_by_workspace(&conn).expect("counts");
+        counts.sort();
+        // Only `awaiting` tasks count; the pending one and the empty workspace are absent.
+        assert_eq!(counts, vec![("ws".to_owned(), 2), ("ws2".to_owned(), 1)]);
     }
 }

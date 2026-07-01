@@ -9,7 +9,7 @@ use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons};
 use rwire_components::{Avatar, AvatarSize, Button, ButtonSize, Input, Text};
 
 use crate::bridge::{self, Command};
-use crate::state::{App, LiveEvent, TaskDetail};
+use crate::state::{App, LiveEvent, ProposedTask, TaskDetail};
 use crate::ui::workspace::card;
 use crate::ui::workspace_tasks::initials;
 
@@ -253,18 +253,69 @@ fn peek_activity(app: &App, detail: &TaskDetail) -> ElementBuilder {
         .append(sections)
 }
 
-/// Review: the gate actions when parked, else a note.
+/// Review: the gate actions when parked, else a note. A parked **plan** (R3) lists its proposed
+/// tasks above the actions, so approving/rejecting the plan is an informed decision.
 fn peek_review(detail: &TaskDetail) -> ElementBuilder {
-    if detail.awaiting {
-        actions(&detail.id)
-    } else {
-        card(
+    if !detail.awaiting {
+        return card(
             "Review",
             Text::body("This task isn't waiting on your review right now.")
                 .muted()
                 .build(),
-        )
+        );
     }
+    if detail.is_plan {
+        return el(El::Div)
+            .st([St::DisplayFlex, St::FlexCol, St::GapMd])
+            .append([
+                card("Proposed tasks", proposed_view(&detail.proposed)),
+                actions(&detail.id),
+            ]);
+    }
+    actions(&detail.id)
+}
+
+/// A plan's proposed tasks as a small list of cards (title · assignee · schedule · spec) — the
+/// work the user approves when they approve the plan gate.
+fn proposed_view(proposed: &[ProposedTask]) -> ElementBuilder {
+    if proposed.is_empty() {
+        return el(El::Div)
+            .st([St::TextXs, St::TextMuted, St::PSm])
+            .text("(no tasks proposed)");
+    }
+    let cards: Vec<ElementBuilder> = proposed
+        .iter()
+        .map(|p| {
+            let mut meta = p.agent.clone().unwrap_or_else(|| "owner".to_owned());
+            if let Some(schedule) = &p.schedule {
+                meta.push_str(&format!(" · ⟳ {schedule}"));
+            }
+            el(El::Div)
+                .st([
+                    St::BgApp,
+                    St::BorderDefault,
+                    St::Rounded0,
+                    St::PSm,
+                    St::DisplayFlex,
+                    St::FlexCol,
+                    St::GapXs,
+                ])
+                .append([
+                    el(El::Div)
+                        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+                        .append([
+                            el(El::Span)
+                                .st([St::Flex1, St::TextSm, St::TextHigh, St::FontSemibold])
+                                .text(&p.title),
+                            el(El::Span).st([St::TextXs, St::TextLow]).text(&meta),
+                        ]),
+                    el(El::Div).st([St::TextXs, St::TextMuted]).text(&p.spec),
+                ])
+        })
+        .collect();
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append(cards)
 }
 
 /// The live tool-activity feed for a running task — what the agent is doing now, plus its reply
