@@ -83,22 +83,6 @@ from, and that it flags uncertainty — a missing file, an empty file, or unsour
 `verdict` tool exactly once: `pass`, `revise`, or `reject`. State your decision through the tool, \
 never only in prose. Don't rewrite the report yourself.";
 
-/// Role-preamble for Studio's final loop step (**Approve**), parked for the human. **Dual-mode:**
-/// the initial pass is a review-only sign-off (no edits — a finalize pass once silently rewrote
-/// sibling tasks' files); but when the user requests changes, this same step re-runs with their
-/// feedback and *must* apply it (edit/build/test) — otherwise "request changes" produces no
-/// correction. The discriminator is whether there's reviewer feedback in the task context.
-const SIGNOFF_PROMPT: &str = "This is the sign-off step before the user approves. \
-If the task context includes change requests from the user/reviewer, apply them now: edit the \
-files with your tools (`write`/`edit`/`read`/`bash`) under this project's `projects/<project-name>/` \
-directory (never write `src/…` at the workspace root), rebuild, run the tests (run them — don't \
-assume), and stay scoped to exactly what was asked — don't touch unrelated work. Then report what \
-you changed. \
-Otherwise, this is the initial sign-off and you must NOT edit anything: just confirm the project \
-builds and its tests pass, briefly summarize what was delivered, and confirm it's ready to ship \
-(if something is genuinely wrong, say so plainly so it can be sent back). \
-Call tools using the provided tool-call mechanism, never by writing the call out as text.";
-
 const STUDIO_BRIEF: &str = "# Studio\n\nWhere we build things — apps, scripts, and tooling. \
 Forge does the engineering here; ask for something concrete and it gets made.\n\n## \
 Conventions\n\nKeep the working tree tidy and put new files where they belong:\n\n- \
@@ -121,12 +105,12 @@ small team across workspaces, each with its own review **workflow**.\n\n**Your t
 reviewer, checks Forge's work in Studio\n- **Scout** — researcher, owns the **Research** \
 workspace (gathers, compares, summarizes)\n\n**How it works:** ask me for something multi-step \
 and I'll delegate it. In **Studio**, every task flows through a pipeline — in the **Build** step \
-Forge writes the code and Critic reviews it until it passes, then it parks for **your** approval. \
+Forge writes the code and Critic reviews it until it passes, then it's done. \
 **Research** works the same way: Scout writes the report and Critic checks it's sourced and \
 complete before it's done. Watch it move across the board.\n\n**Try one:**\n> Build a small CLI \
-tool in Studio that prints a motivational quote.\n\nThen open Studio's **Tasks** tab (the kanban board), **Workflow** tab (the \
-pipeline — edit it!), and the **Review** tab when something needs you. **Prompts** shows exactly \
-what each agent is told.";
+tool in Studio that prints a motivational quote.\n\nThen open Studio's **Tasks** tab (the kanban board) — a card that needs you shows its \
+review actions right there — and the **Workflow** tab (the pipeline — edit it, e.g. add a human \
+sign-off gate). **Prompts** shows exactly what each agent is told.";
 
 /// Seed the showcase if the DB is fresh (exactly the default agent, no workspaces) and the
 /// demo isn't disabled. Best-effort — any step failing just leaves a smaller seed.
@@ -183,11 +167,13 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
     write_brief(data_dir, STUDIO, "Studio", STUDIO_BRIEF);
     write_brief(data_dir, RESEARCH, "Research", RESEARCH_BRIEF);
 
-    // Studio's showcase pipeline — the whole feature, visible on first boot:
-    //   Build (loop: Forge ⇄ Critic, ≤2) → Approve (loop: review-only Forge ⇄ you).
-    // The old standalone `Execute` stage is folded into Build's iteration 0 — one Forge produce
-    // before the first review instead of two — and the Approve step is a review-only sign-off that
-    // doesn't mutate code. Research gets its own reviewed loop (below).
+    // Studio's showcase pipeline — a single reviewed loop, visible on first boot:
+    //   Build (loop: Forge ⇄ Critic, ≤2) → done.
+    // A separate human **Approve** step used to follow, but it cost a full Forge "sign-off" run
+    // (~10 tool calls re-reading + re-summarizing what Build already produced) just to tee up a
+    // one-click human approval — the DB showed it added ~2 runs per task and rendered no real
+    // verification, so it's dropped: Build's agent review is the gate, matching Research's lean
+    // single-loop shape. (Add a human gate back per-workspace in the Workflow editor if wanted.)
     let _ = pipeline::insert(
         conn,
         "ps-studio-0",
@@ -200,23 +186,6 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
             prompt: Some(BUILD_PROMPT),
             validator_kind: Some("agent"),
             validator_agent: Some(CRITIC_ID),
-            validator_prompt: None,
-            max_iterations: 2,
-            on_exhaust: "human",
-        },
-    );
-    let _ = pipeline::insert(
-        conn,
-        "ps-studio-1",
-        STUDIO,
-        1,
-        &StepFields {
-            kind: "loop",
-            name: "Approve",
-            agent: Some(FORGE_ID),
-            prompt: Some(SIGNOFF_PROMPT),
-            validator_kind: Some("human"),
-            validator_agent: None,
             validator_prompt: None,
             max_iterations: 2,
             on_exhaust: "human",
@@ -281,17 +250,21 @@ mod tests {
     }
 
     #[test]
-    fn studio_pipeline_is_build_then_approve_no_execute_stage() {
+    fn studio_pipeline_is_a_single_build_loop() {
         let conn = fresh_db_with_one_agent();
         let data = tempfile::tempdir().expect("tmp");
         seed_showcase(&conn, data.path());
 
         let steps = pipeline::steps_for(&conn, STUDIO).expect("steps");
-        // Two steps now (the old standalone Execute stage is folded into Build's iteration 0).
-        assert_eq!(steps.len(), 2, "Studio should have exactly Build → Approve");
+        // One reviewed loop: the standalone Execute stage folds into Build's iteration 0, and the
+        // human Approve step is dropped (it added ~2 runs/task for no real verification).
+        assert_eq!(steps.len(), 1, "Studio should have exactly the Build loop");
         assert!(
-            !steps.iter().any(|s| s.name == "Execute"),
-            "the Execute stage must be gone"
+            !steps
+                .iter()
+                .any(|s| s.name == "Execute" || s.name == "Approve"),
+            "no Execute stage and no Approve step: {:?}",
+            steps.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
 
         let build = &steps[0];
@@ -299,22 +272,6 @@ mod tests {
         assert_eq!(build.kind, StepKind::Loop);
         assert_eq!(build.validator_kind.as_deref(), Some("agent"));
         assert_eq!(build.validator_agent.as_deref(), Some(CRITIC_ID));
-
-        let approve = &steps[1];
-        assert_eq!(approve.name, "Approve");
-        assert_eq!(approve.kind, StepKind::Loop);
-        assert_eq!(approve.validator_kind.as_deref(), Some("human"));
-    }
-
-    #[test]
-    fn signoff_prompt_is_dual_mode() {
-        // The Approve step is review-only on the initial pass (no edits)…
-        assert!(SIGNOFF_PROMPT.contains("NOT edit"));
-        // …but applies the user's change requests when revised, so "request changes" actually
-        // produces a correction run (the regression this guards against).
-        let lower = SIGNOFF_PROMPT.to_lowercase();
-        assert!(lower.contains("change request"));
-        assert!(lower.contains("apply them"));
     }
 
     #[test]
@@ -378,17 +335,12 @@ mod tests {
     }
 
     #[test]
-    fn build_and_signoff_prompts_scope_to_projects() {
-        // The pipeline step prompts replace the role default, so the project-path guidance has to
+    fn build_prompt_scopes_to_projects() {
+        // The Build step prompt replaces the role default, so the project-path guidance has to
         // live here too (else the workspace-root-scatter fix never reaches Forge).
         assert!(
             BUILD_PROMPT.contains("projects/"),
             "Build must scope to projects/"
-        );
-        // Only the sign-off's edit branch (change requests) writes files — scope it there.
-        assert!(
-            SIGNOFF_PROMPT.contains("projects/"),
-            "Approve's edit path must scope to projects/"
         );
     }
 
