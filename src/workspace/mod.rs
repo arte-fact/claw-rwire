@@ -19,6 +19,11 @@ pub const FILE_VIEW_MAX_BYTES: u64 = 1 << 20;
 pub enum WorkspaceError {
     #[error("path escapes the workspace")]
     Escape,
+    /// The workspace root can't be located (cwd unreadable). Kept distinct from `Escape` so a
+    /// setup problem isn't misreported to the model as "your path is outside the workspace" — the
+    /// live symptom where an in-workspace absolute path was rejected as an escape.
+    #[error("the workspace directory is unavailable")]
+    RootUnavailable,
     #[error("no such file or directory")]
     NotFound,
     #[error("not a directory")]
