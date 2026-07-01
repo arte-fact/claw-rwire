@@ -13,7 +13,7 @@ use crate::db::pipeline::{self, Step, StepKind};
 use crate::db::resolution::{self, ResolvedInference};
 use crate::db::tasks::{self, Task, TaskStatus};
 use crate::db::{task_runs, workspaces};
-use crate::state::{ActivityKind, App, ChatMessage, MessageRole, ProgressCtx, RunRole};
+use crate::state::{ActivityKind, App, MessageRole, ProgressCtx, RunRole};
 use crate::tools::{CompositeToolbox, Toolbox, ValidatorToolbox};
 use crate::workspace;
 
@@ -111,15 +111,12 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             super::memory_layer(conn, &inference.agent_id),
         );
         // Scope context to the current attempt: a restart (a fresh attempt) must not inherit an
-        // earlier attempt's outputs as "work produced so far".
+        // earlier attempt's runs. Reconstruct the producer's own thread across this attempt's
+        // passes so a re-run continues its work instead of rediscovering it from disk.
         let prior =
             task_runs::list_for_task_attempt(conn, &task.id, task.attempt).unwrap_or_default();
-        let user = ChatMessage {
-            role: MessageRole::User,
-            text: step_context(&task.spec, &prior, &step.name),
-            time: super::now_hm(),
-        };
-        let messages = agent::build_messages(&system_prompt, std::slice::from_ref(&user));
+        let messages =
+            super::replay::producer_thread(&system_prompt, &task.spec, &step.name, &prior);
         let toolbox = build_toolbox(inference.tools.clone(), Some(workspace_dir), true);
         Ok((inference, messages, toolbox))
     })();
@@ -151,12 +148,12 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             super::memory_layer(conn, &inference.agent_id),
         );
         let files = workspace::list_files(&workspace_dir, 200);
-        let user = ChatMessage {
-            role: MessageRole::User,
-            text: validator_context(&task.spec, output, &files),
-            time: super::now_hm(),
-        };
-        let messages = agent::build_messages(&system_prompt, std::slice::from_ref(&user));
+        // Reconstruct the validator's own thread across this attempt's passes so a re-review
+        // builds on what it already checked rather than re-inspecting the whole tree.
+        let prior =
+            task_runs::list_for_task_attempt(conn, &task.id, task.attempt).unwrap_or_default();
+        let messages =
+            super::replay::validator_thread(&system_prompt, &task.spec, output, &files, &prior);
         // `read` + `list` + `find` (browse/search the tree) + `bash` (run the project's
         // build/tests), plus the `verdict` tool. A reviewer asked to confirm code "builds and tests
         // clean" can't do so with `read` alone — the live failure was a validator calling `bash`
@@ -267,68 +264,6 @@ fn owner_of(conn: &rusqlite::Connection, workspace_id: &str) -> Option<String> {
         .ok()
         .flatten()
         .and_then(|ws| ws.owner)
-}
-
-/// The user turn for a producer/stage run: the spec, the outputs of earlier work steps, and
-/// (on a loop re-run) the reviewer's latest "revise" feedback to address.
-fn step_context(spec: &str, prior: &[task_runs::TaskRun], step_name: &str) -> String {
-    let mut text = format!("Task: {spec}");
-    let outputs: Vec<&str> = prior
-        .iter()
-        .filter(|run| run.ok && (run.role == "stage" || run.role == "producer"))
-        .filter_map(|run| run.output.as_deref())
-        .filter(|out| !out.trim().is_empty())
-        .collect();
-    if !outputs.is_empty() {
-        text.push_str("\n\nWork produced so far:");
-        for (index, out) in outputs.iter().enumerate() {
-            text.push_str(&format!("\n\n--- step {} ---\n{out}", index + 1));
-        }
-    }
-    if let Some(feedback) = prior
-        .iter()
-        .rev()
-        .find(|run| run.role == "validator" && run.verdict.as_deref() == Some("revise"))
-        .and_then(|run| run.feedback.as_deref())
-        .filter(|fb| !fb.trim().is_empty())
-    {
-        text.push_str(&format!(
-            "\n\nThe reviewer asked you to revise. Feedback to address:\n{feedback}"
-        ));
-    }
-    text.push_str(&format!(
-        "\n\nYour step: \"{step_name}\". {}",
-        if outputs.is_empty() {
-            "Do it and briefly report what you did."
-        } else {
-            "Build on / revise the work above and briefly report what you did."
-        }
-    ));
-    text
-}
-
-/// The user turn for a validator run: the spec and the producer's output to review.
-fn validator_context(spec: &str, output: &str, files: &[String]) -> String {
-    // List the real workspace paths so the reviewer reads the actual files instead of guessing
-    // bare names (`render.rs`) that don't resolve — the producer knows the paths, the reviewer
-    // didn't. `read` also resolves a guessed suffix, but giving the layout up front avoids the
-    // flailing entirely.
-    let tree = if files.is_empty() {
-        String::new()
-    } else {
-        let lines: Vec<String> = files.iter().map(|path| format!("- {path}")).collect();
-        format!(
-            "\n\nWorkspace files (use these exact paths with `read`):\n{}",
-            lines.join("\n")
-        )
-    };
-    format!(
-        "Task spec:\n{spec}\n\nThe assignee produced this for review:\n\n{output}{tree}\n\n\
-         Review it against the spec: `list` the workspace to see what's actually there, `find` to \
-         locate files or grep for a pattern, `read` the files, and if it's code use `bash` to run \
-         the project's build and tests yourself (e.g. `cargo build`/`cargo test`) rather than \
-         trusting the report. Then call the `verdict` tool with your decision and concrete feedback."
-    )
 }
 
 /// The most recent successful producer/stage output of the task's **current attempt** — the work
@@ -1263,19 +1198,6 @@ mod tests {
     }
 
     #[test]
-    fn validator_context_lists_the_real_file_paths() {
-        let files = vec!["projects/rogue/src/render.rs".to_owned()];
-        let ctx = validator_context("the spec", "the output", &files);
-        assert!(
-            ctx.contains("projects/rogue/src/render.rs"),
-            "lists real paths"
-        );
-        assert!(ctx.contains("verdict"));
-        // No files → no tree section (don't dangle an empty heading).
-        assert!(!validator_context("s", "o", &[]).contains("Workspace files"));
-    }
-
-    #[test]
     fn revise_reruns_covers_human_override_and_the_agent_cap() {
         // Agent loop within budget → re-run; once exhausted → don't (let on-exhaust handle it).
         assert!(revise_reruns(false, Some("agent"), 0, 2));
@@ -1379,30 +1301,5 @@ mod tests {
         };
         assert_eq!(effective_output(&spoke), "all set");
         assert!(effective_output(&agent::TurnResult::default()).is_empty());
-    }
-
-    #[test]
-    fn step_context_chains_prior_outputs() {
-        let prior = vec![task_runs::TaskRun {
-            id: "r1".to_owned(),
-            position: 0,
-            role: "stage".to_owned(),
-            agent: None,
-            output: Some("built the thing".to_owned()),
-            verdict: None,
-            feedback: None,
-            iteration: 0,
-            ok: true,
-            transcript: None,
-            attempt: 0,
-            created_at: String::new(),
-        }];
-        let ctx = step_context("make X", &prior, "Refine");
-        assert!(ctx.contains("Task: make X"));
-        assert!(ctx.contains("built the thing"));
-        assert!(ctx.contains("Refine"));
-        // No prior runs → the simpler first-step prompt.
-        let first = step_context("make X", &[], "Execute");
-        assert!(!first.contains("earlier steps"));
     }
 }

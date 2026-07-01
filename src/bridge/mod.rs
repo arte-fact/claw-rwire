@@ -19,6 +19,7 @@ mod files;
 mod notify;
 mod orchestrate;
 mod prompts;
+mod replay;
 mod review;
 mod scheduler;
 mod seed;
