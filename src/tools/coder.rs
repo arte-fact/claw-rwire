@@ -1,4 +1,4 @@
-//! The coder toolbox: `bash` / `read` / `list` / `write` / `edit`, scoped to an agent's
+//! The coder toolbox: `bash` / `read` / `list` / `find` / `write` / `edit`, scoped to an agent's
 //! workspace. Added to a run only when its `tool_profile` is `Coder`. Unlike rust-claw,
 //! the file tools resolve paths through [`workspace::jail`] — the workspace is an
 //! *enforced* boundary, not a convention (`..` and paths outside the workspace are rejected;
@@ -18,6 +18,7 @@ use super::{ToolDef, ToolOutcome, Toolbox};
 pub const BASH: &str = "bash";
 pub const READ: &str = "read";
 pub const LIST: &str = "list";
+pub const FIND: &str = "find";
 pub const WRITE: &str = "write";
 pub const EDIT: &str = "edit";
 
@@ -27,6 +28,13 @@ const READ_LIMIT: usize = 2000;
 /// Cap on paths returned by `list`, so a huge tree can't blow up a prompt. Generous enough to
 /// show a normal project in full; a truncated listing notes it.
 const LIST_LIMIT: usize = 1000;
+
+/// Cap on matches `find` returns, and on files it scans — bounds both prompt size and the work of
+/// grepping every file, so a big tree can't stall a turn.
+const FIND_LIMIT: usize = 200;
+const FIND_SCAN_LIMIT: usize = 5000;
+/// Longest `text`-match line `find` echoes back, so one giant minified line can't blow the budget.
+const SNIPPET_MAX: usize = 200;
 
 /// A toolbox bound to one workspace directory. File tools always act on the host `workspace` dir;
 /// `bash` runs through `exec` (host, or the workspace's isola sandbox — R6).
@@ -84,6 +92,21 @@ impl Toolbox for CoderToolbox {
                 }),
             ),
             def(
+                FIND,
+                "Search the workspace for files by `name` (a substring of the path) and/or `text` \
+                 (a substring inside files, like grep). Returns matching workspace-relative paths, \
+                 with the first matching line for `text`. Give `path` to limit the search to a \
+                 subdirectory. Use this instead of `bash` grep/find.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Case-insensitive substring to match against file paths." },
+                        "text": { "type": "string", "description": "Substring to match inside file contents (grep)." },
+                        "path": { "type": "string", "description": "Subdirectory to search within. Omit for the whole workspace." }
+                    }
+                }),
+            ),
+            def(
                 WRITE,
                 "Create or overwrite a file. Parent directories are created.",
                 json!({
@@ -123,6 +146,7 @@ impl Toolbox for CoderToolbox {
             },
             READ => outcome(self.read(&args)),
             LIST => outcome(self.list(&args)),
+            FIND => outcome(self.find(&args)),
             WRITE => outcome(self.write(&args)),
             EDIT => outcome(self.edit(&args)),
             other => ToolOutcome::error(format!("error: no tool named {other}")),
@@ -151,25 +175,9 @@ impl CoderToolbox {
     /// touches the filesystem outside the workspace and can't mutate anything — so an agent can be
     /// given `read` + `list` for full read access without `bash` (arbitrary command execution).
     fn list(&self, args: &Value) -> Result<String, String> {
-        let requested = args
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim();
-        // Reduce the request to a workspace-relative prefix, enforcing the jail (an escape or an
-        // out-of-workspace absolute path is rejected, same as read/write).
-        let prefix = if requested.is_empty() {
-            String::new()
-        } else {
-            let jailed = self.resolve(requested)?;
-            relative_to_workspace(&self.workspace, &jailed)
-                .unwrap_or_else(|| requested.trim_matches('/').to_owned())
-        };
+        let prefix = self.scope_prefix(args)?;
         let all = workspace::list_files(&self.workspace, LIST_LIMIT);
-        let under = |path: &String| {
-            prefix.is_empty() || path == &prefix || path.starts_with(&format!("{prefix}/"))
-        };
-        let rows: Vec<&String> = all.iter().filter(|path| under(path)).collect();
+        let rows: Vec<&String> = all.iter().filter(|path| under(&prefix, path)).collect();
         if rows.is_empty() {
             return Ok(if prefix.is_empty() {
                 "(the workspace has no files yet)".to_owned()
@@ -186,6 +194,72 @@ impl CoderToolbox {
             out.push_str(&format!("\n… (listing capped at {LIST_LIMIT} files)"));
         }
         Ok(out)
+    }
+
+    /// Search the workspace for files by `name` (case-insensitive substring of the path) and/or
+    /// `text` (a substring inside the file — like `grep`), optionally scoped to a subdirectory with
+    /// `path`. Returns matching workspace-relative paths, with the first matching `text` line. Like
+    /// `list`, it's read-only, so `read` + `find` needs no `bash`.
+    fn find(&self, args: &Value) -> Result<String, String> {
+        let name = arg_str(args, "name").map(str::to_lowercase);
+        let text = arg_str(args, "text");
+        if name.is_none() && text.is_none() {
+            return Err("error: give `name` (match file paths) and/or `text` \
+                        (match file contents)"
+                .to_owned());
+        }
+        let prefix = self.scope_prefix(args)?;
+        let all = workspace::list_files(&self.workspace, FIND_SCAN_LIMIT);
+        let mut out: Vec<String> = Vec::new();
+        for rel in all.iter().filter(|path| under(&prefix, path)) {
+            if let Some(needle) = name.as_deref()
+                && !rel.to_lowercase().contains(needle)
+            {
+                continue;
+            }
+            match text {
+                None => out.push(rel.clone()),
+                // `text` given: read the file (skipping binary/unreadable) and report the first hit.
+                Some(needle) => {
+                    if let Ok(content) = std::fs::read_to_string(self.workspace.join(rel))
+                        && let Some((line_no, line)) = content
+                            .lines()
+                            .enumerate()
+                            .find(|(_, line)| line.contains(needle))
+                    {
+                        out.push(format!("{rel}:{}: {}", line_no + 1, snippet(line)));
+                    }
+                }
+            }
+            if out.len() >= FIND_LIMIT {
+                break;
+            }
+        }
+        if out.is_empty() {
+            return Ok("(no matches)".to_owned());
+        }
+        let mut result = out.join("\n");
+        if out.len() >= FIND_LIMIT {
+            result.push_str(&format!("\n… (capped at {FIND_LIMIT} matches)"));
+        }
+        Ok(result)
+    }
+
+    /// The workspace-relative directory prefix a `list`/`find` targets (from the optional `path`
+    /// arg), enforcing the jail — an escape or out-of-workspace absolute path is rejected. Empty
+    /// string = the whole workspace.
+    fn scope_prefix(&self, args: &Value) -> Result<String, String> {
+        let requested = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if requested.is_empty() {
+            return Ok(String::new());
+        }
+        let jailed = self.resolve(requested)?;
+        Ok(relative_to_workspace(&self.workspace, &jailed)
+            .unwrap_or_else(|| requested.trim_matches('/').to_owned()))
     }
 
     fn write(&self, args: &Value) -> Result<String, String> {
@@ -292,6 +366,29 @@ fn outcome(result: Result<String, String>) -> ToolOutcome {
     }
 }
 
+/// Whether a workspace-relative `path` sits under `prefix` (a directory prefix; empty = the whole
+/// workspace). Shared by `list` and `find`.
+fn under(prefix: &str, path: &str) -> bool {
+    prefix.is_empty() || path == prefix || path.starts_with(&format!("{prefix}/"))
+}
+
+/// A trimmed, length-bounded view of a matched line for `find` output.
+fn snippet(line: &str) -> String {
+    let trimmed = line.trim();
+    match trimmed.char_indices().nth(SNIPPET_MAX) {
+        Some((end, _)) => format!("{}…", &trimmed[..end]),
+        None => trimmed.to_owned(),
+    }
+}
+
+/// A non-empty, trimmed string argument, or `None` when absent/blank.
+fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 /// `target` (a jailed absolute path) expressed relative to the workspace `root`, forward-slashed —
 /// matching the shape of [`workspace::list_files`] output for filtering. Tries the canonical root
 /// first (an absolute request jails to a canonical path) then the root as given (a relative request
@@ -339,7 +436,53 @@ mod tests {
     fn advertises_the_coder_tools() {
         let (tb, _) = toolbox();
         let names: Vec<String> = tb.defs().into_iter().map(|d| d.name).collect();
-        assert_eq!(names, vec![BASH, READ, LIST, WRITE, EDIT]);
+        assert_eq!(names, vec![BASH, READ, LIST, FIND, WRITE, EDIT]);
+    }
+
+    #[test]
+    fn find_matches_by_name_and_by_content() {
+        let (tb, _) = toolbox();
+        tb.call(
+            WRITE,
+            r#"{"path":"projects/foo/src/lib.rs","content":"fn parse() { todo!() }\nlet x = 1;"}"#,
+        );
+        tb.call(
+            WRITE,
+            r#"{"path":"projects/foo/README.md","content":"docs for parse"}"#,
+        );
+        tb.call(
+            WRITE,
+            r#"{"path":"docs/notes.md","content":"nothing here"}"#,
+        );
+
+        // By name: substring of the path, case-insensitive.
+        let by_name = tb.call(FIND, r#"{"name":"LIB.RS"}"#);
+        assert!(by_name.ok, "{}", by_name.result);
+        assert!(by_name.result.contains("projects/foo/src/lib.rs"));
+        assert!(!by_name.result.contains("README"), "{}", by_name.result);
+
+        // By content: grep, with the matching line and its number.
+        let by_text = tb.call(FIND, r#"{"text":"todo!"}"#);
+        assert!(
+            by_text.result.contains("projects/foo/src/lib.rs:1:"),
+            "{}",
+            by_text.result
+        );
+        assert!(!by_text.result.contains("README"), "{}", by_text.result);
+
+        // Scoped search: `path` limits the tree.
+        let scoped = tb.call(FIND, r#"{"text":"parse","path":"projects"}"#);
+        assert!(scoped.result.contains("projects/foo"));
+        assert!(!scoped.result.contains("docs/"), "{}", scoped.result);
+
+        // No matches / no criteria are handled cleanly.
+        assert!(
+            tb.call(FIND, r#"{"text":"zzznope"}"#)
+                .result
+                .contains("no matches")
+        );
+        let no_args = tb.call(FIND, "{}");
+        assert!(!no_args.ok && no_args.result.contains("name"));
     }
 
     #[test]

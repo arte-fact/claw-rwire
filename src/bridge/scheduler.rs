@@ -157,15 +157,17 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             time: super::now_hm(),
         };
         let messages = agent::build_messages(&system_prompt, std::slice::from_ref(&user));
-        // `read` + `list` (browse the tree) + `bash` (run the project's build/tests), plus the
-        // `verdict` tool. A reviewer asked to confirm code "builds and tests clean" can't do so with
-        // `read` alone — the live failure was a validator calling `bash` (cargo build), getting "no
-        // tool named bash", and passing anyway. `list` lets it discover files without shelling out.
-        // No `write`/`edit`, so it verifies without rewriting the deliverable.
+        // `read` + `list` + `find` (browse/search the tree) + `bash` (run the project's
+        // build/tests), plus the `verdict` tool. A reviewer asked to confirm code "builds and tests
+        // clean" can't do so with `read` alone — the live failure was a validator calling `bash`
+        // (cargo build), getting "no tool named bash", and passing anyway. `list`/`find` let it
+        // discover and grep files without shelling out. No `write`/`edit`, so it verifies without
+        // rewriting the deliverable.
         let checks = build_toolbox(
             Some(vec![
                 "read".to_owned(),
                 "list".to_owned(),
+                "find".to_owned(),
                 "bash".to_owned(),
             ]),
             Some(workspace_dir),
@@ -322,10 +324,10 @@ fn validator_context(spec: &str, output: &str, files: &[String]) -> String {
     };
     format!(
         "Task spec:\n{spec}\n\nThe assignee produced this for review:\n\n{output}{tree}\n\n\
-         Review it against the spec: `list` the workspace to see what's actually there, `read` the \
-         files, and if it's code use `bash` to run the project's build and tests yourself (e.g. \
-         `cargo build`/`cargo test`) rather than trusting the report. Then call the `verdict` tool \
-         with your decision and concrete feedback."
+         Review it against the spec: `list` the workspace to see what's actually there, `find` to \
+         locate files or grep for a pattern, `read` the files, and if it's code use `bash` to run \
+         the project's build and tests yourself (e.g. `cargo build`/`cargo test`) rather than \
+         trusting the report. Then call the `verdict` tool with your decision and concrete feedback."
     )
 }
 
@@ -1237,7 +1239,12 @@ mod tests {
         let coder = CoderToolbox::with_exec(dir.clone(), ExecStrategy::Host { root: dir });
         let checks = FilteredToolbox::new(
             Box::new(coder),
-            vec!["read".to_owned(), "list".to_owned(), "bash".to_owned()],
+            vec![
+                "read".to_owned(),
+                "list".to_owned(),
+                "find".to_owned(),
+                "bash".to_owned(),
+            ],
         );
         let tb = CompositeToolbox::new(vec![Box::new(ValidatorToolbox), Box::new(checks)]);
         let names: Vec<String> = tb.defs().into_iter().map(|d| d.name).collect();
@@ -1246,6 +1253,7 @@ mod tests {
             "can run builds: {names:?}"
         );
         assert!(names.iter().any(|n| n == "list"), "can browse: {names:?}");
+        assert!(names.iter().any(|n| n == "find"), "can search: {names:?}");
         assert!(names.iter().any(|n| n == "verdict"), "records a verdict");
         assert!(names.iter().any(|n| n == "read"), "reads files");
         assert!(

@@ -158,12 +158,13 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
 
     // Least-privilege tool permissions so each agent can actually do its job. (An agent left
     // unconfigured silently falls back to *all* tools — explicit grants are both safer and clearer.)
-    // Forge builds → the coder tools (bash/read/list/write/edit). Critic reviews → `read` + `list`
-    // (browse the tree without shelling out) + `bash` (run the project's build/tests); its validator
-    // turn also gets `verdict`, added by the engine. No `write`/`edit`, so it verifies without
-    // rewriting the deliverable. Scout researches + writes → coder tools plus the web tools.
+    // Forge builds → the coder tools (bash/read/list/find/write/edit). Critic reviews → `read` +
+    // `list` + `find` (browse and search the tree without shelling out) + `bash` (run the project's
+    // build/tests); its validator turn also gets `verdict`, added by the engine. No `write`/`edit`,
+    // so it verifies without rewriting the deliverable. Scout researches + writes → coder tools plus
+    // the web tools.
     grant_tools(conn, FORGE_ID, &WORKSPACE_TOOLS);
-    grant_tools(conn, CRITIC_ID, &["read", "list", "bash"]);
+    grant_tools(conn, CRITIC_ID, &["read", "list", "find", "bash"]);
     let scout_tools: Vec<&str> = WORKSPACE_TOOLS.iter().copied().chain(WEB_TOOLS).collect();
     grant_tools(conn, SCOUT_ID, &scout_tools);
 
@@ -326,14 +327,14 @@ mod tests {
         let forge = agent_tools::selection(&conn, FORGE_ID)
             .expect("sel")
             .expect("configured");
-        assert_eq!(forge, vec!["bash", "edit", "list", "read", "write"]);
+        assert_eq!(forge, vec!["bash", "edit", "find", "list", "read", "write"]);
 
-        // Critic reviews → `read` + `list` (browse without shelling out) + `bash` (build/tests),
-        // but never `write`/`edit` (it verifies, it doesn't rewrite the deliverable).
+        // Critic reviews → `read` + `list` + `find` (browse/search without shelling out) + `bash`
+        // (build/tests), but never `write`/`edit` (it verifies, it doesn't rewrite the deliverable).
         let critic = agent_tools::selection(&conn, CRITIC_ID)
             .expect("sel")
             .expect("configured");
-        assert_eq!(critic, vec!["bash", "list", "read"]);
+        assert_eq!(critic, vec!["bash", "find", "list", "read"]);
         assert!(!critic.iter().any(|t| t == "write" || t == "edit"));
 
         // Scout researches + writes → coder tools plus the web tools.
