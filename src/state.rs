@@ -488,6 +488,9 @@ pub enum AgentThreadItem {
     },
     /// One recorded run of one of the agent's tasks (rendered by the shared run-entry).
     Run(RunView),
+    /// A task of this agent parked at a human gate — the inline approve / reject / request-changes
+    /// composer (Phase 3). Placed right after that task's runs, so review happens where the work is.
+    ReviewGate { task_id: String },
 }
 
 /// A currently-running task of the agent, for its live streaming entry on the agent page. The

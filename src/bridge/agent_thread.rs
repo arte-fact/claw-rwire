@@ -48,6 +48,13 @@ fn build(conn: &Connection, agent_id: &str) -> Option<AgentThread> {
         for run in task_runs::list_for_task(conn, &task.id).unwrap_or_default() {
             items.push(AgentThreadItem::Run(run_view(&names, run)));
         }
+        // A task parked at a human gate gets its inline review composer, right where its work sits —
+        // approval home is the worker's own thread (open question 5).
+        if task.status == TaskStatus::Awaiting {
+            items.push(AgentThreadItem::ReviewGate {
+                task_id: task.id.clone(),
+            });
+        }
         if task.status == TaskStatus::Running {
             live.push(AgentLive {
                 task_id: task.id.clone(),
@@ -171,6 +178,45 @@ mod tests {
             other => panic!("expected a run second, got {other:?}"),
         }
         assert!(thread.live.is_empty(), "a pending task isn't live");
+    }
+
+    #[test]
+    fn build_emits_a_review_gate_after_an_awaiting_tasks_runs() {
+        let conn = seeded();
+        tasks::create(
+            &conn,
+            &NewTask {
+                id: "t1",
+                workspace_id: "ws",
+                agent: None,
+                title: "Parked task",
+                spec: "do it",
+                schedule: None,
+                origin_chat: None,
+                max_retries: None,
+            },
+        )
+        .expect("create");
+        tasks::set_status(&conn, "t1", TaskStatus::Awaiting).expect("park");
+
+        let thread = build(&conn, "ag-a").expect("thread");
+        assert!(
+            thread.items.iter().any(|item| matches!(
+                item,
+                AgentThreadItem::ReviewGate { task_id } if task_id == "t1"
+            )),
+            "an awaiting task surfaces its inline review gate"
+        );
+        // A running/pending task must NOT get a gate.
+        tasks::set_status(&conn, "t1", TaskStatus::Running).expect("run");
+        let thread = build(&conn, "ag-a").expect("thread");
+        assert!(
+            !thread
+                .items
+                .iter()
+                .any(|item| matches!(item, AgentThreadItem::ReviewGate { .. })),
+            "a running task has no review gate"
+        );
     }
 
     #[test]

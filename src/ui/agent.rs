@@ -10,7 +10,7 @@ use rwire::{El, ElementBuilder, St, el, renderer};
 use rwire_components::Text;
 
 use crate::state::{AgentThreadItem, App, LiveItem};
-use crate::ui::task_detail::{live_stream_body, run_entry, running_dot};
+use crate::ui::task_detail::{live_stream_body, review_gate, run_entry, running_dot};
 use crate::ui::thread;
 
 /// The page shell: a pinned agent header over the autoscrolling timeline.
@@ -39,6 +39,7 @@ fn agent_view(app: &App) -> ElementBuilder {
                 status,
             } => task_marker(id, workspace_id, title, status),
             AgentThreadItem::Run(run) => run_entry(run, &format!("a{index}"), &app.tool_toggled),
+            AgentThreadItem::ReviewGate { task_id } => review_prompt(task_id),
         });
     }
     if entries.is_empty() {
@@ -101,6 +102,32 @@ fn task_marker(id: &str, workspace_id: &str, title: &str, status: &str) -> Eleme
                 .hover([St::TextAccent])
                 .text(title),
             status_chip(status),
+        ])
+}
+
+/// A parked task's inline review composer, set apart in a labelled surface so it reads as an
+/// action the operator needs to take — approval home is the worker's own thread.
+fn review_prompt(task_id: &str) -> ElementBuilder {
+    el(El::Div)
+        .st([
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapSm,
+            St::PSm,
+            St::BorderDefault,
+            St::Rounded0,
+            St::BgSurface,
+        ])
+        .append([
+            el(El::Div)
+                .st([
+                    St::TextXs,
+                    St::TextUppercase,
+                    St::TrackingWide,
+                    St::TextAccent,
+                ])
+                .text("Needs your review"),
+            review_gate(task_id),
         ])
 }
 

@@ -145,8 +145,8 @@ re-keying `awaiting` per agent.
 3. **Steering semantics.** Queue-at-boundary (v1) vs. interrupt (v2) — start with v1?
 4. **Thread scale.** A long-lived agent thread needs windowing (render the live tail, lazy-load
    history) — the `column-reverse` scroll pins to newest already, but history paging is new.
-5. **Approval routing.** With per-agent threads, does an approval still belong to the *workspace
-   owner's* thread, or the *worker's* thread that produced the work? (Likely the worker's.)
+5. ~~**Approval routing.**~~ **Resolved (Phase 3):** an approval belongs to the *worker's* thread —
+   the gate surfaces in the thread of the task's effective assignee, where the work was produced.
 
 ## Roadmap (checklist)
 
@@ -175,11 +175,14 @@ Prove the unified view as a pure projection over existing data.
 - [x] Boards stay reachable — each workspace group header links to its board; "New workspace" kept
 - [x] `fmt`/`clippy`/`test` green (219 tests, +3)
 
-### Phase 3 — Inline approval in the agent thread
-- [ ] Surface the existing `review_gate` in the agent thread when one of its tasks is `awaiting`
-- [ ] Wire the existing `approve` / `reject` / `request_changes` handlers from the thread context
-- [ ] Decide + implement approval home = the **worker's** thread (see open question 5)
-- [ ] `fmt`/`clippy`/`test` green
+### Phase 3 — Inline approval in the agent thread ✅
+- [x] Surface the existing `review_gate` in the agent thread when one of its tasks is `awaiting`
+      (projected as an `AgentThreadItem::ReviewGate` right after that task's runs)
+- [x] Reuse the existing `approve` / `reject` / `request_changes` handlers verbatim — they're
+      task-id driven, so they fire the same `ReviewVerdict` from the thread context
+- [x] Approval home = the **worker's** thread: the gate shows in the thread of the task's effective
+      assignee (the agent that produced the work) — resolving open question 5
+- [x] `fmt`/`clippy`/`test` green (220 tests, +1)
 
 ### Phase 4 — Leave a message (v1: queue at turn boundary)
 The moment it becomes agent-*centric*.

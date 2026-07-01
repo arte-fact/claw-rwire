@@ -518,8 +518,9 @@ fn gate_bar(detail: &TaskDetail) -> ElementBuilder {
 }
 
 /// The inline review composer for a parked task: Approve / Reject, then a "what to change…" field
-/// that submits a change request in flux — the re-run then streams into the thread above it.
-fn review_gate(task_id: &str) -> ElementBuilder {
+/// that submits a change request in flux — the re-run then streams into the thread above it. Shared
+/// with the agent thread (`ui::agent`), where a worker's parked task is reviewed in its own thread.
+pub(crate) fn review_gate(task_id: &str) -> ElementBuilder {
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
