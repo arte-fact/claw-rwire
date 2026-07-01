@@ -20,13 +20,18 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Cap on assistant↔tool round-trips per turn, so a confused model can't loop forever. Sized for
 /// multi-step task work — a researcher searches/fetches, *writes* the report, then reads it back;
-/// a builder writes files, then builds and tests. At 6 a search-heavy agent spent every round
-/// gathering and hit the cap before it ever wrote its file, so the forced final (no-tools) answer
-/// left the deliverable as prose. `RUN_BUDGET` remains the wall-clock backstop.
-const MAX_TOOL_ROUNDS: usize = 10;
-/// Whole-turn wall-clock budget across all rounds + tool calls. Once spent, the next
-/// round is asked to answer in text (no tools) so the turn always terminates.
-const RUN_BUDGET: Duration = Duration::from_secs(180);
+/// a builder writes files, then builds and tests; a reviewer lists/reads/greps the tree, runs the
+/// build and tests, *then* calls `verdict`. At 6 a search-heavy agent hit the cap before writing
+/// its file; at 10 the DB showed reviewers spending every round inspecting a multi-file crate and
+/// hitting the cap *before* the `verdict` round — the forced no-tools answer carried no verdict, so
+/// the loop defaulted to "revise" and never converged (tasks stuck `awaiting`). 20 gives thorough
+/// reviews room to inspect **and** decide; `RUN_BUDGET` remains the wall-clock backstop.
+const MAX_TOOL_ROUNDS: usize = 20;
+/// Whole-turn wall-clock budget across all rounds + tool calls. Once spent, the next round is asked
+/// to answer in text (no tools) so the turn always terminates. Raised alongside the round cap so a
+/// legitimately long turn (more rounds, a slow `cargo build`/`test`) isn't cut off mid-work before
+/// its rounds are used.
+const RUN_BUDGET: Duration = Duration::from_secs(300);
 /// Minimum gap between streamed-text flushes — coalesces tokens so the UI re-renders a few
 /// times a second, not once per token.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
