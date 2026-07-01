@@ -153,14 +153,16 @@ re-keying `awaiting` per agent.
 Each phase is independently shippable and passes the full gate before the next. Tick items as they
 land; keep this list the source of truth for progress.
 
-### Phase 1 — Agent thread page, read-only
+### Phase 1 — Agent thread page, read-only ✅
 Prove the unified view as a pure projection over existing data.
-- [ ] `/agent/:id` route + `agents_nav` deep-link target (stub the nav row for now)
-- [ ] `AgentThread` projection: merge `agent_messages`(future) + that agent's `tasks`/`task_runs` +
-      `live_turns`, ordered by time
-- [ ] Render with `thread::scroll` + `thread::entry`; reuse `run_entry` + the isolated `live_entry`
-- [ ] Task lifecycle entries ("started …", verdict chips) projected from `tasks`/`task_runs`
-- [ ] Tests: projection ordering + entry mapping; `fmt`/`clippy`/`test` green
+- [x] `/agent/:id` route + `agents_nav` deep-link target (flat stub list; Phase 2 fleshes it out)
+- [x] `AgentThread` projection: merge that agent's `tasks`/`task_runs` + `live_turns`
+      (`bridge/agent_thread.rs`, `tasks::list_for_agent`; `agent_messages` deferred to Phase 4)
+- [x] Render with `thread::scroll` + `thread::entry`; reuse `run_entry` + a shared live body
+      (`live_stream_body`/`running_dot`) in an isolated `agent_live_entry` renderer
+- [x] Task lifecycle entries (task markers → board deep-link, verdict chips) from `tasks`/`task_runs`
+- [x] Re-projects live on task lifecycle events (piggy-backed on `refresh_detail_if_open`)
+- [x] Tests: projection ordering + entry mapping + assignee resolution; `fmt`/`clippy`/`test` green
 
 ### Phase 2 — Nav becomes an agent list
 - [ ] `workspaces_nav` → `agents_nav`: agents grouped by workspace, **Concierge pinned on top**

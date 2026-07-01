@@ -261,6 +261,21 @@ pub fn list_for_workspace(conn: &Connection, workspace_id: &str) -> rusqlite::Re
     rows.collect()
 }
 
+/// Every task this agent is the effective assignee of, oldest first — the agent-thread
+/// timeline. That's tasks explicitly assigned to it, plus unassigned tasks in a workspace it
+/// owns (an unassigned task defaults to the owner at run time). Includes archived tasks: the
+/// agent thread is a full working history, unlike the board (which hides them).
+pub fn list_for_agent(conn: &Connection, agent_id: &str) -> rusqlite::Result<Vec<Task>> {
+    let mut stmt = conn.prepare(&format!(
+        "{SELECT} WHERE agent_group_id = ?1
+              OR (agent_group_id IS NULL
+                  AND workspace_id IN (SELECT id FROM workspaces WHERE owner_agent_id = ?1))
+          ORDER BY created_at ASC, id ASC"
+    ))?;
+    let rows = stmt.query_map(params![agent_id], from_row)?;
+    rows.collect()
+}
+
 pub fn set_status(conn: &Connection, id: &str, status: TaskStatus) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE tasks SET status = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -688,6 +703,57 @@ mod tests {
         let t = get(&conn, "t1").expect("get").unwrap();
         assert_eq!(t.kind, TaskKind::OneShot);
         assert_eq!(t.max_retries, None);
+    }
+
+    #[test]
+    fn list_for_agent_covers_assigned_and_owned_unassigned_tasks() {
+        let conn = seeded();
+        agents::create(&conn, "ag-b", "Writer", Some("e"), Some("m")).expect("b");
+        workspaces::create(&conn, "ws2", "Other").expect("ws2");
+        workspaces::set_owner(&conn, "ws", "ag-a").expect("own ws");
+        // Assigned directly to ag-a (in a workspace it doesn't own).
+        create(
+            &conn,
+            &NewTask {
+                id: "assigned",
+                workspace_id: "ws2",
+                agent: Some("ag-a"),
+                ..task("assigned")
+            },
+        )
+        .expect("assigned");
+        // Unassigned in ag-a's owned workspace → defaults to the owner, so it's ag-a's.
+        create(&conn, &task("owned")).expect("owned");
+        // Assigned to someone else → not ag-a's.
+        create(
+            &conn,
+            &NewTask {
+                id: "other",
+                workspace_id: "ws2",
+                agent: Some("ag-b"),
+                ..task("other")
+            },
+        )
+        .expect("other");
+
+        let ids: Vec<String> = list_for_agent(&conn, "ag-a")
+            .expect("list")
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert!(ids.contains(&"assigned".to_owned()));
+        assert!(ids.contains(&"owned".to_owned()));
+        assert!(
+            !ids.contains(&"other".to_owned()),
+            "another agent's task is not this agent's"
+        );
+        // The non-owner ag-b only sees its explicit assignment, not ws's unassigned task.
+        let b_ids: Vec<String> = list_for_agent(&conn, "ag-b")
+            .expect("list b")
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(b_ids, vec!["other".to_owned()]);
     }
 
     #[test]

@@ -8,6 +8,7 @@
 //! renderer outputs — including the router `outlet()` — only ever sit *inside* them.
 
 mod activity;
+mod agent;
 mod archived;
 mod chat;
 mod dashboard;
@@ -89,6 +90,7 @@ pub fn routes() -> Router {
         .page("/w/:wid/team", |p| {
             view(workspace::shell(wid(p), WsTab::Team, workspace::team()))
         })
+        .page("/agent/:id", |_| view(agent::page()))
         .page("/archived", |_| view(archived::page()))
         .page("/prompts", |_| view(prompts::page()))
         .page("/system", |_| view(system_map::page()))
@@ -172,6 +174,7 @@ fn nav_drawer(app: &App) -> ElementBuilder {
             section_label("Chat"),
             new_chat_bar(),
             drawer_threads(),
+            agents_nav(),
             workspaces_nav(),
             nav_footer(),
             drawer_foot(),
@@ -249,6 +252,65 @@ fn workspaces_nav(app: &App) -> ElementBuilder {
             St::GapXs,
         ])
         .append(rows)
+}
+
+/// Phase-1 stub for the agent-centric nav: a flat list of agents, each deep-linking to its thread
+/// page (`/agent/:id`). Phase 2 replaces this with the full agent list — grouped by workspace, the
+/// Concierge pinned on top, per-agent status + a live pulse + an approval badge.
+#[renderer]
+fn agents_nav(app: &App) -> ElementBuilder {
+    let active = app.open_agent.as_deref();
+    let mut rows: Vec<ElementBuilder> = vec![
+        el(El::Div)
+            .st([
+                St::PxMd,
+                St::PbXs,
+                St::TextXs,
+                St::TextMuted,
+                St::TextUppercase,
+                St::TrackingWide,
+            ])
+            .text("Agents"),
+    ];
+    for agent in &app.agents {
+        rows.push(agent_row(
+            &agent.id,
+            &agent.name,
+            active == Some(agent.id.as_str()),
+        ));
+    }
+    el(El::Div)
+        .st([
+            St::BorderTSubtle,
+            St::PySm,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapXs,
+        ])
+        .append(rows)
+}
+
+fn agent_row(id: &str, name: &str, active: bool) -> ElementBuilder {
+    let color = if active { St::TextHigh } else { St::TextMuted };
+    Link::route(&format!("/agent/{id}"))
+        .on(Ev::Click, close_nav())
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::PyXs,
+            St::PxMd,
+            St::CursorPointer,
+            St::TextSm,
+            St::NoUnderline,
+            color,
+        ])
+        .hover([St::TextHigh])
+        .append([
+            chat::accent_bar(active),
+            chat::icon_slot(icons::icon_sized(icons::Icon::User, 16)),
+            el(El::Span).st([St::Flex1]).text(name),
+        ])
 }
 
 fn workspace_row(id: &str, name: &str, active: bool, awaiting: usize) -> ElementBuilder {
@@ -633,6 +695,13 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
         .and_then(|params| params.get("id").map(str::to_owned))
     {
         bridge::send(Command::OpenChat(id));
+    }
+    // Opening an agent's thread projects its merged tasks/runs/live timeline.
+    if let Some(id) = RoutePattern::new("/agent/:id")
+        .matches(path)
+        .and_then(|params| params.get("id").map(str::to_owned))
+    {
+        bridge::send(Command::OpenAgentThread { agent: id });
     }
 }
 

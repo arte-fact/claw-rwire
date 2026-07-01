@@ -263,7 +263,12 @@ fn thread_entries(app: &App, detail: &TaskDetail) -> Vec<ElementBuilder> {
 
 /// One persisted run as an authored, phase-tagged thread entry: author (agent) + role tag +
 /// timestamp + verdict chip, over its collapsible tool rows, Markdown reply and any feedback.
-fn run_entry(run: &crate::state::RunView, key: &str, toggled: &[String]) -> ElementBuilder {
+/// Shared by the Peek modal's Thread and the agent thread (`ui::agent`), so a run reads the same.
+pub(crate) fn run_entry(
+    run: &crate::state::RunView,
+    key: &str,
+    toggled: &[String],
+) -> ElementBuilder {
     let mut body: Vec<ElementBuilder> = run
         .tools
         .iter()
@@ -332,6 +337,21 @@ fn live_entry(app: &App) -> ElementBuilder {
     if let Some(task) = task.filter(|t| t.iteration > 0) {
         tag.push_str(&format!(" · iter {}", task.iteration + 1));
     }
+    thread::entry(
+        author,
+        St::TextAccent,
+        Some(&tag),
+        "",
+        Some(running_dot()),
+        false,
+        live_stream_body(items),
+    )
+}
+
+/// The live stream's body elements in arrival order — a "working…" placeholder while empty, then
+/// each text segment (the typewriter cursor riding only the final one) and tool row. Shared by the
+/// Peek live entry and the agent thread's live entry (`ui::agent`).
+pub(crate) fn live_stream_body(items: &[LiveItem]) -> Vec<ElementBuilder> {
     let mut body: Vec<ElementBuilder> = Vec::new();
     if items.is_empty() {
         body.push(
@@ -340,7 +360,6 @@ fn live_entry(app: &App) -> ElementBuilder {
                 .text("The agent is working…"),
         );
     }
-    // Render the stream in arrival order; the typewriter cursor rides only the final text segment.
     let last = items.len().saturating_sub(1);
     for (index, item) in items.iter().enumerate() {
         body.push(match item {
@@ -353,19 +372,11 @@ fn live_entry(app: &App) -> ElementBuilder {
             } => live_event_row(time, action, *in_progress, *ok),
         });
     }
-    thread::entry(
-        author,
-        St::TextAccent,
-        Some(&tag),
-        "",
-        Some(running_dot()),
-        false,
-        body,
-    )
+    body
 }
 
-/// A small `● running` marker for the live entry's header.
-fn running_dot() -> ElementBuilder {
+/// A small `● running` marker for a live entry's header. Shared with the agent thread.
+pub(crate) fn running_dot() -> ElementBuilder {
     el(El::Span)
         .st([
             St::DisplayFlex,

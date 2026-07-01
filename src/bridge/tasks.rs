@@ -86,7 +86,7 @@ fn parse_transcript(json: Option<&str>) -> Vec<crate::state::ToolCardView> {
 
 /// Map one persisted run to its view-model — agent id resolved to a name, transcript parsed into
 /// tool cards, for the Peek modal's run chain.
-fn run_view(
+pub(super) fn run_view(
     names: &[(String, String)],
     run: crate::db::task_runs::TaskRun,
 ) -> crate::state::RunView {
@@ -192,6 +192,8 @@ pub fn refresh_detail_if_open(
             }
         },
     );
+    // A task lifecycle change may also belong to the agent whose thread is open — keep it live.
+    super::agent_thread::refresh_if_open(conn, shared);
 }
 
 /// `2026-06-22T08:00:00.000Z` → `06-22 08:00` (drop seconds/millis for the card).
@@ -501,7 +503,7 @@ fn reproject(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str, 
     project_dashboard(conn, shared);
 }
 
-fn agent_names(conn: &rusqlite::Connection) -> Vec<(String, String)> {
+pub(super) fn agent_names(conn: &rusqlite::Connection) -> Vec<(String, String)> {
     agents::list(conn)
         .unwrap_or_default()
         .into_iter()

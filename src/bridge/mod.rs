@@ -15,6 +15,7 @@ use std::sync::mpsc::{self, Sender};
 use rwire::{ChangeSet, SharedServerState};
 
 mod admin;
+mod agent_thread;
 mod files;
 mod notify;
 mod orchestrate;
@@ -159,6 +160,10 @@ pub enum Command {
     /// Project one task's detail (spec + run chain) — the detail view opening.
     LoadTaskDetail {
         task_id: String,
+    },
+    /// Open an agent's thread (`/agent/:id`) — project its merged tasks/runs/live timeline.
+    OpenAgentThread {
+        agent: String,
     },
     /// Project the active workspace's pipeline steps + edit lock — the Workflow tab opening.
     LoadWorkflow {
@@ -692,6 +697,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadTasks { workspace } => tasks::load(conn, shared, &workspace),
         Command::LoadDashboard => tasks::project_dashboard(conn, shared),
         Command::LoadTaskDetail { task_id } => tasks::load_detail(conn, shared, &task_id),
+        Command::OpenAgentThread { agent } => agent_thread::load(conn, shared, &agent),
         Command::LoadWorkflow { workspace } => workflow::load(conn, shared, &workspace),
         Command::AddStep { workspace, kind } => workflow::add(conn, shared, &workspace, &kind),
         Command::UpdateStep {

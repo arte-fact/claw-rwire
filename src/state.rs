@@ -481,6 +481,45 @@ pub struct TaskDetail {
     pub runs: Vec<RunView>,
 }
 
+/// One entry in an agent's unified thread (Phase 1: task lifecycle + persisted runs, read-only).
+/// The agent page merges these — projected from `tasks` / `task_runs` — into one time-ordered
+/// timeline, the agent's whole working life rather than a single task's chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentThreadItem {
+    /// A task assigned to this agent — the opening request marker its runs hang under.
+    Task {
+        id: String,
+        workspace_id: String,
+        title: String,
+        /// The task's lifecycle status (`running` / `done` / `awaiting` / …).
+        status: String,
+    },
+    /// One recorded run of one of the agent's tasks (rendered by the shared run-entry).
+    Run(RunView),
+}
+
+/// A currently-running task of the agent, for its live streaming entry on the agent page. The
+/// live items themselves come from `App.live_turns` (keyed by `task_id`), so a token flush
+/// repaints only the live renderer, not the whole timeline.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentLive {
+    pub task_id: String,
+    pub title: String,
+    /// The current step label (`Build` / `Build · iter 2` / `Running`) for the entry's tag.
+    pub tag: String,
+}
+
+/// An agent's whole-life thread: its identity plus the merged, time-ordered timeline of its
+/// work and any live runs — the read-only projection the `/agent/:id` page renders.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentThread {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub items: Vec<AgentThreadItem>,
+    /// The agent's tasks that are running right now (0 or 1 per workspace) — their live streams.
+    pub live: Vec<AgentLive>,
+}
+
 /// One pipeline step in the Workflow editor (the configured row). `kind` is `stage`/`loop`;
 /// the validator fields apply to loops. Agent ids (not names) so the form's selects pre-fill.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -669,6 +708,11 @@ pub struct App {
     pub awaiting: Vec<WorkspaceAwaiting>,
     /// The task whose detail view (run chain) is open, or `None`.
     pub task_detail: Option<TaskDetail>,
+    /// The agent whose thread page (`/agent/:id`) is open, or `None` — so background lifecycle
+    /// events know whether to re-project [`Self::agent_thread`].
+    pub open_agent: Option<String>,
+    /// The open agent's merged, time-ordered thread (its tasks + runs + live runs), or `None`.
+    pub agent_thread: Option<AgentThread>,
     /// The task whose **Peek** modal is open over the board, or `None` (closed).
     pub selected_task: Option<String>,
     /// The Peek modal's active tab: 0 = Overview, 1 = Activity, 2 = Review.
