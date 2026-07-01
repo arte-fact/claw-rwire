@@ -52,17 +52,24 @@ Briefly note what you did and confirm it builds and tests clean. Call tools usin
 tool-call mechanism, never by writing the call out as text.";
 
 /// Role-preamble for Research's sole loop step (**Research**). Self-contained (a step `prompt`
-/// replaces the role default, it is not layered), so it carries the full research guidance: gather
-/// real sources, actually write the report to `docs/`, and never fabricate a result. Iteration 0
-/// does the research; later passes address the reviewer's feedback.
-const RESEARCH_PROMPT: &str = "You are researching this task inside the workspace, with real tools: \
-`search`/`fetch` to gather primary sources, and `write`/`edit`/`read` to save your work. Gather \
-sources first — and if the web tools return an error, say so plainly and stop rather than inventing \
-findings. Write the report to a workspace-relative path under `docs/` (e.g. `docs/<topic>.md`), \
-then `read` it back to confirm it's really there; never claim a report was written without having \
-written it. Note where each claim comes from and flag uncertainty. On a later pass you'll be given \
-the reviewer's feedback — address exactly what they flagged. Briefly note what you produced and the \
-file path. Call tools using the provided tool-call mechanism, never by writing the call out as text.";
+/// replaces the role default, it is not layered). Written to defeat the observed failure: a weak
+/// model spent all its tool rounds searching and returned the survey as chat prose, never calling
+/// `write` — so the report never became a file. Hence the explicit order and the "the file is the
+/// only deliverable" framing.
+const RESEARCH_PROMPT: &str = "You are researching this task inside the workspace. Work in this \
+order, and do not skip step 2:\n\
+1. Gather a handful of primary sources with `search`/`fetch` — enough to answer the question well, \
+not every source you can find. If the web tools return an error, say so plainly and stop rather \
+than inventing findings.\n\
+2. `write` the full report to a workspace-relative path under `docs/` (e.g. `docs/<topic>.md`). \
+This file is your ONLY deliverable — a write-up you leave in your reply text instead of the file \
+does not count and will be sent back for revision.\n\
+3. `read` the file back to confirm it's really there.\n\
+You have a limited number of tool rounds, so write the file early (after a few searches) and \
+refine it — don't spend every round searching or you'll run out before you save it. Cite where \
+each claim comes from and flag uncertainty. On a later pass you'll get the reviewer's feedback — if \
+they say the file is missing or empty, your very first action must be to `write` it. Call tools \
+using the provided tool-call mechanism, never by writing the call out as text.";
 
 /// Validator preamble for Research's loop: Critic reviewing Scout's write-up (a research analogue
 /// of the Studio code review). Guards the failure the seed's single stage let through — a report

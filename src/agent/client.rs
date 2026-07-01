@@ -18,8 +18,12 @@ use super::{
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Per-request deadline — generous for generation, not a silent hang.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
-/// Cap on assistant↔tool round-trips per turn, so a confused model can't loop forever.
-const MAX_TOOL_ROUNDS: usize = 6;
+/// Cap on assistant↔tool round-trips per turn, so a confused model can't loop forever. Sized for
+/// multi-step task work — a researcher searches/fetches, *writes* the report, then reads it back;
+/// a builder writes files, then builds and tests. At 6 a search-heavy agent spent every round
+/// gathering and hit the cap before it ever wrote its file, so the forced final (no-tools) answer
+/// left the deliverable as prose. `RUN_BUDGET` remains the wall-clock backstop.
+const MAX_TOOL_ROUNDS: usize = 10;
 /// Whole-turn wall-clock budget across all rounds + tool calls. Once spent, the next
 /// round is asked to answer in text (no tools) so the turn always terminates.
 const RUN_BUDGET: Duration = Duration::from_secs(180);
