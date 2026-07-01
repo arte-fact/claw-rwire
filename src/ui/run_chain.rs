@@ -77,7 +77,8 @@ pub(crate) fn tool_row(tool: &ToolCardView, key: &str, toggled: &[String]) -> El
 }
 
 /// A humanized one-line summary of a tool call's arguments — the command, the file path, the
-/// verdict — never raw JSON.
+/// search, the verdict. Never a raw JSON dump: an unrecognised tool falls back to a structured
+/// `key: value · key: value` of its arguments.
 fn tool_summary(tool: &ToolCardView) -> String {
     let args: Value = serde_json::from_str(&tool.arguments).unwrap_or(Value::Null);
     let field = |key: &str| {
@@ -88,11 +89,79 @@ fn tool_summary(tool: &ToolCardView) -> String {
     };
     let text = match tool.name.as_str() {
         "bash" => field("command"),
-        "write" | "edit" | "read" => field("path"),
-        "verdict" => field("decision"),
-        _ => tool.arguments.clone(),
+        "write" | "edit" => field("path"),
+        "read" => read_summary(&field("path"), &args),
+        "list" => {
+            let path = field("path");
+            if path.is_empty() {
+                "workspace root".to_owned()
+            } else {
+                path
+            }
+        }
+        "find" => find_summary(&field("text"), &field("name"), &field("path")),
+        "verdict" => {
+            let decision = field("decision");
+            let feedback = field("feedback");
+            if feedback.is_empty() {
+                decision
+            } else {
+                format!("{decision} — {}", one_line(&feedback, 60))
+            }
+        }
+        "search" => field("query"),
+        "fetch" => field("url"),
+        _ => humanize_args(&args),
     };
     one_line(&text, 96)
+}
+
+/// `read` summary: the path, plus a compact line range when `offset`/`limit` are given.
+fn read_summary(path: &str, args: &Value) -> String {
+    let offset = args.get("offset").and_then(Value::as_i64);
+    let limit = args.get("limit").and_then(Value::as_i64);
+    match (offset, limit) {
+        (Some(from), Some(count)) => format!("{path} · L{from}–{}", from + count),
+        (Some(from), None) => format!("{path} · from L{from}"),
+        _ => path.to_owned(),
+    }
+}
+
+/// `find` summary: the content query (or name pattern) and where it's scoped.
+fn find_summary(text: &str, name: &str, path: &str) -> String {
+    let mut summary = if !text.is_empty() {
+        format!("\"{}\"", one_line(text, 40))
+    } else if !name.is_empty() {
+        format!("name ~ {}", one_line(name, 40))
+    } else {
+        String::new()
+    };
+    if !path.is_empty() {
+        summary.push_str(&format!(" in {path}"));
+    }
+    summary
+}
+
+/// A structured one-liner for an unrecognised tool's arguments: `key: value · key: value`, scalars
+/// shortened — never the raw JSON blob.
+fn humanize_args(args: &Value) -> String {
+    match args {
+        Value::Object(map) if !map.is_empty() => map
+            .iter()
+            .map(|(key, value)| format!("{key}: {}", scalar(value)))
+            .collect::<Vec<_>>()
+            .join(" · "),
+        Value::Null => String::new(),
+        other => one_line(&other.to_string(), 96),
+    }
+}
+
+/// A short display form of a scalar argument value (strings shortened; arrays/objects compacted).
+fn scalar(value: &Value) -> String {
+    match value {
+        Value::String(text) => one_line(text, 40),
+        other => one_line(&other.to_string(), 40),
+    }
 }
 
 /// The disclosure's **structured card**: a labelled *arguments* section (each argument as a
@@ -356,5 +425,58 @@ mod tests {
         // Past the first loop turn, the 1-based iteration is shown.
         assert_eq!(role_tag(&run("producer", 1)), "Produce · iter 2");
         assert_eq!(role_tag(&run("validator", 2)), "Review · iter 3");
+    }
+
+    fn call(name: &str, arguments: &str) -> ToolCardView {
+        ToolCardView {
+            name: name.to_owned(),
+            arguments: arguments.to_owned(),
+            result: String::new(),
+            ok: true,
+            time: String::new(),
+        }
+    }
+
+    #[test]
+    fn tool_summary_humanizes_known_tools() {
+        assert_eq!(
+            tool_summary(&call("bash", r#"{"command":"cargo test"}"#)),
+            "cargo test"
+        );
+        assert_eq!(
+            tool_summary(&call("write", r#"{"path":"src/lib.rs","content":"x"}"#)),
+            "src/lib.rs"
+        );
+        assert_eq!(
+            tool_summary(&call(
+                "read",
+                r#"{"path":"src/lib.rs","offset":10,"limit":40}"#
+            )),
+            "src/lib.rs · L10–50"
+        );
+        assert_eq!(tool_summary(&call("list", "{}")), "workspace root");
+        assert_eq!(
+            tool_summary(&call("find", r#"{"text":"unwrap","path":"src"}"#)),
+            "\"unwrap\" in src"
+        );
+        assert_eq!(
+            tool_summary(&call(
+                "verdict",
+                r#"{"decision":"revise","feedback":"add tests"}"#
+            )),
+            "revise — add tests"
+        );
+        assert_eq!(
+            tool_summary(&call("search", r#"{"query":"rust color crate"}"#)),
+            "rust color crate"
+        );
+    }
+
+    #[test]
+    fn tool_summary_falls_back_to_structured_pairs_not_raw_json() {
+        // An unrecognised tool becomes `key: value · key: value`, never the raw `{...}` blob.
+        let summary = tool_summary(&call("mystery", r#"{"alpha":"one","beta":2}"#));
+        assert_eq!(summary, "alpha: one · beta: 2");
+        assert!(!summary.contains('{'), "no raw JSON: {summary}");
     }
 }
