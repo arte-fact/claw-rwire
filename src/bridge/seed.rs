@@ -44,10 +44,37 @@ builds and its tests pass.";
 const BUILD_PROMPT: &str = "You are building this task inside the workspace, with real file tools \
 (`write`/`edit`/`read`/`bash`). On the first pass, implement it end to end from the spec; on a \
 later pass you'll be given a reviewer's feedback — address exactly what they flagged while keeping \
-what already works. Either way: make the project build and its tests pass before you finish (run \
-them — don't assume), and keep your changes scoped to this task's files. Briefly note what you \
-did and confirm it builds and tests clean. Call tools using the provided tool-call mechanism, \
-never by writing the call out as text.";
+what already works. Keep this project's files together under `projects/<project-name>/` (e.g. \
+`projects/foo/src/lib.rs`) — paths resolve from the workspace root, so never write `src/…` at the \
+root even if the spec names a bare path. Either way: make the project build and its tests pass \
+before you finish (run them — don't assume), and keep your changes scoped to this task's files. \
+Briefly note what you did and confirm it builds and tests clean. Call tools using the provided \
+tool-call mechanism, never by writing the call out as text.";
+
+/// Role-preamble for Research's sole loop step (**Research**). Self-contained (a step `prompt`
+/// replaces the role default, it is not layered), so it carries the full research guidance: gather
+/// real sources, actually write the report to `docs/`, and never fabricate a result. Iteration 0
+/// does the research; later passes address the reviewer's feedback.
+const RESEARCH_PROMPT: &str = "You are researching this task inside the workspace, with real tools: \
+`search`/`fetch` to gather primary sources, and `write`/`edit`/`read` to save your work. Gather \
+sources first — and if the web tools return an error, say so plainly and stop rather than inventing \
+findings. Write the report to a workspace-relative path under `docs/` (e.g. `docs/<topic>.md`), \
+then `read` it back to confirm it's really there; never claim a report was written without having \
+written it. Note where each claim comes from and flag uncertainty. On a later pass you'll be given \
+the reviewer's feedback — address exactly what they flagged. Briefly note what you produced and the \
+file path. Call tools using the provided tool-call mechanism, never by writing the call out as text.";
+
+/// Validator preamble for Research's loop: Critic reviewing Scout's write-up (a research analogue
+/// of the Studio code review). Guards the failure the seed's single stage let through — a report
+/// that was never written, or was hollow/unsourced, being accepted as done.
+const RESEARCH_REVIEW_PROMPT: &str = "You are reviewing a research write-up against its task. `read` \
+the report the researcher produced under `docs/` at its real workspace-relative path; if a read \
+fails, fix the path and try again rather than guessing or giving up. Check that the file actually \
+exists and isn't empty, that it answers the question asked, that it cites where its claims come \
+from, and that it flags uncertainty — a missing file, an empty file, or unsourced claims is a \
+`revise` (with concrete feedback on what to add), not a `pass`. Record your decision by calling the \
+`verdict` tool exactly once: `pass`, `revise`, or `reject`. State your decision through the tool, \
+never only in prose. Don't rewrite the report yourself.";
 
 /// Role-preamble for Studio's final loop step (**Approve**), parked for the human. **Dual-mode:**
 /// the initial pass is a review-only sign-off (no edits — a finalize pass once silently rewrote
@@ -56,7 +83,8 @@ never by writing the call out as text.";
 /// correction. The discriminator is whether there's reviewer feedback in the task context.
 const SIGNOFF_PROMPT: &str = "This is the sign-off step before the user approves. \
 If the task context includes change requests from the user/reviewer, apply them now: edit the \
-files with your tools (`write`/`edit`/`read`/`bash`), rebuild, run the tests (run them — don't \
+files with your tools (`write`/`edit`/`read`/`bash`) under this project's `projects/<project-name>/` \
+directory (never write `src/…` at the workspace root), rebuild, run the tests (run them — don't \
 assume), and stay scoped to exactly what was asked — don't touch unrelated work. Then report what \
 you changed. \
 Otherwise, this is the initial sign-off and you must NOT edit anything: just confirm the project \
@@ -68,12 +96,17 @@ const STUDIO_BRIEF: &str = "# Studio\n\nWhere we build things — apps, scripts,
 Forge does the engineering here; ask for something concrete and it gets made.\n\n## \
 Conventions\n\nKeep the working tree tidy and put new files where they belong:\n\n- \
 `projects/` — cloned repositories and code projects\n- `docs/` — documentation, write-ups, \
-and reports\n- `skills/` — reusable guides, snippets, and how-tos\n";
+and reports\n- `skills/` — reusable guides, snippets, and how-tos\n\nEach code project lives in \
+its own folder under `projects/<name>/`: put its source there (e.g. \
+`projects/foo/src/lib.rs`), never at the workspace root. Tool paths resolve from the workspace \
+root, so always reference files by their full workspace-relative path.\n";
 
 const RESEARCH_BRIEF: &str = "# Research\n\nWhere we gather, compare, and summarize. Scout owns \
 this — point it at a question and it produces a clear, sourced write-up in `docs/`.\n\n## \
 Conventions\n\n- `projects/` — datasets or scraped material\n- `docs/` — summaries, \
-comparisons, and reports (the main output)\n- `skills/` — reusable research templates\n";
+comparisons, and reports (the main output)\n- `skills/` — reusable research templates\n\nWrite \
+each report to `docs/<topic>.md` using a workspace-relative path, cite your sources, and don't \
+report a task done until the file is actually written and reads back.\n";
 
 const WELCOME: &str = "👋 I'm **claw**, your concierge. I don't just chat — I coordinate a \
 small team across workspaces, each with its own review **workflow**.\n\n**Your team**\n- \
@@ -82,8 +115,9 @@ reviewer, checks Forge's work in Studio\n- **Scout** — researcher, owns the **
 workspace (gathers, compares, summarizes)\n\n**How it works:** ask me for something multi-step \
 and I'll delegate it. In **Studio**, every task flows through a pipeline — in the **Build** step \
 Forge writes the code and Critic reviews it until it passes, then it parks for **your** approval. \
-Watch it move across the board.\n\n**Try one:**\n> Build a small CLI tool in Studio that prints a \
-motivational quote.\n\nThen open Studio's **Tasks** tab (the kanban board), **Workflow** tab (the \
+**Research** works the same way: Scout writes the report and Critic checks it's sourced and \
+complete before it's done. Watch it move across the board.\n\n**Try one:**\n> Build a small CLI \
+tool in Studio that prints a motivational quote.\n\nThen open Studio's **Tasks** tab (the kanban board), **Workflow** tab (the \
 pipeline — edit it!), and the **Review** tab when something needs you. **Prompts** shows exactly \
 what each agent is told.";
 
@@ -117,11 +151,12 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
 
     // Least-privilege tool permissions so each agent can actually do its job. (An agent left
     // unconfigured silently falls back to *all* tools — explicit grants are both safer and clearer.)
-    // Forge builds → the coder tools (bash/read/write/edit). Critic reviews → read-only (its
-    // validator turn also gets `verdict`, added by the engine). Scout researches + writes → coder
-    // tools plus the web tools.
+    // Forge builds → the coder tools (bash/read/write/edit). Critic reviews → `read` + `bash` so it
+    // can actually run the project's build/tests (its validator turn also gets `verdict`, added by
+    // the engine); no `write`/`edit`, so it verifies without rewriting the deliverable. Scout
+    // researches + writes → coder tools plus the web tools.
     grant_tools(conn, FORGE_ID, &WORKSPACE_TOOLS);
-    grant_tools(conn, CRITIC_ID, &["read"]);
+    grant_tools(conn, CRITIC_ID, &["read", "bash"]);
     let scout_tools: Vec<&str> = WORKSPACE_TOOLS.iter().copied().chain(WEB_TOOLS).collect();
     grant_tools(conn, SCOUT_ID, &scout_tools);
 
@@ -134,6 +169,8 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
     let _ = workspaces::add_member(conn, CRITIC_ID, STUDIO);
     let _ = workspaces::add_member(conn, SCOUT_ID, STUDIO);
     let _ = workspaces::add_member(conn, &lead.id, RESEARCH);
+    // Critic reviews Research too — the workspace-crossing reviewer.
+    let _ = workspaces::add_member(conn, CRITIC_ID, RESEARCH);
 
     write_brief(data_dir, STUDIO, "Studio", STUDIO_BRIEF);
     write_brief(data_dir, RESEARCH, "Research", RESEARCH_BRIEF);
@@ -142,7 +179,7 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
     //   Build (loop: Forge ⇄ Critic, ≤2) → Approve (loop: review-only Forge ⇄ you).
     // The old standalone `Execute` stage is folded into Build's iteration 0 — one Forge produce
     // before the first review instead of two — and the Approve step is a review-only sign-off that
-    // doesn't mutate code. Research keeps the implicit default single stage.
+    // doesn't mutate code. Research gets its own reviewed loop (below).
     let _ = pipeline::insert(
         conn,
         "ps-studio-0",
@@ -173,6 +210,27 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
             validator_kind: Some("human"),
             validator_agent: None,
             validator_prompt: None,
+            max_iterations: 2,
+            on_exhaust: "human",
+        },
+    );
+
+    // Research's reviewed loop — one step: Scout writes the report, Critic checks it exists and is
+    // sourced (≤2), then it completes. This closes the failure where a single unreviewed Scout run
+    // was accepted as done even when it wrote nothing. On exhaust it parks for a human.
+    let _ = pipeline::insert(
+        conn,
+        "ps-research-0",
+        RESEARCH,
+        0,
+        &StepFields {
+            kind: "loop",
+            name: "Research",
+            agent: Some(SCOUT_ID),
+            prompt: Some(RESEARCH_PROMPT),
+            validator_kind: Some("agent"),
+            validator_agent: Some(CRITIC_ID),
+            validator_prompt: Some(RESEARCH_REVIEW_PROMPT),
             max_iterations: 2,
             on_exhaust: "human",
         },
@@ -263,11 +321,13 @@ mod tests {
             .expect("configured");
         assert_eq!(forge, vec!["bash", "edit", "read", "write"]);
 
-        // Critic reviews → read-only.
+        // Critic reviews → `read` + `bash` (to run the project's build/tests), but never
+        // `write`/`edit` (it verifies, it doesn't rewrite the deliverable).
         let critic = agent_tools::selection(&conn, CRITIC_ID)
             .expect("sel")
             .expect("configured");
-        assert_eq!(critic, vec!["read"]);
+        assert_eq!(critic, vec!["bash", "read"]);
+        assert!(!critic.iter().any(|t| t == "write" || t == "edit"));
 
         // Scout researches + writes → coder tools plus the web tools.
         let scout = agent_tools::selection(&conn, SCOUT_ID)
@@ -278,5 +338,61 @@ mod tests {
         }
         // None of the workers fall back to the implicit "all tools" default.
         assert!(!forge.contains(&"search".to_owned()));
+    }
+
+    #[test]
+    fn research_is_a_reviewed_loop_with_critic() {
+        let conn = fresh_db_with_one_agent();
+        let data = tempfile::tempdir().expect("tmp");
+        seed_showcase(&conn, data.path());
+
+        // Research now has a review gate (was an unreviewed single stage): one loop step, Scout
+        // produces, Critic validates.
+        let steps = pipeline::steps_for(&conn, RESEARCH).expect("steps");
+        assert_eq!(
+            steps.len(),
+            1,
+            "Research should have exactly the Research loop"
+        );
+        let research = &steps[0];
+        assert_eq!(research.name, "Research");
+        assert_eq!(research.kind, StepKind::Loop);
+        assert_eq!(research.agent.as_deref(), Some(SCOUT_ID));
+        assert_eq!(research.validator_kind.as_deref(), Some("agent"));
+        assert_eq!(research.validator_agent.as_deref(), Some(CRITIC_ID));
+
+        // Critic must be a member of Research to review there.
+        let members = workspaces::members_of(&conn, RESEARCH).expect("members");
+        assert!(
+            members.iter().any(|m| m == CRITIC_ID),
+            "Critic reviews Research: {members:?}"
+        );
+    }
+
+    #[test]
+    fn build_and_signoff_prompts_scope_to_projects() {
+        // The pipeline step prompts replace the role default, so the project-path guidance has to
+        // live here too (else the workspace-root-scatter fix never reaches Forge).
+        assert!(
+            BUILD_PROMPT.contains("projects/"),
+            "Build must scope to projects/"
+        );
+        // Only the sign-off's edit branch (change requests) writes files — scope it there.
+        assert!(
+            SIGNOFF_PROMPT.contains("projects/"),
+            "Approve's edit path must scope to projects/"
+        );
+    }
+
+    #[test]
+    fn research_prompts_demand_a_written_sourced_report() {
+        // Producer: write to docs/ and read it back (guards the "claimed done, wrote nothing" run).
+        let produce = RESEARCH_PROMPT.to_lowercase();
+        assert!(produce.contains("docs/"));
+        assert!(produce.contains("read it back") || produce.contains("read"));
+        // Validator: a missing/hollow report is a revise, recorded via the verdict tool.
+        let review = RESEARCH_REVIEW_PROMPT.to_lowercase();
+        assert!(review.contains("verdict"));
+        assert!(review.contains("revise"));
     }
 }
