@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::db::resolution::ResolvedInference;
-use crate::tools::{ToolDef, Toolbox};
+use crate::tools::{ToolDef, Toolbox, VERDICT};
 
 use super::{
     AgentError, AgentEvent, ChatMessage, Completion, EventSink, FunctionCall, ToolCall,
@@ -69,49 +69,86 @@ fn run_loop(
     stream: bool,
 ) -> Result<TurnResult, AgentError> {
     let defs = toolbox.defs();
+    // The closing round is **reserved for `verdict`** when the toolbox advertises it (a validator
+    // run): once the loop ends — round cap hit or wall-clock spent — that tool is the *only* one
+    // offered, so a reviewer that spent every round inspecting still renders a decision instead of
+    // being force-answered with none (which the scheduler reads as "no verdict" → a wasted revise).
+    // A toolbox without `verdict` closes with no tools (a plain text answer), as before.
+    let verdict_only: Vec<ToolDef> = defs.iter().filter(|d| d.name == VERDICT).cloned().collect();
     let mut invocations = Vec::new();
     let started = Instant::now();
 
     for _ in 0..MAX_TOOL_ROUNDS {
-        let within_budget = started.elapsed() < RUN_BUDGET;
-        let tools: &[ToolDef] = if within_budget { &defs } else { &[] };
-        let completion = complete(inf, &messages, tools, sink, stream)?;
-
-        if completion.tool_calls.is_empty() || !within_budget {
+        // Out of wall-clock: stop offering the full toolset and go straight to the closing round.
+        if started.elapsed() >= RUN_BUDGET {
+            break;
+        }
+        let completion = complete(inf, &messages, &defs, sink, stream)?;
+        if completion.tool_calls.is_empty() {
             return Ok(TurnResult {
                 invocations,
                 reply: completion.content,
                 prompt_tokens: completion.prompt_tokens,
             });
         }
-
         messages.push(ChatMessage::assistant_tool_calls(
             completion.tool_calls.clone(),
         ));
-        for call in &completion.tool_calls {
-            sink(AgentEvent::ToolStarted {
-                name: call.function.name.clone(),
-                arguments: call.function.arguments.clone(),
-            });
-            let outcome = toolbox.call(&call.function.name, &call.function.arguments);
-            sink(AgentEvent::ToolFinished { ok: outcome.ok });
-            invocations.push(ToolInvocation {
-                name: call.function.name.clone(),
-                arguments: call.function.arguments.clone(),
-                result: outcome.result.clone(),
-                ok: outcome.ok,
-            });
-            messages.push(ChatMessage::tool_result(call.id.clone(), outcome.result));
-        }
+        run_calls(
+            &completion.tool_calls,
+            toolbox,
+            &mut messages,
+            &mut invocations,
+            sink,
+        );
     }
 
-    // Round cap reached with tools still pending — one final no-tools call for an answer.
-    let completion = complete(inf, &messages, &[], sink, stream)?;
+    // The reserved closing round: `verdict`-only for a validator, no tools for everyone else.
+    // Execute any call it makes so `parse_verdict` sees the decision; terminate the turn either way.
+    let completion = complete(inf, &messages, &verdict_only, sink, stream)?;
+    if !completion.tool_calls.is_empty() {
+        messages.push(ChatMessage::assistant_tool_calls(
+            completion.tool_calls.clone(),
+        ));
+        run_calls(
+            &completion.tool_calls,
+            toolbox,
+            &mut messages,
+            &mut invocations,
+            sink,
+        );
+    }
     Ok(TurnResult {
         invocations,
         reply: completion.content,
         prompt_tokens: completion.prompt_tokens,
     })
+}
+
+/// Execute one round's tool calls: fire progress events, run each through the toolbox, record the
+/// invocation, and append its result to `messages` for the next round.
+fn run_calls(
+    calls: &[ToolCall],
+    toolbox: &dyn Toolbox,
+    messages: &mut Vec<ChatMessage>,
+    invocations: &mut Vec<ToolInvocation>,
+    sink: EventSink,
+) {
+    for call in calls {
+        sink(AgentEvent::ToolStarted {
+            name: call.function.name.clone(),
+            arguments: call.function.arguments.clone(),
+        });
+        let outcome = toolbox.call(&call.function.name, &call.function.arguments);
+        sink(AgentEvent::ToolFinished { ok: outcome.ok });
+        invocations.push(ToolInvocation {
+            name: call.function.name.clone(),
+            arguments: call.function.arguments.clone(),
+            result: outcome.result.clone(),
+            ok: outcome.ok,
+        });
+        messages.push(ChatMessage::tool_result(call.id.clone(), outcome.result));
+    }
 }
 
 /// Pick the streaming or blocking completion for one round.
