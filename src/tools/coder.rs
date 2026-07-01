@@ -1,4 +1,4 @@
-//! The coder toolbox: `bash` / `read` / `write` / `edit`, scoped to an agent's
+//! The coder toolbox: `bash` / `read` / `list` / `write` / `edit`, scoped to an agent's
 //! workspace. Added to a run only when its `tool_profile` is `Coder`. Unlike rust-claw,
 //! the file tools resolve paths through [`workspace::jail`] — the workspace is an
 //! *enforced* boundary, not a convention (`..` and paths outside the workspace are rejected;
@@ -6,7 +6,7 @@
 //! keeps `cwd = workspace` but is not jailed (it can reach anywhere — the sandbox seam is
 //! left at the spawn point for a future `bwrap`/container).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -17,11 +17,16 @@ use super::{ToolDef, ToolOutcome, Toolbox};
 
 pub const BASH: &str = "bash";
 pub const READ: &str = "read";
+pub const LIST: &str = "list";
 pub const WRITE: &str = "write";
 pub const EDIT: &str = "edit";
 
 /// Default line cap for `read`, matching rust-claw.
 const READ_LIMIT: usize = 2000;
+
+/// Cap on paths returned by `list`, so a huge tree can't blow up a prompt. Generous enough to
+/// show a normal project in full; a truncated listing notes it.
+const LIST_LIMIT: usize = 1000;
 
 /// A toolbox bound to one workspace directory. File tools always act on the host `workspace` dir;
 /// `bash` runs through `exec` (host, or the workspace's isola sandbox — R6).
@@ -67,6 +72,18 @@ impl Toolbox for CoderToolbox {
                 }),
             ),
             def(
+                LIST,
+                "List files in the workspace (recursively), as workspace-relative paths you can \
+                 pass to `read`. Give `path` to limit it to a subdirectory; omit it for the whole \
+                 workspace. Use this to discover what's there instead of shelling out to `ls`.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Subdirectory to list (relative to the workspace). Omit for the whole workspace." }
+                    }
+                }),
+            ),
+            def(
                 WRITE,
                 "Create or overwrite a file. Parent directories are created.",
                 json!({
@@ -105,6 +122,7 @@ impl Toolbox for CoderToolbox {
                 Err(err) => ToolOutcome::error(err),
             },
             READ => outcome(self.read(&args)),
+            LIST => outcome(self.list(&args)),
             WRITE => outcome(self.write(&args)),
             EDIT => outcome(self.edit(&args)),
             other => ToolOutcome::error(format!("error: no tool named {other}")),
@@ -125,6 +143,47 @@ impl CoderToolbox {
         }
         if out.is_empty() {
             return Ok("(no lines in range)".to_owned());
+        }
+        Ok(out)
+    }
+
+    /// List workspace files (recursively), optionally under a subdirectory. Read-only: it never
+    /// touches the filesystem outside the workspace and can't mutate anything — so an agent can be
+    /// given `read` + `list` for full read access without `bash` (arbitrary command execution).
+    fn list(&self, args: &Value) -> Result<String, String> {
+        let requested = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        // Reduce the request to a workspace-relative prefix, enforcing the jail (an escape or an
+        // out-of-workspace absolute path is rejected, same as read/write).
+        let prefix = if requested.is_empty() {
+            String::new()
+        } else {
+            let jailed = self.resolve(requested)?;
+            relative_to_workspace(&self.workspace, &jailed)
+                .unwrap_or_else(|| requested.trim_matches('/').to_owned())
+        };
+        let all = workspace::list_files(&self.workspace, LIST_LIMIT);
+        let under = |path: &String| {
+            prefix.is_empty() || path == &prefix || path.starts_with(&format!("{prefix}/"))
+        };
+        let rows: Vec<&String> = all.iter().filter(|path| under(path)).collect();
+        if rows.is_empty() {
+            return Ok(if prefix.is_empty() {
+                "(the workspace has no files yet)".to_owned()
+            } else {
+                format!("(no files under {prefix})")
+            });
+        }
+        let mut out = rows
+            .iter()
+            .map(|path| path.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if all.len() == LIST_LIMIT {
+            out.push_str(&format!("\n… (listing capped at {LIST_LIMIT} files)"));
         }
         Ok(out)
     }
@@ -233,6 +292,19 @@ fn outcome(result: Result<String, String>) -> ToolOutcome {
     }
 }
 
+/// `target` (a jailed absolute path) expressed relative to the workspace `root`, forward-slashed —
+/// matching the shape of [`workspace::list_files`] output for filtering. Tries the canonical root
+/// first (an absolute request jails to a canonical path) then the root as given (a relative request
+/// jails to `root.join(..)`); `None` if it isn't under either.
+fn relative_to_workspace(root: &Path, target: &Path) -> Option<String> {
+    let canon = root.canonicalize().ok();
+    canon
+        .as_deref()
+        .and_then(|c| target.strip_prefix(c).ok())
+        .or_else(|| target.strip_prefix(root).ok())
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+}
+
 fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(Value::as_str)
@@ -264,10 +336,10 @@ mod tests {
     }
 
     #[test]
-    fn advertises_the_four_coder_tools() {
+    fn advertises_the_coder_tools() {
         let (tb, _) = toolbox();
         let names: Vec<String> = tb.defs().into_iter().map(|d| d.name).collect();
-        assert_eq!(names, vec![BASH, READ, WRITE, EDIT]);
+        assert_eq!(names, vec![BASH, READ, LIST, WRITE, EDIT]);
     }
 
     #[test]
@@ -329,6 +401,68 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&abs).expect("written"),
             "the report"
+        );
+    }
+
+    #[test]
+    fn list_enumerates_the_tree_and_filters_by_subdir() {
+        let (tb, _) = toolbox();
+        tb.call(WRITE, r#"{"path":"docs/report.md","content":"x"}"#);
+        tb.call(WRITE, r#"{"path":"projects/foo/src/lib.rs","content":"y"}"#);
+        tb.call(WRITE, r#"{"path":"projects/foo/Cargo.toml","content":"z"}"#);
+
+        // No path → the whole workspace, workspace-relative, sorted.
+        let all = tb.call(LIST, "{}");
+        assert!(all.ok, "{}", all.result);
+        for expected in [
+            "docs/report.md",
+            "projects/foo/src/lib.rs",
+            "projects/foo/Cargo.toml",
+        ] {
+            assert!(
+                all.result.contains(expected),
+                "missing {expected} in {}",
+                all.result
+            );
+        }
+
+        // A subdir filters to just that subtree.
+        let sub = tb.call(LIST, r#"{"path":"projects/foo"}"#);
+        assert!(sub.result.contains("projects/foo/src/lib.rs"));
+        assert!(
+            !sub.result.contains("docs/report.md"),
+            "should be filtered out: {}",
+            sub.result
+        );
+
+        // An empty subtree says so rather than listing nothing silently.
+        let empty = tb.call(LIST, r#"{"path":"skills"}"#);
+        assert!(
+            empty.ok && empty.result.contains("no files under skills"),
+            "{}",
+            empty.result
+        );
+    }
+
+    #[test]
+    fn list_accepts_an_absolute_in_workspace_path_and_rejects_escapes() {
+        let (tb, dir) = toolbox();
+        tb.call(WRITE, r#"{"path":"projects/foo/lib.rs","content":"y"}"#);
+        // The workspace's own absolute path resolves to the same subtree.
+        let abs = dir.join("projects/foo");
+        let args = format!("{{\"path\":{:?}}}", abs.to_str().expect("utf-8"));
+        let out = tb.call(LIST, &args);
+        assert!(
+            out.ok && out.result.contains("projects/foo/lib.rs"),
+            "{}",
+            out.result
+        );
+        // An escape is refused, like the other file tools.
+        let esc = tb.call(LIST, r#"{"path":"../.."}"#);
+        assert!(
+            !esc.ok && esc.result.contains("outside the workspace"),
+            "{}",
+            esc.result
         );
     }
 

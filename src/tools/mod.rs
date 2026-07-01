@@ -18,7 +18,13 @@ pub use validator::{ValidatorToolbox, parse_verdict, parse_verdict_prose};
 /// The workspace tool names, in display order — the static half of the selectable catalog.
 /// They operate on the agent's workspace (`coder` module), so they're only offered when the
 /// agent has one.
-pub const WORKSPACE_TOOLS: [&str; 4] = [coder::BASH, coder::READ, coder::WRITE, coder::EDIT];
+pub const WORKSPACE_TOOLS: [&str; 5] = [
+    coder::BASH,
+    coder::READ,
+    coder::LIST,
+    coder::WRITE,
+    coder::EDIT,
+];
 
 use std::sync::Arc;
 
