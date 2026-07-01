@@ -600,7 +600,7 @@ pub fn finished(
         );
     }
     // The run is recorded — the persisted transcript supersedes the live typewriter buffer.
-    super::clear_live_text(shared, id);
+    super::clear_live_turn(shared, id);
 
     match role {
         RunRole::Stage => match next_action(task.step_position, steps.len(), ok) {

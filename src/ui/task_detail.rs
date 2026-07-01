@@ -11,7 +11,7 @@ use rwire_components::{Avatar, AvatarSize, Button, ButtonSize, Input, Text};
 
 use super::thread;
 use crate::bridge::{self, Command};
-use crate::state::{App, LiveEvent, ProposedTask, TaskDetail};
+use crate::state::{App, LiveItem, ProposedTask, TaskDetail};
 use crate::ui::workspace::card;
 use crate::ui::workspace_tasks::initials;
 
@@ -302,18 +302,12 @@ fn run_entry(run: &crate::state::RunView, key: &str, toggled: &[String]) -> Elem
 /// The live run as the newest thread entry: the agent + current step, a `● running` marker, its
 /// in-progress tool events, and the reply as it streams in (the typewriter `▌`).
 fn live_entry(app: &App, detail: &TaskDetail) -> ElementBuilder {
-    let mut live: Vec<&LiveEvent> = app
-        .live_activity
+    let items: &[LiveItem] = app
+        .live_turns
         .iter()
-        .filter(|event| event.task_id == detail.id)
-        .collect();
-    live.reverse(); // ring is newest-first; show chronological
-    let streaming = app
-        .live_text
-        .iter()
-        .find(|text| text.task_id == detail.id)
-        .map(|text| text.text.as_str())
-        .unwrap_or("");
+        .find(|turn| turn.task_id == detail.id)
+        .map(|turn| turn.items.as_slice())
+        .unwrap_or(&[]);
     let task = app.tasks.iter().find(|t| t.id == detail.id);
     let author = task.and_then(|t| t.agent.as_deref()).unwrap_or("owner");
     let mut tag = task
@@ -324,18 +318,25 @@ fn live_entry(app: &App, detail: &TaskDetail) -> ElementBuilder {
         tag.push_str(&format!(" · iter {}", task.iteration + 1));
     }
     let mut body: Vec<ElementBuilder> = Vec::new();
-    if live.is_empty() && streaming.is_empty() {
+    if items.is_empty() {
         body.push(
             el(El::Div)
                 .st([St::TextXs, St::TextMuted])
                 .text("The agent is working…"),
         );
     }
-    for event in live {
-        body.push(live_event_row(event));
-    }
-    if !streaming.is_empty() {
-        body.push(streaming_text(streaming));
+    // Render the stream in arrival order; the typewriter cursor rides only the final text segment.
+    let last = items.len().saturating_sub(1);
+    for (index, item) in items.iter().enumerate() {
+        body.push(match item {
+            LiveItem::Text(text) => streaming_text(text, index == last),
+            LiveItem::Tool {
+                time,
+                action,
+                in_progress,
+                ok,
+            } => live_event_row(time, action, *in_progress, *ok),
+        });
     }
     thread::entry(
         author,
@@ -365,10 +366,10 @@ fn running_dot() -> ElementBuilder {
 }
 
 /// One live tool event: an in-progress / ok / failed mark, its time, and the humanized action.
-fn live_event_row(event: &LiveEvent) -> ElementBuilder {
-    let (mark, color) = if event.in_progress {
+fn live_event_row(time: &str, action: &str, in_progress: bool, ok: bool) -> ElementBuilder {
+    let (mark, color) = if in_progress {
         ("▷", St::TextMuted)
-    } else if event.ok {
+    } else if ok {
         ("✓", St::TextAccent)
     } else {
         ("✗", St::TextLow)
@@ -377,13 +378,19 @@ fn live_event_row(event: &LiveEvent) -> ElementBuilder {
         .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::TextXs])
         .append([
             el(El::Span).st([color]).text(mark),
-            el(El::Span).st([St::TextMuted]).text(&event.time),
-            el(El::Span).st([St::TextHigh]).text(&event.action),
+            el(El::Span).st([St::TextMuted]).text(time),
+            el(El::Span).st([St::TextHigh]).text(action),
         ])
 }
 
-/// The streaming reply text with a trailing cursor block.
-fn streaming_text(streaming: &str) -> ElementBuilder {
+/// A streaming reply segment. The trailing typewriter cursor is drawn only on the segment that is
+/// currently growing (the last item in the turn), so earlier segments read as settled text.
+fn streaming_text(text: &str, cursor: bool) -> ElementBuilder {
+    let body = if cursor {
+        format!("{text}▌")
+    } else {
+        text.to_owned()
+    };
     el(El::Div)
         .style(
             Style::new()
@@ -391,7 +398,7 @@ fn streaming_text(streaming: &str) -> ElementBuilder {
                 .set("word-break", "break-word"),
         )
         .st([St::TextXs, St::TextHigh, St::PtXs])
-        .text(&format!("{streaming}▌"))
+        .text(&body)
 }
 
 /// A plan's proposed tasks as a small list of cards (title · assignee · schedule · spec) — the

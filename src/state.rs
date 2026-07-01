@@ -130,12 +130,72 @@ pub struct LiveEvent {
     pub ok: bool,
 }
 
-/// The streamed reply text for a currently-running task — grows token-by-token as the model
-/// types, shown in the task detail's Live card. Cleared when the run is recorded.
+/// One item in a running task's live turn — the interleaved stream as it arrives, so the thread
+/// shows the real `text → tool → text` sequence instead of all tools then all text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiveItem {
+    /// A streamed reply segment (grows token-by-token until a tool call breaks it).
+    Text(String),
+    /// A tool call: what it's doing / did, and its state.
+    Tool {
+        /// `HH:MM:SS` (UTC).
+        time: String,
+        /// Humanized action — e.g. "reading src/main.rs" → "read src/main.rs".
+        action: String,
+        /// True while the tool is running; false once finished.
+        in_progress: bool,
+        /// The tool's success, once finished.
+        ok: bool,
+    },
+}
+
+/// A currently-running task's live turn: its items in arrival order. Cleared when the run is
+/// recorded (the persisted transcript then takes over as the source of truth).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct LiveText {
+pub struct LiveTurn {
     pub task_id: String,
-    pub text: String,
+    pub items: Vec<LiveItem>,
+}
+
+impl LiveTurn {
+    /// Extend the current text segment; a tool call in between means the next chunk starts a new
+    /// segment, so the stream keeps its real `text → tool → text` order.
+    pub fn push_text(&mut self, chunk: &str) {
+        match self.items.last_mut() {
+            Some(LiveItem::Text(buffer)) => buffer.push_str(chunk),
+            _ => self.items.push(LiveItem::Text(chunk.to_owned())),
+        }
+    }
+
+    /// Record a tool call starting (in-flight) at this point in the stream.
+    pub fn start_tool(&mut self, time: String, action: String) {
+        self.items.push(LiveItem::Tool {
+            time,
+            action,
+            in_progress: true,
+            ok: false,
+        });
+    }
+
+    /// Flip the most recent still-running tool to finished with `ok`.
+    pub fn finish_tool(&mut self, ok: bool) {
+        if let Some(LiveItem::Tool {
+            in_progress,
+            ok: tool_ok,
+            ..
+        }) = self.items.iter_mut().rev().find(|item| {
+            matches!(
+                item,
+                LiveItem::Tool {
+                    in_progress: true,
+                    ..
+                }
+            )
+        }) {
+            *in_progress = false;
+            *tool_ok = ok;
+        }
+    }
 }
 
 /// The linked context for a run's live events — resolved once when the run launches and carried
@@ -656,8 +716,9 @@ pub struct App {
     /// Live agent actions (tool calls in flight / just finished), newest first, capped — the
     /// real-time feed for the Activity board + a running task's detail.
     pub live_activity: Vec<LiveEvent>,
-    /// Streamed reply text per currently-running task (the typewriter), shown in the detail.
-    pub live_text: Vec<LiveText>,
+    /// Per currently-running task, the interleaved live stream (text segments + tool events in
+    /// arrival order) shown in the task detail's Thread — the typewriter, in order.
+    pub live_turns: Vec<LiveTurn>,
     /// Recent operational log lines for the Logs viewer (newest first, capped).
     pub logs: Vec<LogLine>,
     /// Whether the mobile slide-in nav drawer is open. The desktop sidebar is always
@@ -674,5 +735,69 @@ impl App {
             .iter()
             .find(|w| w.id == id)
             .map_or(0, |w| w.count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LiveItem, LiveTurn};
+
+    #[test]
+    fn live_turn_interleaves_text_and_tools_in_arrival_order() {
+        let mut turn = LiveTurn::default();
+        turn.push_text("let me read the file");
+        turn.start_tool("00:00:01".to_owned(), "read src/lib.rs".to_owned());
+        turn.finish_tool(true);
+        turn.push_text("now editing");
+
+        // Order preserved; the second text is a *new* segment (not glued to the first), and the
+        // tool between them is marked finished — the real stream, not "all tools then all text".
+        assert_eq!(
+            turn.items,
+            vec![
+                LiveItem::Text("let me read the file".to_owned()),
+                LiveItem::Tool {
+                    time: "00:00:01".to_owned(),
+                    action: "read src/lib.rs".to_owned(),
+                    in_progress: false,
+                    ok: true,
+                },
+                LiveItem::Text("now editing".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn live_turn_appends_consecutive_text_into_one_segment() {
+        let mut turn = LiveTurn::default();
+        turn.push_text("hel");
+        turn.push_text("lo");
+        assert_eq!(turn.items, vec![LiveItem::Text("hello".to_owned())]);
+    }
+
+    #[test]
+    fn live_turn_finish_flips_only_the_last_running_tool() {
+        let mut turn = LiveTurn::default();
+        turn.start_tool("t1".to_owned(), "a".to_owned());
+        turn.finish_tool(true);
+        turn.start_tool("t2".to_owned(), "b".to_owned());
+        turn.finish_tool(false);
+        assert_eq!(
+            turn.items,
+            vec![
+                LiveItem::Tool {
+                    time: "t1".to_owned(),
+                    action: "a".to_owned(),
+                    in_progress: false,
+                    ok: true
+                },
+                LiveItem::Tool {
+                    time: "t2".to_owned(),
+                    action: "b".to_owned(),
+                    in_progress: false,
+                    ok: false
+                },
+            ]
+        );
     }
 }

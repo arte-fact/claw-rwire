@@ -445,7 +445,7 @@ pub fn stop(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
     if let Err(err) = tasks::stop(conn, id) {
         return surface(shared, format!("stop task: {err}"));
     }
-    super::clear_live_text(shared, id);
+    super::clear_live_turn(shared, id);
     reproject(conn, shared, id, &task.workspace_id);
 }
 

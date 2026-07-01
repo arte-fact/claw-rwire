@@ -1537,39 +1537,48 @@ fn push_activity(
 /// Cap on the live agent-activity ring.
 const LIVE_CAP: usize = 60;
 
-/// Fold a live agent event (a tool call starting/finishing) into `App.live_activity` — the
-/// real-time feed. `ToolStarted` adds an in-flight entry; `ToolFinished` flips the matching one.
+/// Cap on concurrently-streaming tasks' live turns — a handful at most.
+const LIVE_TURNS_CAP: usize = 8;
+
+/// Fold a live agent event into both feeds: the global `App.live_activity` ring (the Activity
+/// board) and the streaming task's ordered `App.live_turns` (the Thread's in-order live entry —
+/// text segments and tool events interleaved as they arrive).
 fn live_progress(
     shared: &SharedServerState,
     ctx: crate::state::ProgressCtx,
     event: agent::AgentEvent,
 ) {
+    use crate::state::LiveEvent;
     use agent::AgentEvent;
     match event {
         AgentEvent::ToolStarted { name, arguments } => {
-            let entry = crate::state::LiveEvent {
-                time: now_hms(),
+            let action = describe_tool(&name, &arguments);
+            let time = now_hms();
+            let entry = LiveEvent {
+                time: time.clone(),
                 agent: ctx.agent,
                 workspace_id: ctx.workspace_id,
                 workspace: ctx.workspace,
-                task_id: ctx.task_id,
+                task_id: ctx.task_id.clone(),
                 task: ctx.task,
-                action: describe_tool(&name, &arguments),
+                action: action.clone(),
                 in_progress: true,
                 ok: false,
             };
+            let task_id = ctx.task_id;
             shared.update_shared_changed::<App>(
-                ChangeSet::from_fields(&[App::FIELD_LIVE_ACTIVITY]),
+                ChangeSet::from_fields(&[App::FIELD_LIVE_ACTIVITY, App::FIELD_LIVE_TURNS]),
                 move |app| {
                     app.live_activity.insert(0, entry);
                     app.live_activity.truncate(LIVE_CAP);
+                    turn_mut(app, &task_id).start_tool(time, action);
                 },
             );
         }
         AgentEvent::ToolFinished { ok } => {
             let task_id = ctx.task_id;
             shared.update_shared_changed::<App>(
-                ChangeSet::from_fields(&[App::FIELD_LIVE_ACTIVITY]),
+                ChangeSet::from_fields(&[App::FIELD_LIVE_ACTIVITY, App::FIELD_LIVE_TURNS]),
                 move |app| {
                     if let Some(entry) = app
                         .live_activity
@@ -1579,38 +1588,46 @@ fn live_progress(
                         entry.in_progress = false;
                         entry.ok = ok;
                     }
+                    if let Some(turn) = app.live_turns.iter_mut().find(|t| t.task_id == task_id) {
+                        turn.finish_tool(ok);
+                    }
                 },
             );
         }
         AgentEvent::Text(chunk) => {
             let task_id = ctx.task_id;
             shared.update_shared_changed::<App>(
-                ChangeSet::from_fields(&[App::FIELD_LIVE_TEXT]),
-                move |app| match app.live_text.iter_mut().find(|t| t.task_id == task_id) {
-                    Some(buffer) => buffer.text.push_str(&chunk),
-                    None => {
-                        app.live_text.push(crate::state::LiveText {
-                            task_id,
-                            text: chunk,
-                        });
-                        // Bound it — a handful of concurrently-streaming tasks at most.
-                        if app.live_text.len() > 8 {
-                            app.live_text.remove(0);
-                        }
-                    }
-                },
+                ChangeSet::from_fields(&[App::FIELD_LIVE_TURNS]),
+                move |app| turn_mut(app, &task_id).push_text(&chunk),
             );
         }
     }
 }
 
-/// Clear a task's streamed-text buffer — its run is now recorded, so the persisted transcript
-/// (not the live typewriter) is the source of truth.
-pub(super) fn clear_live_text(shared: &SharedServerState, task_id: &str) {
+/// The task's live turn, creating (and bounding) it on first use.
+fn turn_mut<'a>(app: &'a mut App, task_id: &str) -> &'a mut crate::state::LiveTurn {
+    if app.live_turns.iter().all(|turn| turn.task_id != task_id) {
+        app.live_turns.push(crate::state::LiveTurn {
+            task_id: task_id.to_owned(),
+            items: Vec::new(),
+        });
+        if app.live_turns.len() > LIVE_TURNS_CAP {
+            app.live_turns.remove(0);
+        }
+    }
+    app.live_turns
+        .iter_mut()
+        .find(|turn| turn.task_id == task_id)
+        .expect("turn ensured above")
+}
+
+/// Clear a task's live turn — its run is now recorded, so the persisted transcript (not the live
+/// typewriter) is the source of truth.
+pub(super) fn clear_live_turn(shared: &SharedServerState, task_id: &str) {
     let task_id = task_id.to_owned();
     shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_LIVE_TEXT]),
-        move |app| app.live_text.retain(|t| t.task_id != task_id),
+        ChangeSet::from_fields(&[App::FIELD_LIVE_TURNS]),
+        move |app| app.live_turns.retain(|turn| turn.task_id != task_id),
     );
 }
 
