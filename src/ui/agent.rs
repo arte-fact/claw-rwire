@@ -52,7 +52,11 @@ fn agent_view(app: &App) -> ElementBuilder {
     // The live run streams into its own renderer, appended unconditionally (it self-hides when the
     // agent has nothing running), so a token flush never repaints the timeline above.
     entries.push(agent_live_entry());
+    // Key the timeline by agent id: switching agents yields a new id, so the DOM morph replaces the
+    // whole subtree instead of positionally reusing the previous agent's nodes (leaving them stale).
+    // Same pattern the chat thread uses for switching conversations.
     let column = el(El::Div)
+        .id(&format!("agent-thread-{}", thread.agent_id))
         .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
         .md([St::PLg])
         .append(entries);
