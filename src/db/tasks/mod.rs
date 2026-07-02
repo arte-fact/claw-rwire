@@ -640,6 +640,7 @@ mod tests {
                 ok: true,
                 transcript: None,
                 attempt: 0,
+                memory: None,
             },
         )
         .expect("run");

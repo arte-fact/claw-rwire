@@ -82,6 +82,7 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     rekey_agent_memory_by_workspace(conn).map_err(DbError::Schema)?;
     add_task_pipeline_columns(conn).map_err(DbError::Schema)?;
     add_task_run_transcript_column(conn).map_err(DbError::Schema)?;
+    add_task_run_memory_column(conn).map_err(DbError::Schema)?;
     add_task_control_columns(conn).map_err(DbError::Schema)?;
     add_task_plan_columns(conn).map_err(DbError::Schema)?;
     add_workspace_auto_approve_column(conn).map_err(DbError::Schema)?;
@@ -163,6 +164,16 @@ fn add_task_control_columns(conn: &Connection) -> rusqlite::Result<()> {
 /// A fresh DB already has it from the schema, so the ALTER fails "duplicate column" — ok.
 fn add_task_run_transcript_column(conn: &Connection) -> rusqlite::Result<()> {
     match conn.execute("ALTER TABLE task_runs ADD COLUMN transcript TEXT", []) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Add `task_runs.memory_snapshot` (the memory layer a run launched with — R3.5 M4 provenance)
+/// to a DB that predates it. A fresh DB already has it from the schema — "duplicate column" ok.
+fn add_task_run_memory_column(conn: &Connection) -> rusqlite::Result<()> {
+    match conn.execute("ALTER TABLE task_runs ADD COLUMN memory_snapshot TEXT", []) {
         Ok(_) => Ok(()),
         Err(err) if is_duplicate_column(&err) => Ok(()),
         Err(err) => Err(err),

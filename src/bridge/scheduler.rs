@@ -85,6 +85,7 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             role: RunRole::Stage,
             epoch,
             result: Err("the pipeline has no step at this position".to_owned()),
+            memory: None,
         });
     };
     let role = if step.kind == StepKind::Loop {
@@ -140,8 +141,11 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             .unwrap_or_default();
         let recap =
             memory::last_task_recap(conn, &inference.agent_id, &task.workspace_id, &task.id);
-        let memory_text = memory::fill_memory(allowance, recap.as_deref(), row.text().as_deref())
-            .map(|text| memory::wrap_workspace_memory(&text));
+        let memory_fill = memory::fill_memory(allowance, recap.as_deref(), row.text().as_deref());
+        // The provenance snapshot (R3.5 M4): what the run remembered at launch, capped so a
+        // big-context model's memory doesn't bloat every run row.
+        let snapshot = memory_fill.as_deref().map(memory::snapshot);
+        let memory_text = memory_fill.map(|text| memory::wrap_workspace_memory(&text));
         let system_prompt = run_system_prompt(
             &preamble,
             Some(&workspace_dir),
@@ -157,7 +161,7 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             prior,
         );
         let toolbox = build_toolbox(inference.tools.clone(), Some(workspace_dir), true);
-        Ok((inference, messages, toolbox))
+        Ok((inference, messages, toolbox, snapshot))
     })();
     spawn_run(run_meta(conn, task), role, epoch, prepared);
 }
@@ -216,13 +220,21 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             Box::new(ValidatorToolbox),
             checks,
         ]));
-        Ok((inference, messages, toolbox))
+        Ok((inference, messages, toolbox, None))
     })();
     let epoch = tasks::bump_epoch(conn, &task.id).unwrap_or_default();
     spawn_run(run_meta(conn, task), RunRole::Validator, epoch, prepared);
 }
 
-type Prepared = Result<(ResolvedInference, Vec<agent::ChatMessage>, Box<dyn Toolbox>), String>;
+type Prepared = Result<
+    (
+        ResolvedInference,
+        Vec<agent::ChatMessage>,
+        Box<dyn Toolbox>,
+        Option<String>,
+    ),
+    String,
+>;
 
 /// The run's linked context, minus the agent name (filled from the resolved inference).
 struct RunMeta {
@@ -237,7 +249,7 @@ struct RunMeta {
 /// dispatch guard captured at launch — the bridge drops the result if the task has moved on.
 fn spawn_run(meta: RunMeta, role: RunRole, epoch: i64, prepared: Prepared) {
     match prepared {
-        Ok((inference, messages, toolbox)) => {
+        Ok((inference, messages, toolbox, memory)) => {
             let ctx = ProgressCtx {
                 task_id: meta.task_id,
                 task: meta.task,
@@ -262,6 +274,7 @@ fn spawn_run(meta: RunMeta, role: RunRole, epoch: i64, prepared: Prepared) {
                     role,
                     epoch,
                     result,
+                    memory,
                 });
             });
         }
@@ -270,6 +283,7 @@ fn spawn_run(meta: RunMeta, role: RunRole, epoch: i64, prepared: Prepared) {
             role,
             epoch,
             result: Err(reason),
+            memory: None,
         }),
     }
 }
@@ -574,6 +588,7 @@ pub fn finished(
     role: RunRole,
     epoch: i64,
     result: Result<agent::TurnResult, String>,
+    memory: Option<String>,
 ) {
     let Ok(Some(task)) = tasks::get(conn, id) else {
         return;
@@ -638,6 +653,7 @@ pub fn finished(
                 ok,
                 transcript: transcript.as_deref(),
                 attempt: task.attempt,
+                memory: memory.as_deref(),
             },
         );
     }
@@ -828,6 +844,7 @@ fn auto_pass_gate(
                 ok: true,
                 transcript: None,
                 attempt: task.attempt,
+                memory: None,
             },
         );
     }
@@ -1072,6 +1089,7 @@ pub fn human_verdict(
                 ok: true,
                 transcript: None,
                 attempt: task.attempt,
+                memory: None,
             },
         );
     }

@@ -67,6 +67,58 @@ pub(crate) fn tool_row(tool: &ToolCardView, key: &str, toggled: &[String]) -> El
         .append(children)
 }
 
+/// The run's launch-time memory as a disclosure row (R3.5 M4 provenance): a muted "memory ·
+/// launched remembering…" header that opens to the snapshot — same toggle machinery as the
+/// tool rows, so "why did it do that?" sits right where the forensics live.
+pub(crate) fn memory_row(memory: &str, key: &str, toggled: &[String]) -> ElementBuilder {
+    let open = toggled.iter().any(|t| t == key);
+    let header = el(El::Button)
+        .at(At::Type, Av::Button)
+        .data("tool", key)
+        .on(Ev::Click, toggle_tool())
+        .st([
+            St::FontInheritAll,
+            St::WFull,
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::TextXs,
+            St::FontMono,
+            St::BgTransparent,
+            St::BorderNone,
+            St::P0,
+            St::CursorPointer,
+            St::TextLeft,
+        ])
+        .append([
+            el(El::Span)
+                .st([St::TextLow])
+                .text(if open { "▾" } else { "▸" }),
+            el(El::Span).st([St::TextMuted]).text("memory"),
+            el(El::Span)
+                .st([St::MinW0, St::Flex1, St::TextLow, St::Truncate])
+                .text(&format!("launched remembering · {}", one_line(memory, 96))),
+        ]);
+    let mut children = vec![header];
+    if open {
+        children.push(
+            el(El::Div)
+                .st([
+                    St::TextXs,
+                    St::TextMuted,
+                    St::WhitespacePreWrap,
+                    St::PSm,
+                    St::BgApp,
+                    St::Rounded0,
+                ])
+                .text(memory),
+        );
+    }
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
+        .append(children)
+}
+
 /// A humanized one-line summary of a tool call's arguments — the command, the file path, the
 /// search, the verdict. Never a raw JSON dump: an unrecognised tool falls back to a structured
 /// `key: value · key: value` of its arguments.
@@ -410,6 +462,7 @@ mod tests {
             tools: Vec::new(),
             attempt: 0,
             time: String::new(),
+            memory: String::new(),
         }
     }
 

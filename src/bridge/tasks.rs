@@ -110,6 +110,7 @@ pub(super) fn run_view(
         attempt: run.attempt,
         // `2026-06-22T08:00:…Z` → `08:00`, matching the chat transcript's HH:MM stamps.
         time: run.created_at.get(11..16).unwrap_or_default().to_owned(),
+        memory: run.memory.unwrap_or_default(),
     }
 }
 
@@ -588,6 +589,7 @@ mod tests {
                 ok: true,
                 transcript: None,
                 attempt: 0,
+                memory: None,
             },
         )
         .expect("run");

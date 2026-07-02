@@ -242,6 +242,7 @@ mod tests {
             transcript: transcript.map(str::to_owned),
             attempt: 0,
             created_at: String::new(),
+            memory: None,
         }
     }
 

@@ -269,6 +269,9 @@ pub enum Command {
         role: RunRole,
         epoch: i64,
         result: Result<agent::TurnResult, String>,
+        /// The memory layer the run launched with (R3.5 M4) — echoed back by the worker so the
+        /// recorded run carries its provenance. `None` for validators (memory-free by design).
+        memory: Option<String>,
     },
     /// The concierge delegated a request to a workspace owner (the `ask` tool): run the
     /// owner's planning turn, which queues task cards.
@@ -784,7 +787,8 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             role,
             epoch,
             result,
-        } => scheduler::finished(conn, shared, &id, role, epoch, result),
+            memory,
+        } => scheduler::finished(conn, shared, &id, role, epoch, result, memory),
         Command::Ask {
             workspace,
             request,

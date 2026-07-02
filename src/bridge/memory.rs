@@ -97,6 +97,17 @@ pub(super) fn fill_memory(
     (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
+/// Cap a run's provenance snapshot (R3.5 M4) — enough to answer "what did it remember at
+/// launch?" without a big-context model's memory bloating every run row.
+pub(super) fn snapshot(memory: &str) -> String {
+    const CAP: usize = 4000;
+    if memory.chars().count() <= CAP {
+        return memory.to_owned();
+    }
+    let cut: String = memory.chars().take(CAP).collect();
+    format!("{}…", cut.trim_end())
+}
+
 /// Frame a producer/planner's workspace memory as its system-prompt layer.
 pub(super) fn wrap_workspace_memory(memory: &str) -> String {
     format!(
@@ -415,6 +426,7 @@ mod tests {
             transcript: None,
             attempt: 0,
             created_at: String::new(),
+            memory: None,
         }
     }
 
@@ -534,6 +546,7 @@ mod tests {
                 ok: true,
                 transcript: None,
                 attempt: 0,
+                memory: None,
             },
         )
         .expect("run");

@@ -285,6 +285,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   ok          INTEGER NOT NULL DEFAULT 1,
   transcript  TEXT,                         -- the run's tool calls, JSON (F / live transcript)
   attempt     INTEGER NOT NULL DEFAULT 0,   -- the task.attempt this run belongs to (restart isolation)
+  memory_snapshot TEXT,                     -- the memory layer the run launched with (R3.5 M4 provenance)
   created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs ON task_runs(task_id, id);

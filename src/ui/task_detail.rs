@@ -269,14 +269,18 @@ pub(crate) fn run_entry(
     key: &str,
     toggled: &[String],
 ) -> ElementBuilder {
-    let mut body: Vec<ElementBuilder> = run
-        .tools
-        .iter()
-        .enumerate()
-        .map(|(index, tool)| {
-            crate::ui::run_chain::tool_row(tool, &format!("{key}.{index}"), toggled)
-        })
-        .collect();
+    let mut body: Vec<ElementBuilder> = Vec::new();
+    if !run.memory.trim().is_empty() {
+        // What the run remembered at launch (R3.5 M4) — collapsed, above the tool forensics.
+        body.push(crate::ui::run_chain::memory_row(
+            &run.memory,
+            &format!("{key}.mem"),
+            toggled,
+        ));
+    }
+    body.extend(run.tools.iter().enumerate().map(|(index, tool)| {
+        crate::ui::run_chain::tool_row(tool, &format!("{key}.{index}"), toggled)
+    }));
     if run.output.trim().is_empty() {
         body.push(Text::caption("(no output)").muted().build());
     } else {

@@ -459,6 +459,9 @@ pub struct RunView {
     pub attempt: i64,
     /// `HH:MM` (UTC) the run was recorded — the thread entry's timestamp.
     pub time: String,
+    /// The memory layer the run launched with (R3.5 M4 provenance), or empty — the Peek shows
+    /// it so "why did it do that?" has an answer.
+    pub memory: String,
 }
 
 /// A task's detail view: its spec, status, and the full run chain (the audit trail).
