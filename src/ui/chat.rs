@@ -12,9 +12,10 @@ use super::thread;
 use crate::bridge::{self, Command};
 use crate::state::{App, ChatMessage, MessageRole, TranscriptItem};
 
-/// The reading width of the whole chat — transcript and composer share it, centered,
-/// so lines don't sprawl on wide screens.
-const CHAT_MAX_W: &str = "960px";
+/// The shared reading measure for conversation surfaces — the chat transcript, its composer,
+/// and the agent thread all cap and center on it. `40rem` ≈ 80 mono columns at the app's
+/// 0.82rem body: the classic terminal line, long enough for code, short enough to read.
+pub(super) const CHAT_MAX_W: &str = "40rem";
 
 // ── Main area ───────────────────────────────────────────────────────────────
 

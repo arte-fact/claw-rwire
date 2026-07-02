@@ -8,8 +8,11 @@
 //! rows), so switching agents replaces the timeline cleanly and streaming re-renders in place.
 
 use rwire::router::Link;
+use rwire::style::Style;
 use rwire::{El, ElementBuilder, St, el, renderer};
 use rwire_components::Text;
+
+use super::chat::CHAT_MAX_W;
 
 use crate::state::{AgentThreadItem, App, LiveItem};
 use crate::ui::task_detail::{live_stream_body, review_gate, run_entry, running_dot};
@@ -72,9 +75,15 @@ fn agent_view(app: &App) -> ElementBuilder {
     }
     // Key the timeline by agent id: switching agents yields a new id, so the DOM morph replaces the
     // whole subtree instead of positionally reusing the previous agent's nodes. Same pattern the
-    // chat thread uses for switching conversations.
+    // chat thread uses for switching conversations. Capped and centered on the shared reading
+    // measure so lines don't sprawl on wide screens.
     let column = el(El::Div)
         .id(&format!("agent-thread-{key}"))
+        .style(
+            Style::new()
+                .set("max-width", CHAT_MAX_W)
+                .set("margin", "0 auto"),
+        )
         .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
         .md([St::PLg])
         .append(entries);
@@ -83,21 +92,22 @@ fn agent_view(app: &App) -> ElementBuilder {
         .append([agent_header(name), thread::scroll(column)])
 }
 
-/// The pinned page header: the agent's name.
+/// The pinned page header: the agent's name. The border spans the page; the name sits in a
+/// centered column on the same reading measure as the timeline, so the two align.
 fn agent_header(name: &str) -> ElementBuilder {
     el(El::Div)
-        .st([
-            St::FlexShrink0,
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::PMd,
-            St::BorderBDefault,
-        ])
+        .st([St::FlexShrink0, St::PMd, St::BorderBDefault])
         .md([St::PxLg])
-        .append([el(El::Span)
-            .st([St::Flex1, St::TextLg, St::TextHigh, St::FontSemibold])
-            .text(name)])
+        .append([el(El::Div)
+            .style(
+                Style::new()
+                    .set("max-width", CHAT_MAX_W)
+                    .set("margin", "0 auto"),
+            )
+            .st([St::WFull, St::DisplayFlex, St::ItemsCenter, St::GapSm])
+            .append([el(El::Span)
+                .st([St::Flex1, St::TextLg, St::TextHigh, St::FontSemibold])
+                .text(name)])])
 }
 
 /// One task section marker: a linked title (→ its board Peek) with a status chip — the header the
