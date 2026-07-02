@@ -26,6 +26,7 @@ mod replay;
 mod review;
 mod scheduler;
 mod seed;
+mod steer;
 mod tasks;
 mod workflow;
 
@@ -305,6 +306,13 @@ pub enum Command {
         summarized_through: i64,
         note: String,
         source: Option<String>,
+    },
+    /// Steer (R4): the operator leaves a message on a worker's thread. Queued now; delivered
+    /// at the agent's next pass boundary (or, to an idle agent, materialised as a task).
+    SteerAgent {
+        agent: String,
+        workspace: String,
+        body: String,
     },
     /// Save a workspace's `AGENT.md` brief (the Overview editor).
     SaveBrief {
@@ -818,6 +826,11 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             );
             project_memory_surfaces(conn, shared);
         }
+        Command::SteerAgent {
+            agent,
+            workspace,
+            body,
+        } => steer::send_message(conn, shared, &agent, &workspace, &body),
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)
         }

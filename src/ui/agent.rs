@@ -11,9 +11,10 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, St, el, renderer};
-use rwire_components::Text;
+use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire_components::{Input, Text};
 
+use crate::bridge::{self, Command};
 use crate::state::{AgentThread, AgentThreadItem, AgentTurn, App, LiveItem};
 use crate::ui::memory;
 use crate::ui::run_chain::verdict_chip_of;
@@ -41,7 +42,70 @@ pub fn page() -> ElementBuilder {
                     .md([St::PLg])
                     .append([timeline(), live_tail()]),
             ),
+            steer_bar(),
         ])
+}
+
+/// The steer composer (R4), pinned under the scroll like the chat's: leave the agent a note —
+/// it queues now and delivers at the next pass boundary (or becomes a task if the agent is
+/// idle here). A renderer keyed by the thread's item count so the field resets after a send.
+#[renderer]
+fn steer_bar(app: &App) -> ElementBuilder {
+    let Some(thread) = app.agent_thread.as_ref() else {
+        return el(El::Div).st([St::DisplayNone]);
+    };
+    let field_id = format!(
+        "steer-{}-{}-{}",
+        thread.agent_id,
+        thread.workspace_id,
+        thread.items.len()
+    );
+    el(El::Div)
+        .style(Style::new().set("padding", "0.5rem 1rem 1rem"))
+        .st([
+            St::FlexShrink0,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::ItemsCenter,
+        ])
+        .append([el(El::Form)
+            .on(Ev::Submit, send_steer())
+            .st([
+                St::MaxW60rem,
+                St::WFull,
+                St::DisplayFlex,
+                St::ItemsCenter,
+                St::GapSm,
+            ])
+            .append([
+                Input::text()
+                    .id(field_id)
+                    .name("message")
+                    .placeholder(format!(
+                        "Message {} — delivered at its next pass…",
+                        thread.agent_name
+                    ))
+                    .autocomplete("off")
+                    .build()
+                    .st([St::Flex1]),
+                crate::ui::widgets::accent_submit(icons::Icon::Check, "Send"),
+            ])])
+}
+
+#[handler]
+fn send_steer(app: &mut App, ctx: &EventContext) {
+    let Some(thread) = app.agent_thread.as_ref() else {
+        return;
+    };
+    let body = ctx.field("message").unwrap_or_default().trim().to_owned();
+    if body.is_empty() {
+        return;
+    }
+    bridge::send(Command::SteerAgent {
+        agent: thread.agent_id.clone(),
+        workspace: thread.workspace_id.clone(),
+        body,
+    });
 }
 
 /// The pinned page header: the agent's name + its workspace, centered on the reading measure.

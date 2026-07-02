@@ -165,13 +165,21 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             inference.agent_prompt.clone(),
             memory_text,
         );
-        let messages = super::replay::producer_thread(
+        let mut messages = super::replay::producer_thread(
             &system_prompt,
             &task.spec,
             &step.name,
             condensed.as_deref(),
             prior,
         );
+        // Steer delivery (R4): queued operator messages ride this pass boundary as trailing
+        // user turns — the agent reads them alongside the spec/feedback it was launched with.
+        for body in consume_steers(conn, &inference.agent_id, &task.workspace_id) {
+            messages.push(agent::ChatMessage::text(
+                agent::Role::User,
+                format!("Message from the operator (steer): {body}"),
+            ));
+        }
         let toolbox = build_toolbox(inference.tools.clone(), Some(workspace_dir), true);
         Ok((inference, messages, toolbox, snapshot))
     })();
@@ -321,6 +329,19 @@ fn run_meta(conn: &rusqlite::Connection, task: &Task) -> RunMeta {
 
 fn env_lookup(key: &str) -> Option<String> {
     std::env::var(key).ok()
+}
+
+/// Drain the scope's queued steer messages for a launching pass: returns the bodies (oldest
+/// first) and marks them delivered — the queue→pickup boundary, unit-tested.
+fn consume_steers(conn: &rusqlite::Connection, agent_id: &str, workspace_id: &str) -> Vec<String> {
+    let queued = db::agent_messages::undelivered(conn, agent_id, workspace_id).unwrap_or_default();
+    queued
+        .into_iter()
+        .map(|message| {
+            let _ = db::agent_messages::mark_delivered(conn, &message.id);
+            message.body
+        })
+        .collect()
 }
 
 /// The produced-but-never-reviewed output of an attempt at `position`, if any — a pure
@@ -1297,6 +1318,18 @@ mod tests {
         assert_eq!(unreviewed_output(&prior, 0), Some("v2"));
         // A different step's output doesn't resume this step.
         assert_eq!(unreviewed_output(&prior, 1), None);
+    }
+
+    #[test]
+    fn consume_steers_drains_the_queue_in_order_exactly_once() {
+        let conn = crate::db::open_in_memory().expect("db");
+        crate::db::agents::create(&conn, "ag-1", "A", None, None).expect("agent");
+        crate::db::workspaces::create(&conn, "ws", "W").expect("ws");
+        crate::db::agent_messages::queue(&conn, "m1", "ag-1", "ws", "first").expect("m1");
+        crate::db::agent_messages::queue(&conn, "m2", "ag-1", "ws", "second").expect("m2");
+        assert_eq!(consume_steers(&conn, "ag-1", "ws"), vec!["first", "second"]);
+        // Consumed: the next pass gets nothing (delivery is exactly-once).
+        assert!(consume_steers(&conn, "ag-1", "ws").is_empty());
     }
 
     #[test]

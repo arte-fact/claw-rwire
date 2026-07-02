@@ -348,3 +348,18 @@ CREATE TABLE IF NOT EXISTS agent_memory_log (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_memory_log
   ON agent_memory_log(agent_group_id, workspace_id, id);
+
+-- Steer messages (R4): operator → agent notes, scoped like the thread to (agent, workspace).
+-- Queued on send; delivered into the agent's next producer pass as a user turn (or, to an idle
+-- agent, materialised as a task assigned to it). `delivered_at` NULL = still queued.
+-- Additive (claw-rwire-only).
+CREATE TABLE IF NOT EXISTS agent_messages (
+  id             TEXT PRIMARY KEY,
+  agent_group_id TEXT NOT NULL REFERENCES agent_groups(id),
+  workspace_id   TEXT NOT NULL REFERENCES workspaces(id),
+  body           TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  delivered_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_messages
+  ON agent_messages(agent_group_id, workspace_id, id);

@@ -304,6 +304,27 @@ pub fn last_finished_for_agent(
     .optional()
 }
 
+/// Whether the agent has open work (pending / running / awaiting) in this workspace — the
+/// steer decision: open work means a queued message rides its next pass; idle means the
+/// message materialises as a task. Effective-assignee semantics (owner-defaulted counts).
+pub fn has_open_for_agent(
+    conn: &Connection,
+    agent_id: &str,
+    workspace_id: &str,
+) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM tasks
+             WHERE workspace_id = ?2 AND is_plan = 0
+               AND status IN ('pending', 'running', 'awaiting')
+               AND (agent_group_id = ?1
+                    OR (agent_group_id IS NULL
+                        AND ?2 IN (SELECT id FROM workspaces WHERE owner_agent_id = ?1))))",
+        params![agent_id, workspace_id],
+        |row| row.get(0),
+    )
+}
+
 pub fn set_status(conn: &Connection, id: &str, status: TaskStatus) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE tasks SET status = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')

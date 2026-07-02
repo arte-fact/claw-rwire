@@ -219,6 +219,33 @@ fn build_with_window(
             turn_item(run_turn(&names, agent_id, &review.run, link, true)),
         ));
     }
+    // Steer messages (R4): your notes to the agent, merged in as operator turns — queued ones
+    // say so in their tag until a pass consumes them.
+    for message in
+        crate::db::agent_messages::recent(conn, agent_id, workspace_id, window).unwrap_or_default()
+    {
+        let tag = if message.delivered_at.is_some() {
+            "message".to_owned()
+        } else {
+            "message · queued".to_owned()
+        };
+        stamped.push((
+            message.created_at.clone(),
+            turn_item(AgentTurn {
+                author: "you".to_owned(),
+                own: false,
+                time: hh_mm(&message.created_at),
+                tag,
+                body: message.body,
+                feedback: None,
+                verdict: None,
+                tool_count: 0,
+                ok: true,
+                task: TaskLink::default(),
+                link_task: false,
+            }),
+        ));
+    }
     // Memory events (R3.5 M2): folds/edits merged in at the moment they happened — one muted
     // line each, so history becoming memory is part of the conversation.
     for event in crate::db::agent_memory_log::recent(conn, agent_id, Some(workspace_id), window)
@@ -381,6 +408,28 @@ mod tests {
                 AgentThreadItem::ReviewGate { .. } | AgentThreadItem::Memory { .. } => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn steer_messages_appear_as_operator_turns_with_a_queued_tag() {
+        let conn = seeded();
+        crate::db::agent_messages::queue(&conn, "m1", "ag-a", "ws", "focus on tests")
+            .expect("queue");
+        crate::db::agent_messages::queue(&conn, "m2", "ag-a", "ws", "seen already").expect("queue");
+        crate::db::agent_messages::mark_delivered(&conn, "m2").expect("deliver");
+        let thread = build(&conn, "ag-a", "ws").expect("thread");
+        let tags: Vec<(&str, &str)> = turns(&thread)
+            .into_iter()
+            .filter(|turn| turn.tag.starts_with("message"))
+            .map(|turn| (turn.tag.as_str(), turn.body.as_str()))
+            .collect();
+        assert_eq!(
+            tags,
+            vec![
+                ("message · queued", "focus on tests"),
+                ("message", "seen already"),
+            ]
+        );
     }
 
     #[test]
