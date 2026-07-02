@@ -317,6 +317,11 @@ pub enum Command {
         workspace: String,
         body: String,
     },
+    /// Save a workspace's `STANDARDS.md` — the validator standards memo (the Overview editor).
+    SaveStandards {
+        workspace: String,
+        content: String,
+    },
     /// Save a workspace's `AGENT.md` brief (the Overview editor).
     SaveBrief {
         workspace: String,
@@ -835,6 +840,9 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             workspace,
             body,
         } => steer::send_message(conn, shared, &agent, &workspace, &body),
+        Command::SaveStandards { workspace, content } => {
+            files::save_standards(conn, shared, &workspace, &content)
+        }
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)
         }

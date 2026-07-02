@@ -195,6 +195,10 @@ pub fn dashboard(app: &App) -> ElementBuilder {
             ),
             card("Delegation", auto_approve_toggle(workspace)),
             card("Brief", brief_editor(&workspace.id, &app.workspace_brief)),
+            card(
+                "Review standards",
+                standards_editor(&workspace.id, &app.workspace_standards),
+            ),
         ])
 }
 
@@ -288,6 +292,61 @@ fn brief_editor(wid: &str, content: &str) -> ElementBuilder {
                 .st([St::DisplayFlex])
                 .append([accent_submit(icons::Icon::Check, "Save brief")]),
         ])
+}
+
+/// The validator standards memo (R5): curated review rules injected into every review run in
+/// this workspace — validators stay memory-free otherwise. Rules, not a work log.
+fn standards_editor(wid: &str, content: &str) -> ElementBuilder {
+    el(El::Form)
+        .on(Ev::Submit, save_standards())
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append([
+            el(El::Div).st([St::TextXs, St::TextMuted]).text(
+                "Rules the reviewer checks every deliverable against — kept short and curated.",
+            ),
+            el(El::Textarea)
+                .id(&format!("standards-{wid}"))
+                .attr("name", "standards")
+                .attr("spellcheck", "false")
+                .attr(
+                    "placeholder",
+                    "e.g. tests must pass with no warnings; code lives under projects/<name>/ …",
+                )
+                .style(
+                    Style::new()
+                        .set("font", "inherit")
+                        .set("resize", "vertical")
+                        .set("min-height", "6rem"),
+                )
+                .st([
+                    St::WFull,
+                    St::PSm,
+                    St::BorderDefault,
+                    St::Rounded0,
+                    St::BgApp,
+                    St::TextHigh,
+                    St::FontMono,
+                    St::TextXs,
+                    St::OutlineNone,
+                ])
+                .focus([St::BorderAccent])
+                .text(content),
+            el(El::Div)
+                .st([St::DisplayFlex])
+                .append([accent_submit(icons::Icon::Check, "Save standards")]),
+        ])
+}
+
+#[handler]
+fn save_standards(app: &mut App, ctx: &EventContext) {
+    let Some(id) = app.active_workspace.clone() else {
+        return;
+    };
+    let content = ctx.field("standards").unwrap_or_default().to_owned();
+    bridge::send(Command::SaveStandards {
+        workspace: id,
+        content,
+    });
 }
 
 #[handler]

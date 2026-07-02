@@ -97,6 +97,31 @@ pub fn read_agent_md(workspace: &Path) -> Option<String> {
     }
 }
 
+/// Read `STANDARDS.md` from the workspace, trimmed — the validator standards memo (R5):
+/// curated review rules, deliberately **not** a work log (validators stay memory-free).
+/// `None` if missing or blank.
+#[must_use]
+pub fn read_standards(workspace: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(workspace.join("STANDARDS.md")).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+/// The standards memo framed as a validator system-prompt layer, or `None` when unset.
+#[must_use]
+pub fn standards_layer(workspace: &Path) -> Option<String> {
+    read_standards(workspace).map(|rules| {
+        format!(
+            "## Review standards\n\nCurated rules for this workspace — check the work \
+             against them:\n\n{rules}"
+        )
+    })
+}
+
 /// Compose the run's layered system prompt, blank-line-separated, skipping empty layers:
 /// the global `base`, then the agent's identity `agent_prompt` ("who am I", per-agent),
 /// then the workspace `agent_md` project brief ("what we build", shared), then the agent's
@@ -160,6 +185,25 @@ mod tests {
         std::fs::create_dir_all(&ws).expect("mkdir");
         std::fs::write(ws.join("AGENT.md"), "   \n\t").expect("write");
         assert_eq!(read_agent_md(&ws), None);
+    }
+
+    #[test]
+    fn standards_memo_reads_and_wraps_as_a_review_layer() {
+        let ws = dir_for(&tmp(), "standards");
+        std::fs::create_dir_all(&ws).expect("mkdir");
+        // Missing / blank → no layer (the validator stays rules-free too).
+        assert_eq!(standards_layer(&ws), None);
+        std::fs::write(ws.join("STANDARDS.md"), "  \n").expect("write");
+        assert_eq!(standards_layer(&ws), None);
+        // Present → trimmed rules under the review-standards heading.
+        std::fs::write(
+            ws.join("STANDARDS.md"),
+            "- tests must pass\n- no warnings\n",
+        )
+        .expect("write");
+        let layer = standards_layer(&ws).expect("layer");
+        assert!(layer.starts_with("## Review standards"));
+        assert!(layer.contains("- tests must pass\n- no warnings"));
     }
 
     #[test]

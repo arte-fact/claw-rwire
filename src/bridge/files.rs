@@ -70,12 +70,40 @@ fn resolve(conn: &rusqlite::Connection, workspace_id: &str) -> Option<(PathBuf, 
 
 /// Load a workspace's `AGENT.md` (raw) into `App.workspace_brief` for the Overview editor.
 pub fn load_brief(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
-    let brief = resolve(conn, workspace)
-        .and_then(|(dir, _)| std::fs::read_to_string(dir.join("AGENT.md")).ok())
-        .unwrap_or_default();
+    let dir = resolve(conn, workspace).map(|(dir, _)| dir);
+    let read = |name: &str| {
+        dir.as_ref()
+            .and_then(|dir| std::fs::read_to_string(dir.join(name)).ok())
+            .unwrap_or_default()
+    };
+    let brief = read("AGENT.md");
+    let standards = read("STANDARDS.md");
     shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_WORKSPACE_BRIEF]),
-        move |app| app.workspace_brief = brief,
+        ChangeSet::from_fields(&[App::FIELD_WORKSPACE_BRIEF, App::FIELD_WORKSPACE_STANDARDS]),
+        move |app| {
+            app.workspace_brief = brief;
+            app.workspace_standards = standards;
+        },
+    );
+}
+
+/// Save a workspace's `STANDARDS.md` — the validator standards memo (R5) — then re-project it.
+pub fn save_standards(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    content: &str,
+) {
+    let Some((dir, _)) = resolve(conn, workspace) else {
+        return;
+    };
+    if let Err(err) = ops::write_text(&dir, "STANDARDS.md", content) {
+        return surface(shared, message(&err));
+    }
+    let content = content.to_owned();
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_WORKSPACE_STANDARDS]),
+        move |app| app.workspace_standards = content,
     );
 }
 

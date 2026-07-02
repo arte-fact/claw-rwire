@@ -814,6 +814,9 @@ pub struct App {
     /// The active workspace's `AGENT.md` brief, loaded when a workspace route opens — backs
     /// the Overview tab's inline brief editor.
     pub workspace_brief: String,
+    /// The open workspace's `STANDARDS.md` — the validator standards memo (R5): curated review
+    /// rules injected into review runs (validators stay memory-free otherwise).
+    pub workspace_standards: String,
     /// The active workspace's task lane (projected when its Tasks tab opens).
     pub tasks: Vec<TaskView>,
     /// The active workspace's pipeline step names — the kanban column headers (Phase F).
