@@ -377,6 +377,40 @@ the thread stays a conversation, with memory as its quiet narrator.
 - [x] `fmt`/`clippy`/`test` green (242 tests, +6); all five pieces browser-verified end to
       end, incl. a live edit journaling into the open timeline ("· 11:04 — memory edited ·")
 
+### Live hardening (2026-07-02) — real-endpoint e2e — ✅ shipped
+The full journey from the original instance's history, replayed against OpenRouter
+(deepseek-v4-flash) on a fresh data dir: build a Hammurabi CLI game → weather + events
+evolution → gold-economy rebalance with a plan revision. 11 tasks, 22 runs, two genuine
+produce⇄review revise loops, 119 tests in the artifact, 9 automatic memory folds, zero manual
+memory interventions. Everything below was **found by the run** and fixed + gate-verified:
+- [x] **Plan request-changes** (the reported bug): `planned()` now refreshes the open Peek (the
+      revised proposal appears live); approving an empty proposal is refused (it silently
+      finished "done" with zero tasks — the "plan didn't land in the workspace" failure); the
+      empty gate says "Planning in progress…" while replanning and "approved — tasks are on the
+      board" after
+- [x] A planner re-proposal repeating an existing title **replaces** the proposal instead of
+      appending (the 5-overlapping-cards gate); disjoint chunked calls still append
+- [x] A validator **transport** failure retries instead of terminally failing a task whose
+      producer succeeded (one timed-out review killed a pipeline and cancelled its dependents);
+      response deadline 120s → 300s
+- [x] Failed / rejected / cancelled tasks are **restartable** from the board and the Peek
+- [x] A task's **assignee outranks the step's default agent** (a review task assigned to Critic
+      was produced by Forge — self-review in prose)
+- [x] Threads scrolling regression (justify-content on the reversed scroller) → `MbAuto` anchor
+- [x] **Memory is now fully automatic** (operator directive): every Save/Clear/Pause control
+      removed — conversation pages keep the fold line + fold events, the Prompts inspector is
+      read-only, the mutation commands are gone. This supersedes the editable memory-card
+      affordances R3/R3.5 shipped; the observability (fold line, journal events, overview,
+      run snapshots) is unchanged.
+- [x] **Context cache warmed from task + planning workers** (it's per-process and only chat
+      warmed it — after a restart, task launches budgeted F→U→W→M against the 8k default while
+      the live model has a 1M window; the observed blank iteration-2 memory snapshot)
+- [x] **Resume at review**: a relaunch finding produced-but-unreviewed work at the current loop
+      step goes straight to the validator with the recorded output (no wasted producer pass);
+      agent-validated loops only
+- [x] **Boot orphan sweep**: tasks stranded `running` by a restart requeue to pending with a
+      bumped epoch (zombie results dropped) — a restart mid-loop costs at most a re-review
+
 ### R4 — Steer: leave a message (v1: queue at turn boundary)
 The moment it becomes agent-*centric*; unchanged from the old Phase 4.
 - [ ] Per-agent message store; composer at the bottom of the worker thread
