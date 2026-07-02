@@ -679,7 +679,12 @@ fn control_buttons(task: &TaskView) -> Vec<ElementBuilder> {
             icon(icons::Icon::Edit, edit_task()),
             icon(icons::Icon::Close, cancel_task()),
         ],
-        // Terminal (done | failed | rejected | cancelled): done is done — archive to declutter.
+        // Failed / rejected / cancelled tasks can be reopened — a transient failure must not
+        // dead-end the card. `done` stays final (archive only).
+        "failed" | "rejected" | "cancelled" => vec![
+            restart_button(&task.id),
+            icon(icons::Icon::Archive, archive_task()),
+        ],
         _ => vec![icon(icons::Icon::Archive, archive_task())],
     }
 }

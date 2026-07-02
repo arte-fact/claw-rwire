@@ -492,9 +492,14 @@ fn control_buttons(detail: &TaskDetail) -> Vec<ElementBuilder> {
             action_button("Restart", restart(), id, false),
             action_button("Cancel", cancel(), id, false),
         ],
-        // Terminal (done | failed | rejected | cancelled): done is done — archive to declutter the
-        // board (and restore it if archived). No restart: a finished task stays finished.
+        // Closed-but-reopenable (failed | rejected | cancelled): a transient failure (a timed-out
+        // review, a flaky endpoint) must not dead-end the task — Restart begins a fresh attempt.
+        // `done` stays final: archive to declutter the board (and restore it if archived).
         _ if detail.archived => vec![action_button("Unarchive", unarchive(), id, false)],
+        "failed" | "rejected" | "cancelled" => vec![
+            action_button("Restart", restart(), id, true),
+            action_button("Archive", archive(), id, false),
+        ],
         _ => vec![action_button("Archive", archive(), id, true)],
     }
 }
