@@ -72,6 +72,35 @@ pub fn set_paused(
     Ok(())
 }
 
+/// One scope row for the memory overview (R3.5 M5): whose memory, where, how big, how fresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeRow {
+    pub agent_id: String,
+    /// `""` = the agent's global (concierge) row.
+    pub workspace_id: String,
+    pub summary: String,
+    pub updated_at: String,
+    pub paused: bool,
+}
+
+/// Every memory row in the system, agent-then-workspace ordered — the overview's source.
+pub fn list_all(conn: &Connection) -> rusqlite::Result<Vec<ScopeRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT agent_group_id, workspace_id, summary, updated_at, paused
+           FROM agent_memory ORDER BY agent_group_id ASC, workspace_id ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ScopeRow {
+            agent_id: row.get(0)?,
+            workspace_id: row.get(1)?,
+            summary: row.get(2)?,
+            updated_at: row.get(3)?,
+            paused: row.get::<_, i64>(4)? != 0,
+        })
+    })?;
+    rows.collect()
+}
+
 /// Replace one scope's rolling memory (summary + how far it has consumed the transcript).
 pub fn set(
     conn: &Connection,

@@ -570,6 +570,7 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
         },
     );
     project_chat_memory(conn, shared);
+    project_memory_overview(conn, shared);
 }
 
 /// First-boot bootstrap: when no endpoint exists yet, seed a `default` endpoint +
@@ -827,6 +828,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             // A background fold can land while its agent's page is open — reflect it live.
             agent_thread::refresh_if_open(conn, shared);
             project_chat_memory(conn, shared);
+            project_memory_overview(conn, shared);
         }
         Command::SetMemory {
             agent_id,
@@ -853,6 +855,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             );
             agent_thread::refresh_if_open(conn, shared);
             project_chat_memory(conn, shared);
+            project_memory_overview(conn, shared);
         }
         Command::ClearMemory {
             agent_id,
@@ -874,6 +877,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             );
             agent_thread::refresh_if_open(conn, shared);
             project_chat_memory(conn, shared);
+            project_memory_overview(conn, shared);
         }
         Command::SetMemoryPaused {
             agent_id,
@@ -901,6 +905,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             journal_memory(conn, &agent_id, scope, kind, None, note, &summary);
             agent_thread::refresh_if_open(conn, shared);
             project_chat_memory(conn, shared);
+            project_memory_overview(conn, shared);
         }
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)
@@ -1211,6 +1216,59 @@ fn project_chat_memory(conn: &rusqlite::Connection, shared: &SharedServerState) 
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_CHAT_MEMORY]),
         move |app| app.chat_memory = Some(memory),
+    );
+}
+
+/// Project the System page's memory overview (R3.5 M5): every (agent, workspace) scope row
+/// with its size, freshness, and pause flag. Small (one row per scope); refreshed with the
+/// chat-memory projection so a fold landing anywhere keeps the overview honest.
+fn project_memory_overview(conn: &rusqlite::Connection, shared: &SharedServerState) {
+    let agents_by_id: Vec<(String, String)> = agents::list(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|agent| (agent.id, agent.name))
+        .collect();
+    let workspaces_by_id: Vec<(String, String)> = workspaces::list(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|ws| (ws.id, ws.name))
+        .collect();
+    let name_of = |pairs: &[(String, String)], id: &str| {
+        pairs
+            .iter()
+            .find(|(key, _)| key == id)
+            .map(|(_, name)| name.clone())
+            .unwrap_or_else(|| id.to_owned())
+    };
+    let rows: Vec<crate::state::MemoryOverviewRow> = db::agent_memory::list_all(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            let (scope, route) = if row.workspace_id.is_empty() {
+                ("global".to_owned(), "/".to_owned())
+            } else {
+                (
+                    name_of(&workspaces_by_id, &row.workspace_id),
+                    format!("/w/{}/agent/{}", row.workspace_id, row.agent_id),
+                )
+            };
+            crate::state::MemoryOverviewRow {
+                agent_name: name_of(&agents_by_id, &row.agent_id),
+                scope,
+                route,
+                chars: row.summary.chars().count(),
+                updated: row
+                    .updated_at
+                    .get(..16)
+                    .unwrap_or_default()
+                    .replace('T', " "),
+                paused: row.paused,
+            }
+        })
+        .collect();
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_MEMORY_OVERVIEW]),
+        move |app| app.memory_overview = rows,
     );
 }
 

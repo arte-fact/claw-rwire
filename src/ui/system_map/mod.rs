@@ -50,7 +50,48 @@ fn board() -> ElementBuilder {
             column("Channels", channels()),
             column("Agents", agents::column()),
             column("Endpoints", endpoints::column()),
+            column("Memory", memory_overview()),
         ])
+}
+
+// ── Memory overview (R3.5 M5): every (agent, workspace) scope at a glance ───────
+
+#[renderer]
+fn memory_overview(app: &App) -> ElementBuilder {
+    if app.memory_overview.is_empty() {
+        return card([el(El::Div)
+            .st([St::TextXs, St::TextMuted])
+            .text("No memory yet — scopes appear as agents fold their first work.")]);
+    }
+    let rows: Vec<ElementBuilder> = app.memory_overview.iter().map(memory_row).collect();
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append(rows)
+}
+
+/// One scope card: "Forge · Studio" over size/freshness/pause, linking to the page that edits it.
+fn memory_row(row: &crate::state::MemoryOverviewRow) -> ElementBuilder {
+    let mut meta = format!("{} chars · {}", row.chars, row.updated);
+    if row.paused {
+        meta.push_str(" · ⏸ paused");
+    }
+    card([
+        el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::JustifyBetween])
+            .append([
+                row_head(&row.agent_name, badge(&row.scope)),
+                rwire::router::Link::route(&row.route)
+                    .st([
+                        St::TextXs,
+                        St::TextMuted,
+                        St::NoUnderline,
+                        St::CursorPointer,
+                    ])
+                    .hover([St::TextHigh])
+                    .text("open ↗"),
+            ]),
+        el(El::Div).st([St::TextXs, St::TextMuted]).text(&meta),
+    ])
 }
 
 fn column(label: &str, body: ElementBuilder) -> ElementBuilder {

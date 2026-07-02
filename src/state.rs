@@ -551,6 +551,21 @@ pub enum AgentThreadItem {
     Memory { time: String, note: String },
 }
 
+/// One row of the System page's memory overview (R3.5 M5): an (agent, workspace) scope with
+/// its size, freshness, and pause flag, plus the route to the page where it's edited.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemoryOverviewRow {
+    pub agent_name: String,
+    /// The scope's display label: the workspace name, or "global" for the concierge row.
+    pub scope: String,
+    /// Where to inspect/edit: the agent's thread page, or `/` for the global row.
+    pub route: String,
+    pub chars: usize,
+    /// `YYYY-MM-DD HH:MM` of the last mutation.
+    pub updated: String,
+    pub paused: bool,
+}
+
 /// The concierge's global memory, projected for the chat page's card (R3.5 M3): who owns it
 /// (the web agent — memory mutations target its global row), the summary, the pause state,
 /// and the last fold's human line for the card's meta.
@@ -832,6 +847,8 @@ pub struct App {
     /// The concierge's **global** memory for the chat page's fold line + card (R3.5 M3) —
     /// parity with the agent page: the page shows what its agent remembers.
     pub chat_memory: Option<ChatMemory>,
+    /// The System page's memory overview (R3.5 M5): every (agent, workspace) scope row.
+    pub memory_overview: Vec<MemoryOverviewRow>,
     /// The agent-list nav (Phase 2): the concierge pinned on top, then agents grouped by
     /// workspace, each with a live status + approval badge. Projected by `bridge::agent_nav`.
     pub agent_nav: AgentNav,
