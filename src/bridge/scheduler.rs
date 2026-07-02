@@ -305,12 +305,14 @@ fn env_lookup(key: &str) -> Option<String> {
     std::env::var(key).ok()
 }
 
-/// The agent that runs a step: the step's own agent, else the task's assignee (back-compat for
-/// the default single stage), else the workspace owner.
+/// The agent that runs a step: the task's **assignee** first (assigning a card to a member must
+/// mean that member does the work — the live e2e had a "Review X" task assigned to Critic but
+/// *produced* by Forge because the step's pinned agent won), else the step's default agent,
+/// else the workspace owner.
 fn step_agent(conn: &rusqlite::Connection, task: &Task, step: &Step) -> Option<String> {
-    step.agent
+    task.agent
         .clone()
-        .or_else(|| task.agent.clone())
+        .or_else(|| step.agent.clone())
         .or_else(|| owner_of(conn, &task.workspace_id))
 }
 
