@@ -88,6 +88,124 @@ ran + what it's doing right now" — the same vocabulary, different mix. Older h
 agent's `agent_memory` summary, which is what the agent actually carries forward — the thread is the
 human-readable projection of that continuity.
 
+## Context model — roles, scope, budget (the keystone)
+
+> Agreed 2026-07-02, after the first thread-page build missed the mark. This section is the
+> foundation the redo builds on: **the thread page is an agent's context made visible**, so the
+> context model has to come first.
+
+**Principle: an agent's context mirrors its responsibility scope — memory horizon = decision
+horizon.** Each role is defined by four things: its **conversation unit** (what one live thread
+covers, full verbatim fidelity), its **rolling horizon** (what folds into working memory and
+carries forward), its **scope key** (the partition the memory lives in), and its **reset
+boundary** (where continuity intentionally breaks).
+
+| Role | Conversation unit | Rolling horizon | Scope key | Resets |
+|---|---|---|---|---|
+| **Concierge** | its one persistent conversation | its whole life (older turns fold into summary) | global (one row) | never |
+| **Producer** (Forge) | one task, across loop iterations | its workspace's tasks; **last task kept warm** | (agent, **workspace**) | never in-workspace; hard wall between workspaces |
+| **Owner-as-planner** | one planning turn | same row as its producer memory | (agent, workspace) | never |
+| **Validator** (Critic) | the task's **whole produce⇄review loop**, across iterations | none *beyond* the loop — fresh eyes per deliverable | task (attempt) | at task end, **not inside the loop** |
+
+- **Concierge — global, conversational, forever.** Recent tail verbatim, everything older
+  condensed into the rolling summary. Delegation outcomes land in its thread as notifications, so
+  macro vision across workspaces accrues *by construction* — it gets outcomes, never the workers'
+  forensics. Optionally a live **status digest** layer (lanes running/awaiting) injected fresh each
+  turn: current state is looked up, never remembered. This model *requires* the single persistent
+  thread — today's per-agent `summarized_through` marker applied across multiple "new chats" is
+  incoherent (a real latent bug); the collapse fixes the memory mechanics.
+- **Producer — workspace-scoped, sequential, three tiers.** At task launch: (1) the current task's
+  own thread verbatim, across iterations (`replay.rs`, shipped); (2) the **last completed task's
+  recap** kept warm — spec → outcome → verdict → files touched — because sequential tasks chain;
+  (3) everything older folded into a rolling **workspace-scoped** summary (layout, conventions,
+  decisions), folded **at task completion** (the task is the worker's natural turn boundary, as the
+  message is the concierge's). Scope key is (agent, workspace): an agent in two workspaces holds
+  two independent memories; nothing leaks across.
+- **Owner-as-planner — same memory, different hat.** Planning turns read/write the same
+  (agent, workspace) row: plans build on what shipped and what failed. Only the role preamble
+  differs.
+- **Validator — task-scoped, deliberately amnesiac beyond the task.** Within the loop, full
+  continuity: its own reviews replayed across iterations, so re-reviews are incremental (check the
+  delta, re-run the tests — don't re-inspect from scratch). This is what makes the produce⇄correct
+  loop *converge cheaply*, and it's already shipped (`replay.rs` validator thread + the re-review
+  focus). Across tasks: nothing — accumulated review memory breeds anchoring and rubber-stamping,
+  and freshness makes cross-workspace reviewers (Critic) leak-proof by construction. **The loop is
+  shared but the threads are not**: producer and validator each keep their *own* task-scoped
+  thread, touching only at the output ↔ feedback boundary — the validator judges the work, not the
+  effort; the producer receives feedback, not the reviewer's inner deliberation. A manual restart
+  is a new attempt → the validator's context resets with it (`list_for_task_attempt` already
+  enforces this). Delta from today: **remove the memory-layer injection into validator runs**.
+  Later, optionally: a tiny curated per-workspace *standards memo* — rules, not a work log.
+
+### Budget-aware composition
+
+Memory is the **elastic** layer — identity can't compress, working headroom must not compress, so
+memory absorbs all the sizing pressure. That's why it fills *last*.
+
+```
+C  = context window of the agent's (endpoint, model)   — discovered via /models, cached
+R  = output reserve (the reply/stream)
+B  = C − R                                              — the prompt budget
+
+B  =  F  +  U  +  W  +  M          fill order: F → U → W → M   (M = remainder, floored at 0)
+
+F  = fixed identity        role preamble + persona + capped brief      — never trimmed
+U  = current unit          this turn / this task-thread replay         — the work itself
+W  = working headroom      room for the tool rounds to come            — reserved BEFORE memory
+M  = memory fill           recap, tail, rolling summary                — the only elastic layer
+```
+
+```
+ ┌──────────────────────────────────┐ ─── B  (per endpoint: 8k model ≠ 128k model —
+ │ F  role + persona + brief (cap)  │         same rule, different absolutes)
+ ├──────────────────────────────────┤
+ │ U  the current unit, verbatim    │  ← grows during the run…
+ ├──────────────────────────────────┤
+ │ W  ░░ working headroom ░░        │  ← …by eating W (never M mid-run;
+ │    (tool results, iterations,    │     memory is fixed at launch)
+ │     the streamed reply)          │
+ ├──────────────────────────────────┤
+ │ M  1. warm slot (recap / tail)   │  ← remainder only, filled by value:
+ │    2. rolling summary (capped)   │     recency first, then compression
+ └──────────────────────────────────┘        (allocation, not prompt order)
+```
+
+Per-role shares — roles differ in how much room the *work* needs:
+
+| | Concierge | Producer | Validator |
+|---|---|---|---|
+| **W** headroom | ~30% of B | **~50%** (long build loops) | **~60%** (reads tree + runs builds) |
+| **M** ceiling | ~40% | ~20% | ~0 — its **U *is* its memory** (the loop, verbatim) |
+| **M** fill order | verbatim tail → summary | last-task recap → workspace summary | — |
+| **Fold trigger** | after a turn, `prompt_tokens > 0.6·B` (exists) | **at task completion**; mid-task if U alone passes ~50%·B | none — the unit dies with the task |
+
+**Degradation ladder** (small B): (1) shrink tail/recap to one-liners; (2) re-summarize the summary
+to a hard cap (M ≤ ~10%·B); (3) **mid-unit fold** — a loop outgrowing U+W compacts its oldest
+iterations into a unit-local recap (oldest reviews → one-line verdict+feedback), latest iteration +
+current output stay verbatim; (4) never trimmed: role, persona, current spec, latest turn — if
+those alone exceed B, surface a model-too-small error rather than degrade around it. An agent on
+8k and the same agent on 128k run the *same rule* — the small one remembers less and folds sooner;
+behaviour degrades continuously, never off a cliff.
+
+**Mechanics** (mostly existing hooks): `CONTEXT_CACHE` resolves B per (endpoint, model) via
+`/models`; token accounting estimates at compose time (≈ chars/4) and corrects with the endpoint's
+reported `prompt_tokens` (the chat path's 0.6 trigger already does this — generalize per role);
+today's `MEMORY_WINDOW`/`SUMMARIZE_FRACTION` constants become the per-role table above. New
+invariant: compose in F→U→W→M order everywhere (today the memory layer is injected budget-blind).
+
+**Deltas from today**: (1) `agent_memory` PK → (agent_group_id, workspace_id), NULL workspace =
+the concierge's global row; (2) a producer-side fold writer at task completion (today only the
+chat path summarizes — worker memory is permanently empty); (3) injection matrix: chat/task/
+planning runs get their *scoped* memory, validators none; (4) producers get the last-task recap
+block; (5) one persistent concierge thread (Phase 5's essence, pulled early).
+
+**The page rule that falls out: an agent's page = its context made visible.** The concierge page
+is its one conversation (the chat, composer included). A producer's page is its workspace lane as
+a conversation — a "folded into memory" line at the summary boundary, the last-task recap, the
+live task streaming below: what you see ≈ what Forge remembers. A validator's page is an activity
+index at most — there *is* no continuous cross-task thread to show, and pretending otherwise is
+why the first build read as a meaningless pile of runs for Critic.
+
 ## Interaction model — follow, approve, steer
 
 Three verbs, in increasing difficulty:
@@ -149,6 +267,15 @@ re-keying `awaiting` per agent.
    the gate surfaces in the thread of the task's effective assignee, where the work was produced.
 
 ## Roadmap (checklist)
+
+> **Status note (2026-07-02).** Phases 1–3 shipped but the thread page missed the mark — it
+> rendered a read-only audit log (task markers + full forensic run entries), not a conversation,
+> and its projection was unbounded (all tasks × all runs × full tool transcripts, re-rendered
+> wholesale per streamed token — the freeze). The **context model above is now the keystone**: the
+> redo rebuilds the projection + page per role (page = context made visible), with conversational
+> grain, a budgeted window, and the concierge thread = the chat. The nav (Phase 2) and the inline
+> review-gate wiring (Phase 3) survive as-is. A revised phase list will replace the one below once
+> the redo plan is settled.
 
 Each phase is independently shippable and passes the full gate before the next. Tick items as they
 land; keep this list the source of truth for progress.
