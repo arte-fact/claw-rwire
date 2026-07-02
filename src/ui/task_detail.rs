@@ -248,7 +248,7 @@ fn thread_entries(app: &App, detail: &TaskDetail) -> Vec<ElementBuilder> {
             "",
             None,
             false,
-            vec![proposed_view(&detail.proposed)],
+            vec![proposed_view(&detail.proposed, detail.awaiting)],
         ));
     }
     for (index, run) in detail.runs.iter().enumerate() {
@@ -435,13 +435,18 @@ fn streaming_text(text: &str, cursor: bool) -> ElementBuilder {
 /// work the user approves when they approve the plan gate. An empty list means the owner is
 /// (re-)drafting — after "Request changes" the old proposal is discarded and a planning turn
 /// runs for a while — so say that instead of a bare "(no tasks proposed)" beside live buttons.
-fn proposed_view(proposed: &[ProposedTask]) -> ElementBuilder {
+fn proposed_view(proposed: &[ProposedTask], awaiting: bool) -> ElementBuilder {
     if proposed.is_empty() {
+        // Mid-replan the list is genuinely empty (say so); on a finished plan the proposal was
+        // consumed by materialisation — the created tasks are on the board.
+        let note = if awaiting {
+            "Planning in progress — the owner is drafting the proposal; it will appear here."
+        } else {
+            "The proposal was approved — its tasks are on the board."
+        };
         return el(El::Div)
             .st([St::TextXs, St::TextMuted, St::Italic, St::PSm])
-            .text(
-                "Planning in progress — the owner is drafting the proposal; it will appear here.",
-            );
+            .text(note);
     }
     let cards: Vec<ElementBuilder> = proposed
         .iter()
