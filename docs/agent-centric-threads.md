@@ -266,75 +266,86 @@ re-keying `awaiting` per agent.
 5. ~~**Approval routing.**~~ **Resolved (Phase 3):** an approval belongs to the *worker's* thread —
    the gate surfaces in the thread of the task's effective assignee, where the work was produced.
 
-## Roadmap (checklist)
+## Roadmap v2 (checklist) — rebuilt on the context model
 
-> **Status note (2026-07-02).** Phases 1–3 shipped but the thread page missed the mark — it
-> rendered a read-only audit log (task markers + full forensic run entries), not a conversation,
-> and its projection was unbounded (all tasks × all runs × full tool transcripts, re-rendered
-> wholesale per streamed token — the freeze). The **context model above is now the keystone**: the
-> redo rebuilds the projection + page per role (page = context made visible), with conversational
-> grain, a budgeted window, and the concierge thread = the chat. The nav (Phase 2) and the inline
-> review-gate wiring (Phase 3) survive as-is. A revised phase list will replace the one below once
-> the redo plan is settled.
+> **Why a v2 (2026-07-02).** The v1 phases 1–3 shipped, but the thread page missed the mark — a
+> read-only audit log (task markers + full forensic run entries), not a conversation, with an
+> unbounded projection (all tasks × all runs × full tool transcripts, re-rendered wholesale per
+> streamed token — the freeze). **Shipped and surviving:** the agent-list nav (concierge pinned,
+> status/pulse, per-agent awaiting badges), the inline review-gate wiring (task-id-driven, works
+> from any surface), the in-order `live_turns` stream, per-role loop continuity (`replay.rs`),
+> `tasks::list_for_agent`. **Superseded:** the v1 thread page + its projection — redone in R2.
+
+**Ordering rationale.** User-visible stabilization first — the pages are what's broken — and the
+pages *specify* what memory must produce (a recap block, a fold line) before we build it, rather
+than the backend landing invisibly and the pages faking it. R1 before R2 because the concierge
+thread is the smallest right-feeling win (the chat surface already works, composer included), it
+is the heart of the original ask ("no new chat — a persistent conversation"), and the single
+thread is a *precondition* for coherent concierge memory (one thread, one `summarized_through`
+marker). Steering stays last: it lands into a page that already has the right grammar.
 
 Each phase is independently shippable and passes the full gate before the next. Tick items as they
 land; keep this list the source of truth for progress.
 
-### Phase 1 — Agent thread page, read-only ✅
-Prove the unified view as a pure projection over existing data.
-- [x] `/agent/:id` route + `agents_nav` deep-link target (flat stub list; Phase 2 fleshes it out)
-- [x] `AgentThread` projection: merge that agent's `tasks`/`task_runs` + `live_turns`
-      (`bridge/agent_thread.rs`, `tasks::list_for_agent`; `agent_messages` deferred to Phase 4)
-- [x] Render with `thread::scroll` + `thread::entry`; reuse `run_entry` + a shared live body
-      (`live_stream_body`/`running_dot`) in an isolated `agent_live_entry` renderer
-- [x] Task lifecycle entries (task markers → board deep-link, verdict chips) from `tasks`/`task_runs`
-- [x] Re-projects live on task lifecycle events (piggy-backed on `refresh_detail_if_open`)
-- [x] Tests: projection ordering + entry mapping + assignee resolution; `fmt`/`clippy`/`test` green
+### R1 — The concierge thread is the chat
+Pull the old Phase 5 to the front: one persistent conversation, no "new chat".
+- [ ] The concierge nav row opens the persistent conversation — not `/agent/:id`'s task log
+- [ ] Collapse to **one** concierge thread: `/` renders it; retire "New chat" + the thread list
+      (existing extra chats stay reachable under Archived)
+- [ ] `/chat/:id` resolves to the one thread (redirect to `/`)
+- [ ] Memory coherence falls out: one thread ↔ one `summarized_through` marker (fixes the latent
+      multi-chat marker bug)
+- [ ] `fmt`/`clippy`/`test` green
 
-### Phase 2 — Nav becomes an agent list ✅
-- [x] `workspaces_nav` → `agents_nav`: agents grouped by workspace, **Concierge pinned on top**
-      (the concierge = the web agent, excluded from the groups so it shows once)
-- [x] Per-agent status (idle / working / awaiting) — an accent **pulsing** dot while working
-      (`St::AnimatePulse`), muted otherwise (awaiting is signalled by its badge)
-- [x] Re-keyed the `awaiting` projection from per-workspace to **per-agent**: retired
-      `WorkspaceAwaiting`/`app.awaiting`; the agent-list nav (`bridge/agent_nav.rs`,
-      `tasks::count_inflight_by_agent`) now carries the per-agent badge + the per-workspace group total
-- [x] Boards stay reachable — each workspace group header links to its board; "New workspace" kept
-- [x] `fmt`/`clippy`/`test` green (219 tests, +3)
+### R2 — Worker thread page, redone conversational
+Fix the freeze and the feel in one stroke. Pure projection over existing data — no new storage.
+- [ ] **Conversational grain**: you (spec) → agent (reply prose, step tag, verdict chip) → you
+      (feedback / approval) — tool work as one muted line ("n tool calls · view task" → the Peek);
+      forensics stay in the Peek
+- [ ] Strictly chronological, **bounded window** (last ~N turns, capped in SQL); tiny projection
+      state (no tool transcripts carried)
+- [ ] **Rendering structure**: two sibling regions under static scaffolding — the keyed timeline
+      (reads `agent_thread` only) and the live tail (reads `live_turns` only). No renderer nested
+      inside a keyed subtree; no per-token full re-render; projection built outside the
+      shared-state lock
+- [ ] **Per-role shape** (page = context made visible): producer = its workspace lane as a
+      conversation; validator = an activity index (no fake continuous thread)
+- [ ] Review gate stays inline (already wired); tool-toggle keys de-collided from the Peek's
+- [ ] `fmt`/`clippy`/`test` green + a live smoke pass: open an agent mid-task, watch it stream,
+      approve a parked task, switch agents
 
-### Phase 3 — Inline approval in the agent thread ✅
-- [x] Surface the existing `review_gate` in the agent thread when one of its tasks is `awaiting`
-      (projected as an `AgentThreadItem::ReviewGate` right after that task's runs)
-- [x] Reuse the existing `approve` / `reject` / `request_changes` handlers verbatim — they're
-      task-id driven, so they fire the same `ReviewVerdict` from the thread context
-- [x] Approval home = the **worker's** thread: the gate shows in the thread of the task's effective
-      assignee (the agent that produced the work) — resolving open question 5
-- [x] `fmt`/`clippy`/`test` green (220 tests, +1)
+### R3 — Memory mechanics (the substance)
+The budget model from the keystone section, landing into pages that already have the right shape.
+- [ ] `agent_memory` re-key: PK (agent_group_id, workspace_id); NULL workspace = the concierge's
+      global row (schema migration)
+- [ ] Producer fold **at task completion** — today only the chat path summarizes; worker memory
+      is permanently empty
+- [ ] Injection matrix: chat / task / planning runs get their *scoped* memory; **validators none**
+- [ ] Last-task recap block prepended at producer launch (spec → outcome → verdict → files)
+- [ ] Budget composition **F→U→W→M** with per-role parameters (headroom, M ceiling, fold
+      triggers) + the degradation ladder (incl. the mid-unit fold for long loops on small models)
+- [ ] Producer page gains the **fold line** ("older tasks condensed into memory") + the memory
+      affordance (inspect / edit — extend the existing Prompts memory panel onto the agent page)
+- [ ] `fmt`/`clippy`/`test` green
 
-### Phase 4 — Leave a message (v1: queue at turn boundary)
-The moment it becomes agent-*centric*.
-- [ ] Per-agent message store (`agent_messages` table **or** agent-bound `messaging_groups`)
-- [ ] Composer at the bottom of the agent thread + submit handler (append user turn)
+### R4 — Steer: leave a message (v1: queue at turn boundary)
+The moment it becomes agent-*centric*; unchanged from the old Phase 4.
+- [ ] Per-agent message store; composer at the bottom of the worker thread
 - [ ] Delivery: an idle agent starts a turn now; a mid-task agent picks it up at the **next pass
       boundary**, injected as the next user turn via `replay.rs`
 - [ ] No corruption of in-flight work; bounded latency; test the queue→pickup path
 - [ ] `fmt`/`clippy`/`test` green
 
-### Phase 5 — Retire "new chat"
-- [ ] Collapse the concierge into the agent model: one persistent concierge thread
-- [ ] Remove "new chat" + `/chat/:id` (redirect `/` → concierge thread)
-- [ ] Migrate/retire the chat-thread-list nav path
-- [ ] `fmt`/`clippy`/`test` green
-
-### Phase 6 — Later
+### R5 — Later
 - [ ] Mid-run steering (v2: drain a channel between tool rounds, respecting epoch/cancel)
-- [ ] Memory affordance on the agent page (inspect/edit the `agent_memory` summary; extend
-      `summarized_through_id` to walk the agent thread)
-- [ ] Agent-thread history paging / windowing (render the live tail, lazy-load older history)
+- [ ] Validator standards memo (curated per-workspace rules — not a work log)
+- [ ] Concierge live status digest layer (present state is looked up, never remembered)
+- [ ] History beyond the window (lazy-load older timeline past the fold)
 
 ## Verification (when built)
 
 Per phase, the usual gate (`cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
-cargo test`) plus a manual pass: open an agent mid-task, confirm the live stream, approve a parked
-task from its thread, and (phase 4) drop a message and confirm the agent picks it up on its next
-turn without corrupting in-flight work.
+cargo test`) plus a manual pass: open an agent mid-task, confirm the live stream flows and the
+page never freezes when switching agents (R2); confirm a small-context endpoint folds sooner but
+behaves the same (R3); and (R4) drop a message and confirm the agent picks it up on its next turn
+without corrupting in-flight work.
