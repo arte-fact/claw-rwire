@@ -566,6 +566,7 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
             app.pipeline_ready = true;
         },
     );
+    project_chat_memory(conn, shared);
 }
 
 /// First-boot bootstrap: when no endpoint exists yet, seed a `default` endpoint +
@@ -821,6 +822,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             );
             // A background fold can land while its agent's page is open — reflect it live.
             agent_thread::refresh_if_open(conn, shared);
+            project_chat_memory(conn, shared);
         }
         Command::SetMemory {
             agent_id,
@@ -846,6 +848,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
                 summary,
             );
             agent_thread::refresh_if_open(conn, shared);
+            project_chat_memory(conn, shared);
         }
         Command::ClearMemory {
             agent_id,
@@ -866,6 +869,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
                 "",
             );
             agent_thread::refresh_if_open(conn, shared);
+            project_chat_memory(conn, shared);
         }
         Command::SetMemoryPaused {
             agent_id,
@@ -892,6 +896,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
                 .unwrap_or_default();
             journal_memory(conn, &agent_id, scope, kind, None, note, &summary);
             agent_thread::refresh_if_open(conn, shared);
+            project_chat_memory(conn, shared);
         }
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)
@@ -1167,6 +1172,42 @@ fn role_prompt(conn: &rusqlite::Connection, run: RunKind) -> String {
         RunKind::Validator => (ROLE_VALIDATOR_KEY, agent::VALIDATOR_PROMPT),
     };
     db::settings::get_or(conn, key, default)
+}
+
+/// Project the concierge's global memory for the chat page's fold line + card (R3.5 M3) —
+/// parity with the agent page: the chat is the concierge's thread, so it shows what the
+/// concierge remembers. Cheap (two small reads); called after turns and memory mutations.
+fn project_chat_memory(conn: &rusqlite::Connection, shared: &SharedServerState) {
+    let Ok(Some(agent_id)) = agents::web_agent(conn) else {
+        return;
+    };
+    let agent_name = agents::get(conn, &agent_id)
+        .ok()
+        .flatten()
+        .map(|agent| agent.name)
+        .unwrap_or_else(|| "the concierge".to_owned());
+    let row = db::agent_memory::get(conn, &agent_id, None).unwrap_or_default();
+    let last_fold = db::agent_memory_log::recent(conn, &agent_id, None, 50)
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .find(|event| event.kind == db::agent_memory_log::MemoryEventKind::Fold)
+        .map(|event| {
+            let time = event.created_at.get(11..16).unwrap_or_default();
+            format!("{time} — {}", event.note)
+        })
+        .unwrap_or_default();
+    let memory = crate::state::ChatMemory {
+        agent_id,
+        agent_name,
+        summary: row.summary,
+        paused: row.paused,
+        last_fold,
+    };
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_CHAT_MEMORY]),
+        move |app| app.chat_memory = Some(memory),
+    );
 }
 
 /// Record a memory mutation in the journal (R3.5 M1) — best-effort, never blocks the mutation.

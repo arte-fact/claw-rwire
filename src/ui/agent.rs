@@ -11,15 +11,15 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
-use rwire_components::{Button, ButtonSize, Text, Textarea};
+use rwire::{El, ElementBuilder, St, el, handler, renderer};
+use rwire_components::Text;
 
 use crate::bridge::{self, Command};
 use crate::state::{AgentThread, AgentThreadItem, AgentTurn, App, LiveItem};
+use crate::ui::memory;
 use crate::ui::run_chain::verdict_chip_of;
 use crate::ui::task_detail::{live_stream_body, review_gate, running_dot};
 use crate::ui::thread;
-use crate::ui::widgets::accent_submit;
 
 /// The page shell: a pinned header over the autoscrolling conversation — a static column whose
 /// two renderer children (timeline, live tail) are siblings, never nested.
@@ -113,7 +113,7 @@ fn timeline(app: &App) -> ElementBuilder {
                 rows.push(match item {
                     AgentThreadItem::Turn(turn) => turn_row(turn),
                     AgentThreadItem::ReviewGate { task_id } => review_prompt(task_id),
-                    AgentThreadItem::Memory { time, note } => memory_event_line(time, note),
+                    AgentThreadItem::Memory { time, note } => memory::event_line(time, note),
                 });
             }
             if thread.items.is_empty() && thread.live.is_empty() {
@@ -181,102 +181,24 @@ fn fold_line(thread: &AgentThread) -> Option<ElementBuilder> {
         (false, 0) => return None,
         (false, n) => format!("· {n} earlier turns not shown ·"),
     };
-    Some(
-        el(El::Div)
-            .st([St::TextXs, St::TextLow, St::TextCenter])
-            .text(&text),
-    )
+    Some(memory::muted_line(&text))
 }
 
-/// A memory event in the timeline (R3.5 M2) — one muted line at the moment a fold/edit/clear
-/// happened. The thread stays a conversation; memory is its quiet narrator.
-fn memory_event_line(time: &str, note: &str) -> ElementBuilder {
-    el(El::Div)
-        .st([St::TextXs, St::TextLow, St::TextCenter])
-        .text(&format!("· {time} — {note} ·"))
-}
-
-/// The memory affordance (R3): the (agent, workspace) working memory, inspectable and editable
-/// in place — the Prompts panel's memory card, extended onto the page whose thread it frames.
-/// Save overwrites the summary, Clear resets it, Pause/Resume freezes the auto-fold.
+/// The page's memory card (shared widget), targeting the thread's (agent, workspace) row.
 fn memory_card(thread: &AgentThread) -> ElementBuilder {
     let mut meta = format!("what {} remembers here", thread.agent_name);
     if thread.memory_paused {
         meta.push_str(" · ⏸ auto-fold paused");
     }
-    el(El::Form)
-        .on(Ev::Submit, save_memory())
-        .st([
-            St::DisplayFlex,
-            St::FlexCol,
-            St::GapSm,
-            St::PSm,
-            St::BorderDefault,
-            St::Rounded0,
-            St::BgSurface,
-        ])
-        .append([
-            el(El::Div)
-                .st([
-                    St::DisplayFlex,
-                    St::ItemsCenter,
-                    St::GapSm,
-                    St::TextXs,
-                    St::TextMuted,
-                ])
-                .append([
-                    el(El::Span)
-                        .st([St::TextUppercase, St::TrackingWide])
-                        .text("Memory"),
-                    el(El::Span).text(&format!("· {meta}")),
-                ]),
-            Textarea::new()
-                .id(format!(
-                    "agent-memory-{}-{}",
-                    thread.agent_id, thread.workspace_id
-                ))
-                .name("summary")
-                .rows(4)
-                .value(thread.memory.clone())
-                .build(),
-            el(El::Div)
-                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-                .append([
-                    accent_submit(icons::Icon::Check, "Save"),
-                    memory_button("Clear", clear_memory(), None),
-                    memory_button(
-                        if thread.memory_paused {
-                            "Resume"
-                        } else {
-                            "Pause"
-                        },
-                        toggle_memory_pause(),
-                        Some((
-                            "paused",
-                            if thread.memory_paused {
-                                "false"
-                            } else {
-                                "true"
-                            },
-                        )),
-                    ),
-                ]),
-        ])
-}
-
-/// A small secondary memory action, optionally carrying one `data-(key)=value` attribute.
-fn memory_button(
-    label: &str,
-    on_click: rwire::HandlerSpec,
-    data: Option<(&str, &str)>,
-) -> ElementBuilder {
-    let button = Button::secondary(label.to_owned())
-        .size(ButtonSize::Sm)
-        .on_click(on_click);
-    match data {
-        Some((key, value)) => button.data(key, value),
-        None => button,
-    }
+    memory::memory_card(memory::MemoryCard {
+        id_suffix: format!("{}-{}", thread.agent_id, thread.workspace_id),
+        meta,
+        summary: &thread.memory,
+        paused: thread.memory_paused,
+        on_save: save_memory(),
+        on_clear: clear_memory(),
+        on_pause: toggle_memory_pause(),
+    })
 }
 
 /// The open thread's (agent, workspace) pair — every memory mutation targets that scope row.

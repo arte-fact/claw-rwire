@@ -14,6 +14,7 @@ mod chat;
 mod dashboard;
 mod files;
 mod logs;
+mod memory;
 mod prompts;
 mod run_chain;
 mod system_map;

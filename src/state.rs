@@ -548,6 +548,19 @@ pub enum AgentThreadItem {
     Memory { time: String, note: String },
 }
 
+/// The concierge's global memory, projected for the chat page's card (R3.5 M3): who owns it
+/// (the web agent — memory mutations target its global row), the summary, the pause state,
+/// and the last fold's human line for the card's meta.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChatMemory {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub summary: String,
+    pub paused: bool,
+    /// "08:45 — condensed 14 older messages into memory", or empty when never folded.
+    pub last_fold: String,
+}
+
 /// A currently-running task of the agent, for its live streaming entry on the agent page. The
 /// live items themselves come from `App.live_turns` (keyed by `task_id`), so a token flush
 /// repaints only the live renderer, not the whole timeline.
@@ -813,6 +826,9 @@ pub struct App {
     pub open_agent_workspace: Option<String>,
     /// The open agent's merged, time-ordered thread (its tasks + runs + live runs), or `None`.
     pub agent_thread: Option<AgentThread>,
+    /// The concierge's **global** memory for the chat page's fold line + card (R3.5 M3) —
+    /// parity with the agent page: the page shows what its agent remembers.
+    pub chat_memory: Option<ChatMemory>,
     /// The agent-list nav (Phase 2): the concierge pinned on top, then agents grouped by
     /// workspace, each with a live status + approval badge. Projected by `bridge::agent_nav`.
     pub agent_nav: AgentNav,
