@@ -3,7 +3,7 @@
 //! receives. Read-only transparency — composed by the bridge via `Command::LoadPrompt`.
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, PromptPreview, RunKind};
@@ -99,9 +99,9 @@ fn role_default_card(label: &str, run: RunKind, value: &str) -> ElementBuilder {
         .append([
             // The run rides as a hidden field (Submit doesn't expose data-attrs).
             el(El::Input)
-                .attr("type", "hidden")
-                .attr("name", "run")
-                .attr("value", run.as_str()),
+                .at(At::Type, Av::Hidden)
+                .at_str(At::Name, "run")
+                .at_str(At::Value, run.as_str()),
             Textarea::new()
                 .id(format!("role-{}", run.as_str()))
                 .name("prompt")
@@ -134,26 +134,7 @@ fn run_chips(active: RunKind) -> ElementBuilder {
 }
 
 fn run_chip(run: RunKind, active: bool) -> ElementBuilder {
-    let base = [
-        St::TextXs,
-        St::PxSm,
-        St::PyXs,
-        St::Rounded0,
-        St::BorderDefault,
-        St::CursorPointer,
-    ];
-    let chip = el(El::Button)
-        .attr("type", "button")
-        .data("run", run.as_str())
-        .on(Ev::Click, pick_run())
-        .style(Style::new().set("font", "inherit"))
-        .st(base)
-        .text(run.label());
-    if active {
-        chip.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
-    } else {
-        chip.st([St::BgApp, St::TextMuted]).hover([St::TextHigh])
-    }
+    crate::ui::widgets::chip(run.label(), active, pick_run()).data("run", run.as_str())
 }
 
 /// The Working-memory layer, read-only: memory is **fully automatic** (folds at task/turn

@@ -11,7 +11,7 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 use rwire_components::{Input, Text};
 
 use crate::bridge::{self, Command};
@@ -236,22 +236,10 @@ fn live_tail(app: &App) -> ElementBuilder {
 fn load_older(truncated: usize) -> ElementBuilder {
     el(El::Div)
         .st([St::DisplayFlex, St::JustifyCenter])
-        .append([el(El::Button)
-            .at(At::Type, Av::Button)
-            .on(Ev::Click, expand_thread())
-            .st([
-                St::FontInheritAll,
-                St::TextXs,
-                St::TextMuted,
-                St::BgTransparent,
-                St::BorderDefault,
-                St::Rounded0,
-                St::PxSm,
-                St::PyXs,
-                St::CursorPointer,
-            ])
-            .hover([St::TextHigh, St::BorderEmphasis])
-            .text(&format!("load older · {truncated} more past the fold"))])
+        .append([crate::ui::widgets::ghost(
+            &format!("load older · {truncated} more past the fold"),
+            expand_thread(),
+        )])
 }
 
 #[handler]

@@ -5,7 +5,7 @@
 //! `App.workflow_steps` / `workflow_locked` / `editing_step`.
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, StepForm, StepView, WorkspaceView};
@@ -296,7 +296,7 @@ fn edit_form(step: &StepView, members: &[(String, String)], wid: &str) -> Elemen
                 select("on_exhaust", &exhaust_opts, &step.on_exhaust),
             ),
             el(El::Button)
-                .attr("type", "submit")
+                .at(At::Type, Av::Submit)
                 .style(Style::new().set("font", "inherit"))
                 .st([
                     St::TextXs,
@@ -341,9 +341,9 @@ fn labeled(label: &str, field: ElementBuilder) -> ElementBuilder {
 
 fn hidden(name: &str, value: &str) -> ElementBuilder {
     el(El::Input)
-        .attr("type", "hidden")
-        .attr("name", name)
-        .attr("value", value)
+        .at(At::Type, Av::Hidden)
+        .at_str(At::Name, name)
+        .at_str(At::Value, value)
 }
 
 fn text_field(name: &str, value: &str, placeholder: &str) -> ElementBuilder {

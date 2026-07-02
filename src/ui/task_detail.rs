@@ -168,25 +168,8 @@ fn peek_tabs(active: usize) -> ElementBuilder {
 }
 
 fn tab_chip(label: &str, index: usize, active: usize) -> ElementBuilder {
-    let chip = el(El::Button)
-        .at(At::Type, Av::Button)
+    crate::ui::widgets::chip(label, index == active, set_detail_tab())
         .data("tab", &index.to_string())
-        .on(Ev::Click, set_detail_tab())
-        .st([
-            St::FontInheritAll,
-            St::TextXs,
-            St::PxSm,
-            St::PyXs,
-            St::Rounded0,
-            St::BorderDefault,
-            St::CursorPointer,
-        ])
-        .text(label);
-    if index == active {
-        chip.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
-    } else {
-        chip.st([St::BgApp, St::TextMuted]).hover([St::TextHigh])
-    }
 }
 
 /// The active tab's content, filling the modal body.

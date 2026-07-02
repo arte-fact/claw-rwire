@@ -4,7 +4,7 @@
 //! the operator's input. Picking an endpoint fetches its `/v1/models` into a dropdown.
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
 
 use super::{action, badge, card, drawer_form, labeled, row_head, submit, text_input};
 use crate::bridge::{self, Command};
@@ -112,7 +112,7 @@ fn tool_chip(name: &str, on: bool) -> ElementBuilder {
         (St::BgApp, St::TextMuted, "+")
     };
     el(El::Button)
-        .attr("type", "button")
+        .at(At::Type, Av::Button)
         .data("tool", name)
         .on(Ev::Click, tool_toggled())
         .style(Style::new().set("font", "inherit"))

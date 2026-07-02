@@ -6,13 +6,12 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
 use rwire_components::{Avatar, AvatarSize, Card, Input, Select, Text, TextColor, Tooltip};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, WorkspaceView};
 use crate::ui::files;
-use crate::ui::widgets::accent_submit;
 use crate::ui::workspace_tasks::initials;
 
 /// The sections of a workspace, in tab order.
@@ -225,7 +224,7 @@ fn auto_approve_toggle(workspace: &WorkspaceView) -> ElementBuilder {
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
             el(El::Button)
-                .attr("type", "button")
+                .at(At::Type, Av::Button)
                 .data("workspace", &workspace.id)
                 .data("on", if on { "1" } else { "0" })
                 .on(Ev::Click, toggle_auto_approve())
@@ -261,79 +260,35 @@ fn toggle_auto_approve(app: &mut App, ctx: &EventContext) {
 /// The inline `AGENT.md` editor on the Overview — the workspace's shared project brief.
 /// Keyed by workspace id so switching workspaces loads a fresh textarea.
 fn brief_editor(wid: &str, content: &str) -> ElementBuilder {
-    el(El::Form)
-        .on(Ev::Submit, save_brief())
-        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
-        .append([
-            el(El::Textarea)
-                .id(&format!("brief-{wid}"))
-                .attr("name", "brief")
-                .attr("spellcheck", "false")
-                .style(
-                    Style::new()
-                        .set("font", "inherit")
-                        .set("resize", "vertical")
-                        .set("min-height", "9rem"),
-                )
-                .st([
-                    St::WFull,
-                    St::PSm,
-                    St::BorderDefault,
-                    St::Rounded0,
-                    St::BgApp,
-                    St::TextHigh,
-                    St::FontMono,
-                    St::TextXs,
-                    St::OutlineNone,
-                ])
-                .focus([St::BorderAccent])
-                .text(content),
-            el(El::Div)
-                .st([St::DisplayFlex])
-                .append([accent_submit(icons::Icon::Check, "Save brief")]),
-        ])
+    crate::ui::widgets::md_editor(
+        format!("brief-{wid}"),
+        "brief",
+        content,
+        "What this workspace is for — its goal, the project it owns…",
+        "9rem",
+        save_brief(),
+        "Save brief",
+    )
 }
 
 /// The validator standards memo (R5): curated review rules injected into every review run in
 /// this workspace — validators stay memory-free otherwise. Rules, not a work log.
 fn standards_editor(wid: &str, content: &str) -> ElementBuilder {
-    el(El::Form)
-        .on(Ev::Submit, save_standards())
+    el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
             el(El::Div).st([St::TextXs, St::TextMuted]).text(
                 "Rules the reviewer checks every deliverable against — kept short and curated.",
             ),
-            el(El::Textarea)
-                .id(&format!("standards-{wid}"))
-                .attr("name", "standards")
-                .attr("spellcheck", "false")
-                .attr(
-                    "placeholder",
-                    "e.g. tests must pass with no warnings; code lives under projects/<name>/ …",
-                )
-                .style(
-                    Style::new()
-                        .set("font", "inherit")
-                        .set("resize", "vertical")
-                        .set("min-height", "6rem"),
-                )
-                .st([
-                    St::WFull,
-                    St::PSm,
-                    St::BorderDefault,
-                    St::Rounded0,
-                    St::BgApp,
-                    St::TextHigh,
-                    St::FontMono,
-                    St::TextXs,
-                    St::OutlineNone,
-                ])
-                .focus([St::BorderAccent])
-                .text(content),
-            el(El::Div)
-                .st([St::DisplayFlex])
-                .append([accent_submit(icons::Icon::Check, "Save standards")]),
+            crate::ui::widgets::md_editor(
+                format!("standards-{wid}"),
+                "standards",
+                content,
+                "e.g. tests must pass with no warnings; code lives under projects/<name>/ …",
+                "6rem",
+                save_standards(),
+                "Save standards",
+            ),
         ])
 }
 
@@ -437,7 +392,7 @@ fn member_chip(id: &str, name: &str, on: bool, is_owner: bool) -> ElementBuilder
         name.to_owned()
     };
     el(El::Button)
-        .attr("type", "button")
+        .at(At::Type, Av::Button)
         .data("agent", id)
         .data("on", if on { "1" } else { "0" })
         .on(Ev::Click, toggle_member())

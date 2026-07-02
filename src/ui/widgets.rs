@@ -121,3 +121,90 @@ pub fn icon_button(icon: icons::Icon, on_click: HandlerSpec, danger: bool) -> El
         })
         .append([icons::icon_sized(icon, 14)])
 }
+
+/// An inline markdown-file editor — a monospace textarea + accent save, the shape both
+/// Overview editors (brief, standards memo) share. Keyed by `field_id` so switching
+/// workspaces loads a fresh textarea; `min_height` is the one genuinely per-editor style.
+pub fn md_editor(
+    field_id: String,
+    name: &str,
+    content: &str,
+    placeholder: &str,
+    min_height: &str,
+    save: HandlerSpec,
+    save_label: &str,
+) -> ElementBuilder {
+    el(El::Form)
+        .on(rwire::Ev::Submit, save)
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append([
+            el(El::Textarea)
+                .id(&field_id)
+                .at_str(At::Name, name)
+                .at(At::Spellcheck, Av::False)
+                .at_str(At::Placeholder, placeholder)
+                .style(Style::new().set("min-height", min_height))
+                .st([
+                    St::FontInheritAll,
+                    St::ResizeY,
+                    St::WFull,
+                    St::PSm,
+                    St::BorderDefault,
+                    St::Rounded0,
+                    St::BgApp,
+                    St::TextHigh,
+                    St::FontMono,
+                    St::TextXs,
+                    St::OutlineNone,
+                ])
+                .focus([St::BorderAccent])
+                .text(content),
+            el(El::Div)
+                .st([St::DisplayFlex])
+                .append([accent_submit(icons::Icon::Check, save_label)]),
+        ])
+}
+
+/// A selectable chip (tabs, filters, view toggles): accent when active, muted with a hover
+/// lift otherwise. Chain `.data(...)` for the handler's payload.
+pub fn chip(label: &str, active: bool, on_click: HandlerSpec) -> ElementBuilder {
+    let chip = el(El::Button)
+        .at(At::Type, Av::Button)
+        .on(rwire::Ev::Click, on_click)
+        .st([
+            St::FontInheritAll,
+            St::TextXs,
+            St::PxSm,
+            St::PyXs,
+            St::Rounded0,
+            St::BorderDefault,
+            St::CursorPointer,
+        ])
+        .text(label);
+    if active {
+        chip.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
+    } else {
+        chip.st([St::BgApp, St::TextMuted]).hover([St::TextHigh])
+    }
+}
+
+/// A ghost button: muted bordered text that lifts on hover — for inline actions that must
+/// not compete with the primary affordances.
+pub fn ghost(label: &str, on_click: HandlerSpec) -> ElementBuilder {
+    el(El::Button)
+        .at(At::Type, Av::Button)
+        .on(rwire::Ev::Click, on_click)
+        .st([
+            St::FontInheritAll,
+            St::TextXs,
+            St::TextMuted,
+            St::BgTransparent,
+            St::BorderDefault,
+            St::Rounded0,
+            St::PxSm,
+            St::PyXs,
+            St::CursorPointer,
+        ])
+        .hover([St::TextHigh, St::BorderEmphasis])
+        .text(label)
+}

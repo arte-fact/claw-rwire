@@ -91,25 +91,7 @@ fn filter_bar(active: &str) -> ElementBuilder {
 }
 
 fn filter_chip(label: &str, value: &str, active: &str) -> ElementBuilder {
-    let chip = el(El::Button)
-        .at(At::Type, Av::Button)
-        .data("filter", value)
-        .on(Ev::Click, set_board_filter())
-        .st([
-            St::FontInheritAll,
-            St::TextXs,
-            St::PxSm,
-            St::PyXs,
-            St::Rounded0,
-            St::BorderDefault,
-            St::CursorPointer,
-        ])
-        .text(label);
-    if value == active {
-        chip.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
-    } else {
-        chip.st([St::BgApp, St::TextMuted]).hover([St::TextHigh])
-    }
+    crate::ui::widgets::chip(label, value == active, set_board_filter()).data("filter", value)
 }
 
 #[handler]
@@ -558,25 +540,7 @@ fn view_toggle(list: bool) -> ElementBuilder {
 }
 
 fn toggle_chip(label: &str, view: &str, active: bool) -> ElementBuilder {
-    let chip = el(El::Button)
-        .at(At::Type, Av::Button)
-        .data("view", view)
-        .on(Ev::Click, toggle_view())
-        .st([
-            St::FontInheritAll,
-            St::TextXs,
-            St::PxSm,
-            St::PyXs,
-            St::Rounded0,
-            St::BorderDefault,
-            St::CursorPointer,
-        ])
-        .text(label);
-    if active {
-        chip.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
-    } else {
-        chip.st([St::BgApp, St::TextMuted]).hover([St::TextHigh])
-    }
+    crate::ui::widgets::chip(label, active, toggle_view()).data("view", view)
 }
 
 #[handler]

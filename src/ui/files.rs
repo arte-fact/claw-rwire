@@ -540,25 +540,8 @@ fn mode_toggle(view: bool) -> ElementBuilder {
 }
 
 fn mode_chip(label: &str, view: bool, active: bool) -> ElementBuilder {
-    let chip = el(El::Button)
-        .at(At::Type, Av::Button)
+    crate::ui::widgets::chip(label, active, set_files_view())
         .data("view", if view { "1" } else { "0" })
-        .on(Ev::Click, set_files_view())
-        .st([
-            St::FontInheritAll,
-            St::TextXs,
-            St::PxSm,
-            St::PyXs,
-            St::Rounded0,
-            St::BorderDefault,
-            St::CursorPointer,
-        ])
-        .text(label);
-    if active {
-        chip.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
-    } else {
-        chip.st([St::BgApp, St::TextMuted]).hover([St::TextHigh])
-    }
 }
 
 /// Whether `path` is a Markdown file (rendered as prose in View mode).
