@@ -132,7 +132,7 @@ fn dispatch_native(
     // workspace coder tools, each filtered to the enabled set. The chat agent is the
     // concierge, so it also gets the `ask` delegation tool over every workspace.
     let selected = build_toolbox(inference.tools.clone(), workspace_dir, false);
-    let concierge = ConciergeToolbox::new(chat_id, delegates(conn));
+    let concierge = ConciergeToolbox::new(chat_id, delegates(conn), data_dir());
     let toolbox: Box<dyn Toolbox> =
         Box::new(CompositeToolbox::new(vec![Box::new(concierge), selected]));
     let chat = chat_id.to_owned();

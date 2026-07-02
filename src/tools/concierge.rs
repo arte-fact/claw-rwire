@@ -1,16 +1,31 @@
-//! The concierge's delegation tool. The user talks only to the concierge (the one chat
-//! agent); for work that isn't a quick reply it `ask`s a workspace **owner**, which runs a
-//! planning turn and queues task cards. `ask` is fire-and-forget: it posts `Command::Ask`
-//! and returns immediately — the board (and a later notify turn) are the feedback channel,
-//! so a long planning turn never blocks the chat reply.
+//! The concierge's tools. The user talks only to the concierge (the one chat agent); for
+//! work that isn't a quick reply it `ask`s a workspace **owner**, which runs a planning turn
+//! and queues task cards. `ask` is fire-and-forget: it posts `Command::Ask` and returns
+//! immediately — the board (and a later notify turn) are the feedback channel, so a long
+//! planning turn never blocks the chat reply.
+//!
+//! The two read-only tools came from the concierge's own harness review ("I'm flying a bit
+//! blind between delegations"): `board_status` pulls the live board on demand — the same
+//! digest the chat turn injects, but mid-turn and whenever it wants — and `read_file`
+//! inspects a workspace file without delegating. Neither mutates anything: the concierge
+//! stays hands-off by design.
+
+use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
 use crate::bridge::{self, Command};
+use crate::db;
+use crate::workspace;
 
 use super::{ToolDef, ToolOutcome, Toolbox};
 
 pub const ASK: &str = "ask";
+pub const BOARD_STATUS: &str = "board_status";
+pub const READ_FILE: &str = "read_file";
+
+/// Cap what a read lands in the conversation — the model needs the gist, not a megabyte.
+const READ_CAP_CHARS: usize = 8_000;
 
 /// One workspace the concierge can delegate to.
 #[derive(Debug, Clone)]
@@ -25,14 +40,67 @@ pub struct Delegate {
 pub struct ConciergeToolbox {
     origin_chat: String,
     workspaces: Vec<Delegate>,
+    /// The data dir (central.db + workspaces/) — the read-only tools open their own
+    /// connection per call; the toolbox runs on a worker thread, never on the bridge's.
+    data_dir: PathBuf,
 }
 
 impl ConciergeToolbox {
     #[must_use]
-    pub fn new(origin_chat: impl Into<String>, workspaces: Vec<Delegate>) -> Self {
+    pub fn new(
+        origin_chat: impl Into<String>,
+        workspaces: Vec<Delegate>,
+        data_dir: PathBuf,
+    ) -> Self {
         Self {
             origin_chat: origin_chat.into(),
             workspaces,
+            data_dir,
+        }
+    }
+
+    fn board_status(&self) -> ToolOutcome {
+        let conn = match db::open(&self.data_dir.join("central.db")) {
+            Ok(conn) => conn,
+            Err(err) => return ToolOutcome::error(format!("error: open registry: {err}")),
+        };
+        match bridge::status_digest(&conn) {
+            Some(digest) => ToolOutcome::text(digest),
+            None => ToolOutcome::text(
+                "All lanes are quiet — nothing running, awaiting review, or queued.",
+            ),
+        }
+    }
+
+    fn read_file(&self, arguments: &str) -> ToolOutcome {
+        let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+        let workspace = args
+            .get("workspace")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if path.is_empty() {
+            return ToolOutcome::error("error: read_file needs a path");
+        }
+        if !self.workspaces.iter().any(|w| w.id == workspace) {
+            return ToolOutcome::error(format!("error: no workspace {workspace:?}"));
+        }
+        let root = workspace::dir_for(&self.data_dir, workspace);
+        match workspace::ops::read_text(&root, path) {
+            Ok(content) => {
+                if content.chars().count() > READ_CAP_CHARS {
+                    let head: String = content.chars().take(READ_CAP_CHARS).collect();
+                    ToolOutcome::text(format!("{head}\n…[truncated — the file continues]"))
+                } else {
+                    ToolOutcome::text(content)
+                }
+            }
+            Err(err) => ToolOutcome::error(format!("error: {err}")),
         }
     }
 }
@@ -59,7 +127,34 @@ impl Toolbox for ConciergeToolbox {
         if !ids.is_empty() {
             workspace_schema["enum"] = json!(ids);
         }
-        vec![ToolDef {
+        let mut defs = vec![ToolDef {
+            name: BOARD_STATUS.to_owned(),
+            description: "Look up the live board state right now — which task is running \
+                          (and whose), what awaits the user's review, and queue depths per \
+                          workspace. Present state, not memory: use this instead of recalling \
+                          older messages."
+                .to_owned(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        }];
+        let path_schema = json!({
+            "type": "string",
+            "description": "Workspace-relative file path, e.g. docs/plan.md",
+        });
+        defs.push(ToolDef {
+            name: READ_FILE.to_owned(),
+            description: "Read one file from a workspace (read-only, capped) — inspect a doc \
+                          or artifact without delegating a task for it."
+                .to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_schema.clone(),
+                    "path": path_schema,
+                },
+                "required": ["workspace", "path"]
+            }),
+        });
+        defs.push(ToolDef {
             name: ASK.to_owned(),
             description: format!(
                 "Delegate work to a workspace owner, who will plan it into tasks. Use this for \
@@ -78,12 +173,16 @@ impl Toolbox for ConciergeToolbox {
                 },
                 "required": ["workspace", "request"]
             }),
-        }]
+        });
+        defs
     }
 
     fn call(&self, name: &str, arguments: &str) -> ToolOutcome {
-        if name != ASK {
-            return ToolOutcome::error(format!("error: no tool named {name}"));
+        match name {
+            BOARD_STATUS => return self.board_status(),
+            READ_FILE => return self.read_file(arguments),
+            ASK => {}
+            other => return ToolOutcome::error(format!("error: no tool named {other}")),
         }
         let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
         let workspace = args
@@ -120,6 +219,10 @@ mod tests {
     use super::*;
 
     fn toolbox() -> ConciergeToolbox {
+        toolbox_at(std::env::temp_dir())
+    }
+
+    fn toolbox_at(data_dir: std::path::PathBuf) -> ConciergeToolbox {
         ConciergeToolbox::new(
             "chat-1",
             vec![Delegate {
@@ -127,6 +230,7 @@ mod tests {
                 name: "Website".to_owned(),
                 brief: "The marketing site.".to_owned(),
             }],
+            data_dir,
         )
     }
 
@@ -151,10 +255,36 @@ mod tests {
     }
 
     #[test]
-    fn defs_expose_a_workspace_enum() {
+    fn defs_expose_status_read_and_ask() {
         let defs = toolbox().defs();
-        assert_eq!(defs.len(), 1);
-        let enum_values = &defs[0].parameters["properties"]["workspace"]["enum"];
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, vec![BOARD_STATUS, READ_FILE, ASK]);
+        let enum_values = &defs[2].parameters["properties"]["workspace"]["enum"];
         assert!(enum_values.to_string().contains("site"));
+    }
+
+    #[test]
+    fn read_file_is_jailed_to_a_known_workspace_and_caps_output() {
+        let dir = std::env::temp_dir().join(format!("claw-concierge-{}", std::process::id()));
+        let ws = dir.join("workspaces").join("site");
+        std::fs::create_dir_all(&ws).expect("mkdir");
+        std::fs::write(ws.join("notes.md"), "hello from the workspace").expect("write");
+        let tools = toolbox_at(dir);
+
+        let ok = tools.call(READ_FILE, r#"{"workspace":"site","path":"notes.md"}"#);
+        assert!(ok.ok, "{}", ok.result);
+        assert_eq!(ok.result, "hello from the workspace");
+
+        // Unknown workspace and path escapes are refused.
+        assert!(
+            !tools
+                .call(READ_FILE, r#"{"workspace":"ghost","path":"x"}"#)
+                .ok
+        );
+        let escape = tools.call(
+            READ_FILE,
+            r#"{"workspace":"site","path":"../../etc/passwd"}"#,
+        );
+        assert!(!escape.ok, "{}", escape.result);
     }
 }

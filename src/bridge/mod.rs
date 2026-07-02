@@ -32,6 +32,7 @@ mod review;
 mod scheduler;
 mod seed;
 mod steer;
+pub(crate) use tasks::status_digest;
 mod tasks;
 mod workflow;
 

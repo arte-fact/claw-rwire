@@ -498,7 +498,7 @@ fn reproject(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str, 
 /// state is **looked up fresh each turn, never remembered** — injected as its own prompt layer
 /// so the concierge stops guessing about in-flight work from stale conversation history.
 /// `None` when every lane is quiet (no layer at all).
-pub(super) fn status_digest(conn: &rusqlite::Connection) -> Option<String> {
+pub(crate) fn status_digest(conn: &rusqlite::Connection) -> Option<String> {
     let names = agent_names(conn);
     let name_of = |id: &Option<String>| {
         id.as_deref()

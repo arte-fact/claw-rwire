@@ -453,6 +453,17 @@ The moment it becomes agent-*centric*.
       *Live proof:* window 10 showed the button with 28 past the fold; one click surfaced the
       full 38-turn history.
 
+### Concierge self-review backlog (2026-07-02)
+Asked what it thought of its harness, the live concierge rated it "B+" and named four gaps.
+Two shipped the same evening as read-only concierge tools — `board_status` (pull the live
+digest on demand, mid-turn) and `read_file` (inspect a workspace file without delegating).
+Two remain open, both real design work:
+- [ ] **Rollback** — "revert that file to before the last build step": needs per-step
+      workspace snapshots (or git-backed workspaces) + a restore affordance on the run chain
+- [ ] **Cross-workspace artifacts** — Scout's research vanishes into Forge's prompt; a
+      shared, addressable artifact both workspaces can read (and the thread can link) would
+      make handoffs durable
+
 ## Verification (when built)
 
 Per phase, the usual gate (`cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
