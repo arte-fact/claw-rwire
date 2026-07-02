@@ -16,8 +16,10 @@ use super::{
 
 /// Fail fast when the host is unreachable or the wrong scheme is configured.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// Per-request deadline — generous for generation, not a silent hang.
-const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Per-request deadline — generous for generation, not a silent hang. 120s proved too tight
+/// live: a validator reviewing a large deliverable on a loaded provider timed out mid-review
+/// (ureq's `timeout` covers the whole response read, so it can abort a healthy stream).
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Cap on assistant↔tool round-trips per turn, so a confused model can't loop forever. Sized for
 /// multi-step task work — a researcher searches/fetches, *writes* the report, then reads it back;
 /// a builder writes files, then builds and tests; a reviewer lists/reads/greps the tree, runs the

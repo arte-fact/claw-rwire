@@ -687,7 +687,13 @@ pub fn finished(
         }
         RunRole::Validator => {
             if !ok {
-                return terminal_finish(conn, shared, &task, TaskStatus::Failed, &output);
+                // A validator *execution* failure (endpoint timeout, transport error) is not a
+                // review verdict — the producer's work is done and recorded. Retry within the
+                // same budget as producer failures instead of failing the task terminally (the
+                // live e2e failure: one timed-out review killed a task whose build succeeded
+                // and cancelled its dependents). The retry re-enters via `launch_current`; the
+                // replayed attempt lets the producer pass cheaply back to the review.
+                return retry_or_fail(conn, shared, &task, &output);
             }
             let Some(step) = step else { return };
             route_verdict(conn, shared, &task, &step, &steps, verdict, false);
