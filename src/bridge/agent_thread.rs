@@ -26,25 +26,34 @@ use crate::state::{AgentLive, AgentThread, AgentThreadItem, AgentTurn, App, Task
 use super::tasks::agent_names;
 
 /// The newest turns kept in the projection; older ones fold away (R3 replaces the plain count
-/// with the memory fold line).
+/// with the memory fold line). "Load older" (R5) grows the open thread's window by this much
+/// per click. `CLAW_THREAD_WINDOW` overrides the default (mainly for testing the fold).
 const TURN_WINDOW: usize = 50;
+
+fn default_window() -> usize {
+    std::env::var("CLAW_THREAD_WINDOW")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(TURN_WINDOW)
+}
 
 /// The SQL cap on out-of-lane runs considered for the merge (each is at most one turn).
 const RECENT_RUNS: usize = 50;
 
-/// The open (agent, workspace) pair, mirrored bridge-side so `refresh_if_open` can build the
-/// projection without holding the shared-state lock. Written by `load`/`close` (bridge thread).
-static OPEN_AGENT: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::new();
+/// The open (agent, workspace, window) triple, mirrored bridge-side so `refresh_if_open` can
+/// build the projection without holding the shared-state lock — and so a "load older"
+/// expansion survives the background refreshes. Written by `load`/`close`/`expand`.
+static OPEN_AGENT: OnceLock<Mutex<Option<(String, String, usize)>>> = OnceLock::new();
 
-fn open_agent_slot() -> &'static Mutex<Option<(String, String)>> {
+fn open_agent_slot() -> &'static Mutex<Option<(String, String, usize)>> {
     OPEN_AGENT.get_or_init(|| Mutex::new(None))
 }
 
-fn set_open_agent(pair: Option<(String, String)>) {
-    *open_agent_slot().lock().unwrap_or_else(|e| e.into_inner()) = pair;
+fn set_open_agent(entry: Option<(String, String, usize)>) {
+    *open_agent_slot().lock().unwrap_or_else(|e| e.into_inner()) = entry;
 }
 
-fn open_agent() -> Option<(String, String)> {
+fn open_agent() -> Option<(String, String, usize)> {
     open_agent_slot()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -288,13 +297,17 @@ fn turn_item(turn: AgentTurn) -> AgentThreadItem {
 }
 
 fn build(conn: &Connection, agent_id: &str, workspace_id: &str) -> Option<AgentThread> {
-    build_with_window(conn, agent_id, workspace_id, TURN_WINDOW)
+    build_with_window(conn, agent_id, workspace_id, default_window())
 }
 
-/// Open (or re-open) an agent's workspace thread — set as the open pair and project its
-/// timeline. Called when a `/w/:wid/agent/:aid` route resolves.
+/// Open (or re-open) an agent's workspace thread — set as the open pair (window reset to the
+/// default) and project its timeline. Called when a `/w/:wid/agent/:aid` route resolves.
 pub fn load(conn: &Connection, shared: &SharedServerState, agent_id: &str, workspace_id: &str) {
-    set_open_agent(Some((agent_id.to_owned(), workspace_id.to_owned())));
+    set_open_agent(Some((
+        agent_id.to_owned(),
+        workspace_id.to_owned(),
+        default_window(),
+    )));
     let thread = build(conn, agent_id, workspace_id);
     let agent_id = agent_id.to_owned();
     let workspace_id = workspace_id.to_owned();
@@ -334,10 +347,10 @@ pub fn close(shared: &SharedServerState) {
 /// advancing updates the page live. A cheap no-op when no agent page is open; the projection is
 /// built **before** taking the shared-state lock (the DB work never blocks renders).
 pub fn refresh_if_open(conn: &Connection, shared: &SharedServerState) {
-    let Some((agent_id, workspace_id)) = open_agent() else {
+    let Some((agent_id, workspace_id, window)) = open_agent() else {
         return;
     };
-    let thread = build(conn, &agent_id, &workspace_id);
+    let thread = build_with_window(conn, &agent_id, &workspace_id, window);
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_AGENT_THREAD]),
         move |app| {
@@ -348,6 +361,20 @@ pub fn refresh_if_open(conn: &Connection, shared: &SharedServerState) {
             }
         },
     );
+}
+
+/// "Load older" (R5): grow the open thread's window by one page and re-project — the history
+/// past the fold becomes browsable without bloating the default projection. The grown window
+/// sticks for this visit (background refreshes keep it); navigating away resets it.
+pub fn expand(conn: &Connection, shared: &SharedServerState) {
+    {
+        let mut slot = open_agent_slot().lock().unwrap_or_else(|e| e.into_inner());
+        let Some((_, _, window)) = slot.as_mut() else {
+            return;
+        };
+        *window += TURN_WINDOW;
+    }
+    refresh_if_open(conn, shared);
 }
 
 #[cfg(test)]

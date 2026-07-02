@@ -147,8 +147,10 @@ pub fn compose_system_prompt(
 mod tests {
     use super::*;
 
-    fn tmp() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("claw-ws-{}", std::process::id()));
+    /// A per-test scratch base — namespaced by test name so parallel tests can't wipe each
+    /// other's trees (the shared-dir version did exactly that).
+    fn tmp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("claw-ws-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -163,7 +165,7 @@ mod tests {
 
     #[test]
     fn scaffold_seeds_agent_md_and_standard_dirs_once() {
-        let ws = dir_for(&tmp(), "ag");
+        let ws = dir_for(&tmp("scaffold"), "ag");
         scaffold(&ws, "Coder").expect("scaffold");
         let first = read_agent_md(&ws).expect("present");
         assert!(first.contains("Coder workspace"));
@@ -181,7 +183,7 @@ mod tests {
 
     #[test]
     fn empty_agent_md_reads_as_none() {
-        let ws = dir_for(&tmp(), "blank");
+        let ws = dir_for(&tmp("blank"), "blank");
         std::fs::create_dir_all(&ws).expect("mkdir");
         std::fs::write(ws.join("AGENT.md"), "   \n\t").expect("write");
         assert_eq!(read_agent_md(&ws), None);
@@ -189,7 +191,7 @@ mod tests {
 
     #[test]
     fn standards_memo_reads_and_wraps_as_a_review_layer() {
-        let ws = dir_for(&tmp(), "standards");
+        let ws = dir_for(&tmp("standards"), "standards");
         std::fs::create_dir_all(&ws).expect("mkdir");
         // Missing / blank → no layer (the validator stays rules-free too).
         assert_eq!(standards_layer(&ws), None);

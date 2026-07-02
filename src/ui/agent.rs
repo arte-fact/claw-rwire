@@ -11,7 +11,7 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 use rwire_components::{Input, Text};
 
 use crate::bridge::{self, Command};
@@ -166,6 +166,9 @@ fn timeline(app: &App) -> ElementBuilder {
     match thread {
         None => rows.push(Text::body("Loading…").muted().build()),
         Some(thread) => {
+            if thread.truncated > 0 {
+                rows.push(load_older(thread.truncated));
+            }
             if let Some(line) = fold_line(thread) {
                 rows.push(line);
             }
@@ -226,6 +229,35 @@ fn live_tail(app: &App) -> ElementBuilder {
         ))
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
         .append(entries)
+}
+
+/// "Load older" (R5): browse the history past the fold — one page per click. Sits above the
+/// fold line; disappears once everything is loaded.
+fn load_older(truncated: usize) -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::JustifyCenter])
+        .append([el(El::Button)
+            .at(At::Type, Av::Button)
+            .on(Ev::Click, expand_thread())
+            .st([
+                St::FontInheritAll,
+                St::TextXs,
+                St::TextMuted,
+                St::BgTransparent,
+                St::BorderDefault,
+                St::Rounded0,
+                St::PxSm,
+                St::PyXs,
+                St::CursorPointer,
+            ])
+            .hover([St::TextHigh, St::BorderEmphasis])
+            .text(&format!("load older · {truncated} more past the fold"))])
+}
+
+#[handler]
+fn expand_thread(app: &mut App, ctx: &EventContext) {
+    let _ = (app, ctx);
+    bridge::send(Command::ExpandAgentThread);
 }
 
 /// The fold line at the top of the thread — where history passes into memory (R3): what's

@@ -160,6 +160,8 @@ pub enum Command {
         agent: String,
         workspace: String,
     },
+    /// "Load older" on the agent thread (R5): grow the open thread's window by one page.
+    ExpandAgentThread,
     /// Leaving the agent pages — clear the open agent so the nav highlight follows the route.
     CloseAgentThread,
     /// Project the active workspace's pipeline steps + edit lock — the Workflow tab opening.
@@ -718,6 +720,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::OpenAgentThread { agent, workspace } => {
             agent_thread::load(conn, shared, &agent, &workspace)
         }
+        Command::ExpandAgentThread => agent_thread::expand(conn, shared),
         Command::CloseAgentThread => agent_thread::close(shared),
         Command::LoadWorkflow { workspace } => workflow::load(conn, shared, &workspace),
         Command::AddStep { workspace, kind } => workflow::add(conn, shared, &workspace, &kind),
