@@ -29,9 +29,9 @@ use rwire::router::Link;
 use rwire::router::RoutePattern;
 use rwire::style::Style;
 use rwire::{
-    At, Av, CurrentRoute, El, ElementBuilder, Ev, Router, St, el, handler, icons, outlet, renderer,
+    At, CurrentRoute, El, ElementBuilder, Ev, Router, St, el, handler, icons, outlet, renderer,
 };
-use rwire_components::{StatusDot, StatusDotIntent};
+use rwire_components::{Button, ButtonIntent, ButtonSize, StatusDot, StatusDotIntent};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, Tab};
@@ -584,21 +584,10 @@ fn mobile_topbar() -> ElementBuilder {
 }
 
 fn hamburger() -> ElementBuilder {
-    el(El::Button)
-        .at(At::Type, Av::Button)
-        .at_str(At::AriaLabel, "Toggle navigation")
-        .on(Ev::Click, toggle_nav())
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::PxSm,
-            St::PySm,
-            St::BgApp,
-            St::BorderDefault,
-            St::TextHigh,
-            St::CursorPointer,
-        ])
-        .append([icons::icon_sized(icons::Icon::Menu, 18)])
+    Button::icon_only(icons::Icon::Menu, "Toggle navigation")
+        .intent(ButtonIntent::Outline)
+        .size(ButtonSize::Sm)
+        .on_click(toggle_nav())
 }
 
 /// `position:absolute; inset:0` — fills the nearest positioned ancestor regardless

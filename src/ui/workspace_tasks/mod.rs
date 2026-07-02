@@ -3,14 +3,14 @@
 //! form, and the per-card edit drawer — has room to grow. Renders from `App.tasks`, the
 //! active workspace's projected lane.
 
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, TaskView, WorkspaceView};
 use crate::ui::widgets::accent_submit;
 use rwire_components::{
-    Badge, BadgeFill, BadgeIntent, BadgeShape, Drawer, DrawerPosition, EmptyState, Input, Select,
-    Text, Textarea,
+    Badge, BadgeFill, BadgeIntent, BadgeShape, Button, ButtonSize, Drawer, DrawerPosition,
+    EmptyState, Input, Select, Text, Textarea,
 };
 
 mod board;
@@ -138,24 +138,10 @@ fn toolbar(list: bool) -> ElementBuilder {
 
 /// The "New task" button — opens the create drawer.
 fn new_task_button() -> ElementBuilder {
-    el(El::Button)
-        .at(At::Type, Av::Button)
-        .on(Ev::Click, open_new_task())
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::PxSm,
-            St::PyXs,
-            St::BgAccent,
-            St::TextOnAccent,
-            St::BorderAccent,
-            St::CursorPointer,
-        ])
-        .append([
-            icons::icon(icons::Icon::Plus),
-            el(El::Span).text("New task"),
-        ])
+    Button::primary("New task".to_owned())
+        .icon(icons::Icon::Plus)
+        .size(ButtonSize::Sm)
+        .on_click(open_new_task())
 }
 
 /// The create-task drawer: a right-side overlay (with backdrop) holding the create form, matching

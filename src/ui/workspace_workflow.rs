@@ -4,7 +4,7 @@
 //! in-flight tasks**, so a running task never sees its pipeline change. Renders from
 //! `App.workflow_steps` / `workflow_locked` / `editing_step`.
 
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, StepForm, StepView, WorkspaceView};
@@ -293,19 +293,8 @@ fn edit_form(step: &StepView, members: &[(String, String)], wid: &str) -> Elemen
                 "On exhaust",
                 select("on_exhaust", &exhaust_opts, &step.on_exhaust),
             ),
-            el(El::Button)
-                .at(At::Type, Av::Submit)
-                .st([
-                    St::TextXs,
-                    St::PxSm,
-                    St::PyXs,
-                    St::BgAccent,
-                    St::TextOnAccent,
-                    St::BorderAccent,
-                    St::CursorPointer,
-                    St::SelfStart,
-                ])
-                .text("Save step"),
+            crate::ui::widgets::accent_submit(rwire::icons::Icon::Check, "Save step")
+                .st([St::SelfStart]),
         ])
 }
 

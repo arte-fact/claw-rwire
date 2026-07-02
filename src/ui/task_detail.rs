@@ -8,7 +8,7 @@
 use rwire::style::Style;
 use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 use rwire_components::{
-    Avatar, AvatarSize, Button, ButtonSize, Input, StatusDot, StatusDotIntent, Text,
+    Avatar, AvatarSize, Button, ButtonIntent, ButtonSize, Input, StatusDot, StatusDotIntent, Text,
 };
 
 use super::thread;
@@ -98,21 +98,10 @@ fn peek_content(app: &App, detail: &TaskDetail) -> ElementBuilder {
 fn close_row() -> ElementBuilder {
     el(El::Div)
         .st([St::DisplayFlex, St::JustifyEnd])
-        .append([el(El::Button)
-            .at(At::Type, Av::Button)
-            .at_str(At::AriaLabel, "Close")
-            .on(Ev::Click, close_peek())
-            .st([
-                St::DisplayFlex,
-                St::ItemsCenter,
-                St::BgTransparent,
-                St::BorderNone,
-                St::P0,
-                St::TextMuted,
-                St::CursorPointer,
-            ])
-            .hover([St::TextHigh])
-            .append([icons::icon_sized(icons::Icon::Close, 18)])])
+        .append([Button::icon_only(icons::Icon::Close, "Close")
+            .intent(ButtonIntent::Ghost)
+            .size(ButtonSize::Sm)
+            .on_click(close_peek())])
 }
 
 /// Title + assignee avatar + status + (when live) the current step / iteration.
@@ -531,19 +520,10 @@ pub(crate) fn review_gate(task_id: &str) -> ElementBuilder {
                         .autocomplete("off")
                         .build()
                         .st([St::Flex1]),
-                    el(El::Button)
-                        .at(At::Type, Av::Submit)
-                        .st([
-                            St::TextXs,
-                            St::PxSm,
-                            St::PyXs,
-                            St::BorderDefault,
-                            St::BgApp,
-                            St::TextMuted,
-                            St::CursorPointer,
-                        ])
-                        .hover([St::TextHigh])
-                        .text("Request changes"),
+                    Button::outline("Request changes".to_owned())
+                        .size(ButtonSize::Xs)
+                        .build()
+                        .at(At::Type, Av::Submit),
                 ]),
         ])
 }

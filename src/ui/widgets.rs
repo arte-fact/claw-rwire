@@ -63,20 +63,12 @@ pub fn clear_button(label: &str, on_click: HandlerSpec) -> ElementBuilder {
     action(label, on_click)
 }
 
-/// A bordered form-submit button (`type=submit`) with high-contrast text.
+/// A bordered form-submit button (`type=submit`) — the design-system outline intent.
 pub fn submit(label: &str) -> ElementBuilder {
-    el(El::Button)
+    Button::outline(label.to_owned())
+        .size(ButtonSize::Sm)
+        .build()
         .at(At::Type, Av::Submit)
-        .st([
-            St::PxMd,
-            St::PySm,
-            St::BorderDefault,
-            St::BgApp,
-            St::TextHigh,
-            St::CursorPointer,
-        ])
-        .hover([St::BorderAccent])
-        .text(label)
 }
 
 /// A bordered icon+label action (`type=button`). `danger` colours it as destructive.
@@ -169,23 +161,12 @@ pub fn chip(label: &str, active: bool, on_click: HandlerSpec) -> ElementBuilder 
         .build()
 }
 
-/// A ghost button: muted bordered text that lifts on hover — for inline actions that must
-/// not compete with the primary affordances.
+/// A ghost/outline button: muted bordered text that lifts on hover — inline actions that
+/// must not compete with the primary affordances. The design-system outline intent at Xs.
 pub fn ghost(label: &str, on_click: HandlerSpec) -> ElementBuilder {
-    el(El::Button)
-        .at(At::Type, Av::Button)
-        .on(rwire::Ev::Click, on_click)
-        .st([
-            St::TextXs,
-            St::TextMuted,
-            St::BgTransparent,
-            St::BorderDefault,
-            St::PxSm,
-            St::PyXs,
-            St::CursorPointer,
-        ])
-        .hover([St::TextHigh, St::BorderEmphasis])
-        .text(label)
+    Button::outline(label.to_owned())
+        .size(ButtonSize::Xs)
+        .on_click(on_click)
 }
 
 /// A membership toggle chip: "✓ label" accent-filled when on, "+ label" muted when off —
