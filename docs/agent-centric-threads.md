@@ -429,11 +429,29 @@ The moment it becomes agent-*centric*.
       idle Forge became his task, ran, passed Critic's review, and folded — the CLI gained a
       working `--version` flag
 
-### R5 — Later
-- [ ] Mid-run steering (v2: drain a channel between tool rounds, respecting epoch/cancel)
-- [ ] Validator standards memo (curated per-workspace rules — not a work log)
-- [ ] Concierge live status digest layer (present state is looked up, never remembered)
-- [ ] History beyond the window (lazy-load older timeline past the fold)
+### R5 — Later — ✅ shipped (all four live-verified on the real endpoint, 2026-07-02)
+- [x] **Mid-run steering (v2)**: `run_turn_steered` polls a steer source between tool rounds
+      (never before the first — launch composed those) and injects the bodies as user turns.
+      The worker's poll runs on its own connection and is **epoch-guarded**: a superseded run
+      consumes nothing. Consumption re-projects the open thread, so "queued" flips live.
+      *Live proof:* a message queued while Forge played the playtest was delivered mid-run,
+      and the produced doc carried its instruction (the bold final rating at the top).
+- [x] **Validator standards memo**: per-workspace `STANDARDS.md`, edited on the Overview tab,
+      injected into every validator run as a "## Review standards" layer. Validators remain
+      memory-free — this is the keystone's one curated exception: rules, never a work log.
+      *Live proof:* a tracer rule ("end every verdict with SUMERIA") appeared verbatim at the
+      end of Critic's next review.
+- [x] **Concierge live status digest**: per-turn board lookup (running task + who runs it,
+      gates awaiting the user, queued count per lane; quiet lanes add nothing). Present state
+      is looked up, never remembered. *Live finding:* buried in the system prompt the model
+      still narrated "all complete" from stale history while a task ran — repositioned as the
+      **newest model-view turn**, after which the same question drew "here's the live board
+      state right now" naming the running task.
+- [x] **History beyond the window**: the open thread's window lives in the bridge-side mirror
+      (survives refreshes, resets on navigation); "load older · n more past the fold" above
+      the fold line pages it out, `CLAW_THREAD_WINDOW` overrides the default for testing.
+      *Live proof:* window 10 showed the button with 28 past the fold; one click surfaced the
+      full 38-turn history.
 
 ## Verification (when built)
 
