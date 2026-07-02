@@ -61,16 +61,25 @@ fn replay_run(run: &TaskRun, run_idx: usize) -> Vec<ChatMessage> {
 /// The producer's thread: the spec opener, then — for each prior pass — the producer's own
 /// replayed work followed by the reviewer's "revise" feedback. The final feedback turn is the
 /// current prompt. Empty `prior` (iteration 0) yields `[system, user(spec opener)]`.
+/// `condensed` carries the mid-unit fold (R3 degradation ladder): older passes of a long loop,
+/// already compacted to one-line notes, presented before the verbatim tail.
 pub(super) fn producer_thread(
     system: &str,
     spec: &str,
     step_name: &str,
+    condensed: Option<&str>,
     prior: &[TaskRun],
 ) -> Vec<ChatMessage> {
     let mut msgs = vec![
         ChatMessage::system(system),
         ChatMessage::text(Role::User, step_context(spec, &[], step_name)),
     ];
+    if let Some(note) = condensed.map(str::trim).filter(|note| !note.is_empty()) {
+        msgs.push(ChatMessage::text(
+            Role::User,
+            format!("Earlier passes of this task, condensed to fit your context:\n{note}"),
+        ));
+    }
     let mut run_idx = 0;
     for run in prior {
         match run.role.as_str() {
@@ -242,7 +251,7 @@ mod tests {
 
     #[test]
     fn producer_thread_iteration_zero_matches_the_plain_opener() {
-        let msgs = producer_thread("sys", "make X", "Build", &[]);
+        let msgs = producer_thread("sys", "make X", "Build", None, &[]);
         assert_eq!(roles(&msgs), vec![Role::System, Role::User]);
         assert_eq!(
             msgs[1].content.as_deref(),
@@ -258,7 +267,7 @@ mod tests {
             run("producer", Some("did it"), None, None, Some(transcript)),
             run("validator", None, Some("revise"), Some("add a test"), None),
         ];
-        let msgs = producer_thread("sys", "make X", "Build", &prior);
+        let msgs = producer_thread("sys", "make X", "Build", None, &prior);
         // system, opener, [asst/tool ×2], asst(reply), user(feedback)
         assert_eq!(
             roles(&msgs),
@@ -283,6 +292,30 @@ mod tests {
         assert_eq!(msgs[3].tool_call_id.as_deref(), Some("r0c0"));
         assert_eq!(msgs[4].tool_calls[0].id, "r0c1");
         assert_eq!(msgs[5].tool_call_id.as_deref(), Some("r0c1"));
+    }
+
+    #[test]
+    fn producer_thread_presents_the_condensed_note_before_the_verbatim_tail() {
+        let prior = vec![run("producer", Some("latest pass"), None, None, None)];
+        let msgs = producer_thread(
+            "sys",
+            "make X",
+            "Build",
+            Some("- pass (iteration 1): first pass"),
+            &prior,
+        );
+        // system, opener, user(condensed), asst(latest pass)
+        assert_eq!(
+            roles(&msgs),
+            vec![Role::System, Role::User, Role::User, Role::Assistant]
+        );
+        let note = msgs[2].content.as_deref().unwrap_or("");
+        assert!(note.contains("condensed to fit your context"));
+        assert!(note.contains("first pass"));
+        assert_eq!(msgs[3].content.as_deref(), Some("latest pass"));
+        // A blank note adds no turn.
+        let msgs = producer_thread("sys", "make X", "Build", Some("  "), &[]);
+        assert_eq!(roles(&msgs), vec![Role::System, Role::User]);
     }
 
     #[test]

@@ -12,12 +12,12 @@ use crate::agent;
 use crate::db::pipeline::{self, Step, StepKind};
 use crate::db::resolution::{self, ResolvedInference};
 use crate::db::tasks::{self, Task, TaskStatus};
-use crate::db::{task_runs, workspaces};
+use crate::db::{self, task_runs, workspaces};
 use crate::state::{ActivityKind, App, MessageRole, ProgressCtx, RunRole};
 use crate::tools::{CompositeToolbox, Toolbox, ValidatorToolbox};
 use crate::workspace;
 
-use super::{Command, build_toolbox, data_dir, log_line, run_system_prompt, send};
+use super::{Command, build_toolbox, data_dir, log_line, memory, run_system_prompt, send};
 
 /// Default seconds between scheduler scans.
 const DEFAULT_TICK_SECS: u64 = 3;
@@ -103,20 +103,59 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             .prompt
             .clone()
             .unwrap_or_else(|| super::role_prompt(conn, crate::state::RunKind::Task));
-        let system_prompt = run_system_prompt(
-            &preamble,
-            Some(&workspace_dir),
-            &inference.agent_name,
-            inference.agent_prompt.clone(),
-            super::memory_layer(conn, &inference.agent_id, Some(&task.workspace_id)),
-        );
         // Scope context to the current attempt: a restart (a fresh attempt) must not inherit an
         // earlier attempt's runs. Reconstruct the producer's own thread across this attempt's
         // passes so a re-run continues its work instead of rediscovering it from disk.
         let prior =
             task_runs::list_for_task_attempt(conn, &task.id, task.attempt).unwrap_or_default();
-        let messages =
-            super::replay::producer_thread(&system_prompt, &task.spec, &step.name, &prior);
+        // F→U→W→M composition against the model's real budget: place the fixed identity and
+        // the current unit, reserve the producer's working headroom, and let memory fill only
+        // what's left — the last-task recap first, then the workspace summary. A long loop
+        // outgrowing half the budget compacts its oldest passes first (the mid-unit fold).
+        let shares = memory::shares_for(crate::state::RunKind::Task);
+        let budget = memory::prompt_budget(
+            super::cached_context(&inference).unwrap_or(super::DEFAULT_CONTEXT_TOKENS),
+        );
+        let unit_cap_chars = (f64::from(budget) * 0.5) as usize * 4;
+        let (condensed, skip) = memory::compact_attempt(&prior, unit_cap_chars);
+        let prior = &prior[skip..];
+        let brief = workspace::read_agent_md(&workspace_dir).unwrap_or_default();
+        let fixed = memory::estimate_tokens(
+            preamble.chars().count()
+                + inference
+                    .agent_prompt
+                    .as_deref()
+                    .unwrap_or("")
+                    .chars()
+                    .count()
+                + brief.chars().count(),
+        );
+        let unit = memory::estimate_tokens(
+            task.spec.chars().count()
+                + memory::attempt_chars(prior)
+                + condensed.as_deref().unwrap_or("").chars().count(),
+        );
+        let allowance = memory::memory_allowance(budget, fixed, unit, &shares);
+        let row = db::agent_memory::get(conn, &inference.agent_id, Some(&task.workspace_id))
+            .unwrap_or_default();
+        let recap =
+            memory::last_task_recap(conn, &inference.agent_id, &task.workspace_id, &task.id);
+        let memory_text = memory::fill_memory(allowance, recap.as_deref(), row.text().as_deref())
+            .map(|text| memory::wrap_workspace_memory(&text));
+        let system_prompt = run_system_prompt(
+            &preamble,
+            Some(&workspace_dir),
+            &inference.agent_name,
+            inference.agent_prompt.clone(),
+            memory_text,
+        );
+        let messages = super::replay::producer_thread(
+            &system_prompt,
+            &task.spec,
+            &step.name,
+            condensed.as_deref(),
+            prior,
+        );
         let toolbox = build_toolbox(inference.tools.clone(), Some(workspace_dir), true);
         Ok((inference, messages, toolbox))
     })();
@@ -884,6 +923,10 @@ fn terminal_finish(
     } else if let Err(err) = tasks::finish(conn, &task.id, status, Some(output)) {
         log_line(format!("scheduler: finish {} failed: {err}", task.id));
     }
+    // The producer-side fold (R3): a completed task — the worker's natural turn boundary — is
+    // condensed into its producing agents' (agent, workspace) memory. Failures fold too: what
+    // broke and why is exactly what the next task must remember.
+    memory::fold_finished_task(conn, task, status);
     // A terminal failure strands every task waiting on this one (the ready-scan needs each blocker
     // `done`) — cancel them so they don't sit `pending` forever, invisibly.
     if matches!(status, TaskStatus::Failed | TaskStatus::Rejected) {

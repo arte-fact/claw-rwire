@@ -18,6 +18,7 @@ mod admin;
 mod agent_nav;
 mod agent_thread;
 mod files;
+mod memory;
 mod notify;
 mod orchestrate;
 mod prompts;
@@ -971,13 +972,6 @@ fn dispatch_native(
     // turns after the condensed portion are sent raw.
     let memory = db::agent_memory::get(conn, &inference.agent_id, None).unwrap_or_default();
     let role = role_prompt(conn, RunKind::Chat);
-    let system_prompt = run_system_prompt(
-        &role,
-        workspace_dir.as_deref(),
-        &inference.agent_name,
-        inference.agent_prompt.clone(),
-        memory.text().map(|summary| wrap_memory(&summary)),
-    );
 
     // Two views of the transcript: the display thread (chat turns + tool cards) for the
     // UI, and the model view (tools folded into notes, windowed past the summary) for the request.
@@ -992,6 +986,41 @@ fn dispatch_native(
                 time: String::new(),
             })
             .collect();
+    // F→U→W→M: the summary layer takes only what the budget leaves once the identity and the
+    // raw tail are placed and the concierge's working headroom is reserved.
+    let shares = memory::shares_for(RunKind::Chat);
+    let budget =
+        memory::prompt_budget(cached_context(&inference).unwrap_or(DEFAULT_CONTEXT_TOKENS));
+    let brief = workspace_dir
+        .as_deref()
+        .and_then(workspace::read_agent_md)
+        .unwrap_or_default();
+    let fixed = memory::estimate_tokens(
+        role.chars().count()
+            + inference
+                .agent_prompt
+                .as_deref()
+                .unwrap_or("")
+                .chars()
+                .count()
+            + brief.chars().count(),
+    );
+    let unit = memory::estimate_tokens(
+        model_turns
+            .iter()
+            .map(|turn| turn.text.chars().count() + 16)
+            .sum(),
+    );
+    let allowance = memory::memory_allowance(budget, fixed, unit, &shares);
+    let memory_text = memory::fill_memory(allowance, None, memory.text().as_deref())
+        .map(|summary| wrap_memory(&summary));
+    let system_prompt = run_system_prompt(
+        &role,
+        workspace_dir.as_deref(),
+        &inference.agent_name,
+        inference.agent_prompt.clone(),
+        memory_text,
+    );
     let messages = agent::build_messages(&system_prompt, &model_turns);
     let chats = chat::list_chats(conn).unwrap_or_default();
     let proj_chat = chat_id.to_owned();
@@ -1089,21 +1118,6 @@ fn role_prompt(conn: &rusqlite::Connection, run: RunKind) -> String {
         RunKind::Validator => (ROLE_VALIDATOR_KEY, agent::VALIDATOR_PROMPT),
     };
     db::settings::get_or(conn, key, default)
-}
-
-/// The agent's rolling memory in one scope, wrapped as a system-prompt layer, or `None` when
-/// that scope has no memory yet. The injection matrix (R3): chat reads the global row
-/// (`workspace = None`), task and planning runs read their workspace's row, and validator
-/// runs get **no** memory layer at all — fresh eyes per deliverable.
-fn memory_layer(
-    conn: &rusqlite::Connection,
-    agent_id: &str,
-    workspace: Option<&str>,
-) -> Option<String> {
-    db::agent_memory::get(conn, agent_id, workspace)
-        .ok()
-        .and_then(|memory| memory.text())
-        .map(|summary| wrap_memory(&summary))
 }
 
 /// Frame a rolling summary as the "working memory" system-prompt layer.

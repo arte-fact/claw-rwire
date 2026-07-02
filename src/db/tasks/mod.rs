@@ -279,6 +279,31 @@ pub fn list_for_agent(conn: &Connection, agent_id: &str) -> rusqlite::Result<Vec
     rows.collect()
 }
 
+/// The most recent terminally-finished task in `workspace_id` that `agent_id` produced for —
+/// the "last task kept warm" recap source at producer launch (R3). Matched by the run chain
+/// (an ok producer/stage run by this agent), not the assignee column, so owner-defaulted work
+/// counts. Excludes `exclude` (the task being launched) and plan gate tasks.
+pub fn last_finished_for_agent(
+    conn: &Connection,
+    agent_id: &str,
+    workspace_id: &str,
+    exclude: &str,
+) -> rusqlite::Result<Option<Task>> {
+    conn.query_row(
+        &format!(
+            "{SELECT} WHERE workspace_id = ?2 AND id <> ?3 AND is_plan = 0
+               AND status IN ('done', 'failed', 'rejected')
+               AND EXISTS (SELECT 1 FROM task_runs r
+                            WHERE r.task_id = tasks.id AND r.agent_id = ?1 AND r.ok = 1
+                              AND r.role IN ('producer', 'stage'))
+             ORDER BY updated_at DESC, id DESC LIMIT 1"
+        ),
+        params![agent_id, workspace_id, exclude],
+        from_row,
+    )
+    .optional()
+}
+
 pub fn set_status(conn: &Connection, id: &str, status: TaskStatus) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE tasks SET status = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -595,6 +620,57 @@ mod tests {
             t.max_retries, None,
             "no override → the global default applies"
         );
+    }
+
+    /// Record an ok producer run by `agent` on `task_id` (the chain evidence
+    /// `last_finished_for_agent` matches by).
+    fn produced(conn: &Connection, run_id: &str, task_id: &str, agent: &str) {
+        crate::db::task_runs::append(
+            conn,
+            &crate::db::task_runs::NewRun {
+                id: run_id,
+                task_id,
+                position: 0,
+                role: "producer",
+                agent: Some(agent),
+                output: Some("did it"),
+                verdict: None,
+                feedback: None,
+                iteration: 0,
+                ok: true,
+                transcript: None,
+                attempt: 0,
+            },
+        )
+        .expect("run");
+    }
+
+    #[test]
+    fn last_finished_for_agent_picks_the_newest_produced_terminal_task() {
+        let conn = seeded();
+        for id in ["t1", "t2", "t3", "t4"] {
+            create(&conn, &task(id)).expect("create");
+        }
+        // t1: done, produced by ag-a (the expected hit — t2 is newer but by someone else,
+        // t3 is still running, t4 is the task being launched and must be excluded).
+        produced(&conn, "r1", "t1", "ag-a");
+        finish(&conn, "t1", TaskStatus::Done, Some("ok")).expect("finish t1");
+        produced(&conn, "r2", "t2", "ag-b");
+        finish(&conn, "t2", TaskStatus::Done, Some("ok")).expect("finish t2");
+        produced(&conn, "r3", "t3", "ag-a");
+        set_status(&conn, "t3", TaskStatus::Running).expect("running t3");
+        produced(&conn, "r4", "t4", "ag-a");
+        finish(&conn, "t4", TaskStatus::Done, Some("ok")).expect("finish t4");
+
+        let hit = last_finished_for_agent(&conn, "ag-a", "ws", "t4").expect("query");
+        assert_eq!(hit.map(|t| t.id), Some("t1".to_owned()));
+        // A failed task still counts — what broke is worth remembering.
+        finish(&conn, "t3", TaskStatus::Failed, Some("broke")).expect("fail t3");
+        let hit = last_finished_for_agent(&conn, "ag-a", "ws", "t4").expect("query");
+        assert_eq!(hit.map(|t| t.id), Some("t3".to_owned()));
+        // No produced terminal task in another workspace — the wall holds.
+        let miss = last_finished_for_agent(&conn, "ag-a", "elsewhere", "t4").expect("query");
+        assert!(miss.is_none());
     }
 
     #[test]
