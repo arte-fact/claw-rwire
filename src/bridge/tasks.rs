@@ -504,6 +504,61 @@ fn reproject(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str, 
     project_dashboard(conn, shared);
 }
 
+/// The concierge's live status digest (R5): one line per workspace with anything in flight —
+/// running task (and who runs it), gates awaiting the operator, and the queued count. Present
+/// state is **looked up fresh each turn, never remembered** — injected as its own prompt layer
+/// so the concierge stops guessing about in-flight work from stale conversation history.
+/// `None` when every lane is quiet (no layer at all).
+pub(super) fn status_digest(conn: &rusqlite::Connection) -> Option<String> {
+    let names = agent_names(conn);
+    let name_of = |id: &Option<String>| {
+        id.as_deref()
+            .and_then(|id| names.iter().find(|(i, _)| i == id).map(|(_, n)| n.clone()))
+            .unwrap_or_else(|| "the owner".to_owned())
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for ws in crate::db::workspaces::list(conn).unwrap_or_default() {
+        let lane = crate::db::tasks::list_for_workspace(conn, &ws.id).unwrap_or_default();
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(task) = lane.iter().find(|t| t.status == TaskStatus::Running) {
+            parts.push(format!(
+                "running: \"{}\" ({})",
+                task.title,
+                name_of(&task.agent)
+            ));
+        }
+        let awaiting: Vec<&crate::db::tasks::Task> = lane
+            .iter()
+            .filter(|t| t.status == TaskStatus::Awaiting)
+            .collect();
+        if !awaiting.is_empty() {
+            let titles: Vec<String> = awaiting
+                .iter()
+                .map(|t| format!("\"{}\"", t.title))
+                .collect();
+            parts.push(format!("awaiting the user's review: {}", titles.join(", ")));
+        }
+        let queued = lane
+            .iter()
+            .filter(|t| t.status == TaskStatus::Pending)
+            .count();
+        if queued > 0 {
+            parts.push(format!("queued: {queued}"));
+        }
+        if !parts.is_empty() {
+            lines.push(format!("- {} — {}", ws.name, parts.join("; ")));
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "## Right now\n\nLive board state, looked up fresh for this turn — trust it over \
+         anything remembered:\n{}",
+        lines.join("\n")
+    ))
+}
+
 pub(super) fn agent_names(conn: &rusqlite::Connection) -> Vec<(String, String)> {
     agents::list(conn)
         .unwrap_or_default()
@@ -627,5 +682,52 @@ mod tests {
             detail.proposed.is_empty(),
             "no proposed tasks for a non-plan"
         );
+    }
+
+    #[test]
+    fn status_digest_reports_lanes_in_flight_and_none_when_quiet() {
+        let conn = crate::db::open_in_memory().expect("db");
+        agents::create(&conn, "ag-f", "Forge", None, None).expect("agent");
+        workspaces::create(&conn, "studio2", "Studio2").expect("ws");
+        workspaces::create(&conn, "research2", "Research2").expect("ws2");
+        // All quiet → no layer at all.
+        assert_eq!(status_digest(&conn), None);
+
+        tasks::create(
+            &conn,
+            &NewTask {
+                id: "sd1",
+                workspace_id: "studio2",
+                agent: Some("ag-f"),
+                title: "Build the widget",
+                spec: "s",
+                schedule: None,
+                origin_chat: None,
+                max_retries: None,
+            },
+        )
+        .expect("sd1");
+        tasks::set_status(&conn, "sd1", TaskStatus::Running).expect("running");
+        tasks::create(
+            &conn,
+            &NewTask {
+                id: "sd2",
+                workspace_id: "studio2",
+                agent: None,
+                title: "Ship it",
+                spec: "s",
+                schedule: None,
+                origin_chat: None,
+                max_retries: None,
+            },
+        )
+        .expect("sd2");
+        tasks::set_status(&conn, "sd2", TaskStatus::Awaiting).expect("awaiting");
+
+        let digest = status_digest(&conn).expect("digest");
+        assert!(digest.starts_with("## Right now"));
+        assert!(digest.contains("Studio2 — running: \"Build the widget\" (Forge)"));
+        assert!(digest.contains("awaiting the user's review: \"Ship it\""));
+        assert!(!digest.contains("Research2"), "quiet lanes stay out");
     }
 }

@@ -1012,6 +1012,12 @@ fn dispatch_native(
         memory.text().as_deref(),
     )
     .map(|summary| wrap_memory(&summary));
+    // The live status digest (R5): present state is looked up fresh each turn, never
+    // remembered — appended after memory so the concierge narrates what's ACTUALLY in flight.
+    let memory_text = match (memory_text, tasks::status_digest(conn)) {
+        (Some(memory), Some(digest)) => Some(format!("{memory}\n\n{digest}")),
+        (memory, digest) => memory.or(digest),
+    };
     let system_prompt = run_system_prompt(
         &role,
         workspace_dir.as_deref(),
