@@ -138,6 +138,8 @@ fn launch_planning(
             plan_id,
             result,
         });
+        // Keep the context-window cache warm from planning workers too (per-process cache).
+        super::warm_context_cache(&inference);
     });
 }
 

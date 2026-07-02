@@ -88,6 +88,19 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             memory: None,
         });
     };
+    // Resume at the review: if this attempt already produced work at this step and no reviewer
+    // ever returned a verdict on it (the validator run failed in transit, or the server was
+    // restarted between produce and review), re-launch the **validator** with the recorded
+    // output instead of paying for another producer pass. Agent-validated loops only — a
+    // human gate parks for the inbox and must never spawn an agent review.
+    if step.kind == StepKind::Loop && step.validator_kind.as_deref() != Some("human") {
+        let prior =
+            task_runs::list_for_task_attempt(conn, &task.id, task.attempt).unwrap_or_default();
+        if let Some(output) = unreviewed_output(&prior, task.step_position) {
+            let output = output.to_owned();
+            return launch_validator(conn, task, &step, &output);
+        }
+    }
     let role = if step.kind == StepKind::Loop {
         RunRole::Producer
     } else {
@@ -275,6 +288,11 @@ fn spawn_run(meta: RunMeta, role: RunRole, epoch: i64, prepared: Prepared) {
                     result,
                     memory,
                 });
+                // Warm the model's context-window cache off the bridge thread (as the chat
+                // worker does): the cache is per-process, so after a restart the F→U→W→M
+                // budget fell back to the 8k default until a *chat* turn happened — task
+                // launches composed with no memory (the blank iter-2 snapshot observation).
+                super::warm_context_cache(&inference);
             });
         }
         Err(reason) => send(Command::TaskFinished {
@@ -303,6 +321,26 @@ fn run_meta(conn: &rusqlite::Connection, task: &Task) -> RunMeta {
 
 fn env_lookup(key: &str) -> Option<String> {
     std::env::var(key).ok()
+}
+
+/// The produced-but-never-reviewed output of an attempt at `position`, if any — a pure
+/// decision, unit-tested. `Some` when the last successful producer/stage run at this step has
+/// no *verdict-bearing* validator run after it (a validator that failed in transit records
+/// `ok = 0` and no verdict — that's not a review, so the work still awaits one).
+fn unreviewed_output(prior: &[crate::db::task_runs::TaskRun], position: i64) -> Option<&str> {
+    let produced_at = prior.iter().rposition(|run| {
+        run.ok && run.position == position && (run.role == "producer" || run.role == "stage")
+    })?;
+    let reviewed = prior[produced_at + 1..]
+        .iter()
+        .any(|run| run.role == "validator" && run.verdict.is_some());
+    if reviewed {
+        return None;
+    }
+    prior[produced_at]
+        .output
+        .as_deref()
+        .filter(|out| !out.trim().is_empty())
 }
 
 /// The agent that runs a step: the task's **assignee** first (assigning a card to a member must
@@ -1206,6 +1244,60 @@ fn activity(shared: &SharedServerState, task: &Task, kind: ActivityKind, detail:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal run for the resume-at-review decision — only the fields it reads matter.
+    fn resume_run(
+        role: &str,
+        ok: bool,
+        verdict: Option<&str>,
+        output: &str,
+    ) -> crate::db::task_runs::TaskRun {
+        crate::db::task_runs::TaskRun {
+            id: "r".to_owned(),
+            position: 0,
+            role: role.to_owned(),
+            agent: None,
+            output: Some(output.to_owned()),
+            verdict: verdict.map(str::to_owned),
+            feedback: None,
+            iteration: 0,
+            ok,
+            transcript: None,
+            attempt: 0,
+            created_at: String::new(),
+            memory: None,
+        }
+    }
+
+    #[test]
+    fn unreviewed_output_resumes_only_when_the_work_awaits_a_verdict() {
+        // Produced, then the validator died in transit (ok=0, no verdict) → resume at review.
+        let prior = vec![
+            resume_run("producer", true, None, "the work"),
+            resume_run("validator", false, None, "request failed: timed out"),
+        ];
+        assert_eq!(unreviewed_output(&prior, 0), Some("the work"));
+        // Produced and genuinely reviewed (revise) → no resume; the producer runs next.
+        let prior = vec![
+            resume_run("producer", true, None, "the work"),
+            resume_run("validator", true, Some("revise"), "needs work"),
+        ];
+        assert_eq!(unreviewed_output(&prior, 0), None);
+        // Fresh attempt (no producer yet) / failed producer only → no resume.
+        assert_eq!(unreviewed_output(&[], 0), None);
+        let prior = vec![resume_run("producer", false, None, "request failed")];
+        assert_eq!(unreviewed_output(&prior, 0), None);
+        // A later unreviewed pass resumes with the LATEST output, not the reviewed first one.
+        let prior = vec![
+            resume_run("producer", true, None, "v1"),
+            resume_run("validator", true, Some("revise"), "fix it"),
+            resume_run("producer", true, None, "v2"),
+            resume_run("validator", false, None, "timed out"),
+        ];
+        assert_eq!(unreviewed_output(&prior, 0), Some("v2"));
+        // A different step's output doesn't resume this step.
+        assert_eq!(unreviewed_output(&prior, 1), None);
+    }
 
     #[test]
     fn next_action_advances_through_steps_then_completes() {

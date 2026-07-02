@@ -531,6 +531,14 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
     if let Err(err) = chat::collapse_to_primary(conn) {
         log_line(format!("bridge: collapse chats failed: {err}"));
     }
+    // Workers don't survive a restart: a task still `running` at boot is orphaned (its result
+    // will never arrive) and would block its lane forever. Requeue it; the scheduler relaunches
+    // and an already-produced loop pass resumes at its review.
+    match db::tasks::requeue_orphaned_running(conn) {
+        Ok(0) => {}
+        Ok(count) => log_line(format!("bridge: requeued {count} orphaned running task(s)")),
+        Err(err) => log_line(format!("bridge: orphan requeue failed: {err}")),
+    }
     admin::project_registry(conn, shared);
     let chats = chat::list_chats(conn).unwrap_or_default();
     let selected = chats.first().map(|chat| chat.id.clone());
@@ -1221,7 +1229,7 @@ fn cached_context(inference: &resolution::ResolvedInference) -> Option<u32> {
 
 /// Fetch and cache the model's context window from `/models` (best-effort; servers that don't
 /// advertise it are simply not cached). Runs on a worker thread — never the bridge thread.
-fn warm_context_cache(inference: &resolution::ResolvedInference) {
+pub(super) fn warm_context_cache(inference: &resolution::ResolvedInference) {
     if cached_context(inference).is_some() {
         return;
     }

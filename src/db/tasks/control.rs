@@ -51,6 +51,22 @@ pub fn resume(conn: &Connection, id: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Re-queue every task stranded `running` by a dead process (boot-time sweep): workers don't
+/// survive a restart, so a `running` row at boot has no one working on it and would block its
+/// lane forever. Back to `pending` (epoch bumped — a zombie worker's late result is dropped);
+/// the scheduler relaunches, and an already-produced loop pass resumes at its review. Returns
+/// how many were requeued.
+pub fn requeue_orphaned_running(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.execute(
+        &format!(
+            "UPDATE tasks
+                SET status = 'pending', run_epoch = run_epoch + 1, updated_at = {NOW}
+              WHERE status = 'running'"
+        ),
+        [],
+    )
+}
+
 /// Restart a task from a clean slate: back to `pending` at step 0, iteration 0, retry budget
 /// reset, a fresh `attempt` (so the run chain's earlier attempts aren't fed back as context),
 /// result/next_run cleared, and the epoch bumped (drop any in-flight run).
@@ -108,6 +124,7 @@ mod tests {
     use super::super::{
         NewTask, TaskStatus, create, get, list_for_workspace, next_ready, set_status,
     };
+    use super::requeue_orphaned_running;
     use crate::db::{endpoints, open_in_memory, workspaces};
     use rusqlite::Connection;
 
@@ -249,5 +266,19 @@ mod tests {
         set_status(&conn, "plan1", TaskStatus::Pending).expect("pending");
         // `t1` (seeded, pending) is the only runnable task; the plan is never picked.
         assert_eq!(next_ready(&conn, "ws").expect("scan").unwrap().id, "t1");
+    }
+
+    #[test]
+    fn boot_sweep_requeues_only_orphaned_running_tasks() {
+        let conn = seeded();
+        set_status(&conn, "t1", TaskStatus::Running).expect("running");
+        let epoch_before = get(&conn, "t1").expect("get").unwrap().run_epoch;
+        assert_eq!(requeue_orphaned_running(&conn).expect("sweep"), 1);
+        let task = get(&conn, "t1").expect("get").unwrap();
+        assert_eq!(task.status, TaskStatus::Pending);
+        // Epoch bumped: a zombie worker's late result must be dropped on arrival.
+        assert_eq!(task.run_epoch, epoch_before + 1);
+        // Nothing else was touched; a second sweep is a no-op.
+        assert_eq!(requeue_orphaned_running(&conn).expect("sweep"), 0);
     }
 }
