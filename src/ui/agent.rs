@@ -11,8 +11,8 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
-use rwire_components::{Input, Text};
+use rwire::{El, ElementBuilder, St, el, handler, renderer};
+use rwire_components::{Composer, Text};
 
 use crate::bridge::{self, Command};
 use crate::state::{AgentThread, AgentThreadItem, AgentTurn, App, LiveItem};
@@ -68,28 +68,16 @@ fn steer_bar(app: &App) -> ElementBuilder {
             St::FlexCol,
             St::ItemsCenter,
         ])
-        .append([el(El::Form)
-            .on(Ev::Submit, send_steer())
-            .st([
-                St::MaxW60rem,
-                St::WFull,
-                St::DisplayFlex,
-                St::ItemsCenter,
-                St::GapSm,
-            ])
-            .append([
-                Input::text()
-                    .id(field_id)
-                    .name("message")
-                    .placeholder(format!(
-                        "Message {} — delivered at its next pass…",
-                        thread.agent_name
-                    ))
-                    .autocomplete("off")
-                    .build()
-                    .st([St::Flex1]),
-                crate::ui::widgets::accent_submit(icons::Icon::Check, "Send"),
-            ])])
+        .append([Composer::new()
+            .id(field_id)
+            .placeholder(format!(
+                "Message {} — delivered at its next pass…",
+                thread.agent_name
+            ))
+            .compact(true)
+            .on_submit(send_steer())
+            .build()
+            .st([St::MaxW60rem, St::WFull])])
 }
 
 #[handler]

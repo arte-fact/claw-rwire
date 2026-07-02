@@ -5,8 +5,8 @@
 //! flex/scroll container, never act as one.
 
 use rwire::style::Style;
-use rwire::{At, Av, El, ElementBuilder, Ev, Pc, St, el, handler, icons, renderer};
-use rwire_components::{Spinner, SpinnerSize, Text};
+use rwire::{El, ElementBuilder, St, el, handler, renderer};
+use rwire_components::{Composer, Spinner, SpinnerSize, Text};
 
 use super::thread;
 use crate::bridge::{self, Command};
@@ -254,96 +254,12 @@ fn sending_row() -> ElementBuilder {
 /// clears it without a dedicated client opcode.
 #[renderer]
 fn composer(app: &App) -> ElementBuilder {
-    let field_id = format!("composer-{}", app.messages.len());
-    el(El::Form)
-        .on(Ev::Submit, send_message())
-        .st([
-            St::DisplayFlex,
-            St::FlexCol,
-            St::GapSm,
-            St::BgSurface,
-            St::BorderDefault,
-            St::RoundedLg,
-            St::PMd,
-            St::ShadowLg,
-        ])
-        .pseudo(Pc::FocusWithin, [St::BorderAccent])
-        .append([message_input(&field_id), actions_row()])
-}
-
-fn message_input(field_id: &str) -> ElementBuilder {
-    // A textarea so messages can be multiline. `field-sizing: content` auto-grows it to the
-    // text (starting at one row), capped at `max-height` where it scrolls. `data-enter-submit`
-    // opts into rwire's runtime behavior: Enter submits the form (→ the Submit handler), and
-    // Shift+Enter inserts a newline — the standard chat convention.
-    el(El::Textarea)
-        .id(field_id)
-        .at_str(At::Name, "message")
-        .at_str(At::Rows, "1")
-        .at(At::Autocomplete, Av::Off)
-        .data("enter-submit", "1")
-        .at_str(At::Placeholder, "Message claw…")
-        .st([
-            St::WFull,
-            St::TextDefault,
-            St::BgTransparent,
-            St::BorderNone,
-            St::OutlineNone,
-            St::ResizeNone,
-            St::OverflowYAuto,
-            St::FieldSizingContent,
-        ])
-        // `padding`/`max-height: 40vh` stay inline (genuinely dynamic); field-sizing has a token.
-        .style(
-            Style::new()
-                .set("padding", "0.25rem")
-                .set("max-height", "40vh"),
-        )
-}
-
-/// The composer's bottom row: a left tools slot and the Send button on the right.
-fn actions_row() -> ElementBuilder {
-    el(El::Div)
-        .st([St::DisplayFlex, St::ItemsCenter, St::JustifyBetween])
-        .append([composer_tools(), send_button()])
-}
-
-/// Left-side slot for composer actions (attach, tools, model picker) — for now a muted hint
-/// of the keyboard convention. New buttons drop in here without disturbing the layout.
-fn composer_tools() -> ElementBuilder {
-    el(El::Div)
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapXs,
-            St::TextXs,
-            St::TextLow,
-        ])
-        .append([el(El::Span).text("⏎ send · ⇧⏎ newline")])
-}
-
-fn send_button() -> ElementBuilder {
-    el(El::Button)
-        .at(At::Type, Av::Submit)
-        .at_str(At::AriaLabel, "Send")
-        .data("act", "send")
-        .st([
-            St::BorderNone,
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::PxMd,
-            St::PySm,
-            St::RoundedMd,
-            St::BgAccent,
-            St::TextOnAccent,
-            St::CursorPointer,
-        ])
-        .hover([St::BgAccentHover])
-        .append([
-            el(El::Span).text("Send"),
-            icons::icon_sized(icons::Icon::ArrowUp, 16),
-        ])
+    Composer::new()
+        .id(format!("composer-{}", app.messages.len()))
+        .placeholder("Message claw…")
+        .hint("⏎ send · ⇧⏎ newline")
+        .on_submit(send_message())
+        .build()
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
