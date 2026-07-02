@@ -3,7 +3,7 @@
 
 use rwire::style::Style;
 use rwire::{At, Av, El, ElementBuilder, HandlerSpec, St, el, icons};
-use rwire_components::{Button, ButtonSize, Text};
+use rwire_components::{Button, ButtonSize, Chip, Text};
 use rwire_markdown::{Markdown, ProseSize};
 
 /// Render model output as **compact** markdown. The markdown component's heading scale
@@ -165,27 +165,13 @@ pub fn md_editor(
         ])
 }
 
-/// A selectable chip (tabs, filters, view toggles): accent when active, muted with a hover
-/// lift otherwise. Chain `.data(...)` for the handler's payload.
+/// A selectable chip (tabs, filters, view toggles) — the rwire `Chip` component, born here
+/// and promoted upstream. Chain `.data(...)` for the handler's payload.
 pub fn chip(label: &str, active: bool, on_click: HandlerSpec) -> ElementBuilder {
-    let chip = el(El::Button)
-        .at(At::Type, Av::Button)
-        .on(rwire::Ev::Click, on_click)
-        .st([
-            St::FontInheritAll,
-            St::TextXs,
-            St::PxSm,
-            St::PyXs,
-            St::Rounded0,
-            St::BorderDefault,
-            St::CursorPointer,
-        ])
-        .text(label);
-    if active {
-        chip.st([St::BgAccent, St::TextOnAccent, St::BorderAccent])
-    } else {
-        chip.st([St::BgApp, St::TextMuted]).hover([St::TextHigh])
-    }
+    Chip::new(label.to_owned())
+        .active(active)
+        .on_click(on_click)
+        .build()
 }
 
 /// A ghost button: muted bordered text that lifts on hover — for inline actions that must

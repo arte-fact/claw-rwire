@@ -8,7 +8,10 @@ use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 use crate::bridge::{self, Command};
 use crate::state::{App, TaskView, WorkspaceView};
 use crate::ui::widgets::accent_submit;
-use rwire_components::{Drawer, DrawerPosition, Input, Select, Text, Textarea};
+use rwire_components::{
+    Badge, BadgeFill, BadgeIntent, BadgeShape, Drawer, DrawerPosition, Input, Select, Text,
+    Textarea,
+};
 
 mod board;
 mod list;
@@ -344,17 +347,22 @@ fn archive_task(app: &mut App, ctx: &EventContext) {
 }
 
 fn status_badge(status: &str) -> ElementBuilder {
-    // A sharp, outlined status chip (the Badge component is a fixed `RoundedFull` pill, which can't
-    // go square — and the outlined chip matches rust-claw's original status look anyway).
-    let color = match status {
-        "running" => St::TextAccent,
-        "done" => St::TextHigh,
-        "failed" => St::TextError,
-        _ => St::TextMuted,
+    // The rwire Badge, square + outline (axes this app pushed upstream), with semantic
+    // intents: running rides the accent, done reads success, failed reads error, and a
+    // parked `awaiting` warns.
+    let intent = match status {
+        "running" => BadgeIntent::Primary,
+        "done" => BadgeIntent::Success,
+        "failed" | "rejected" => BadgeIntent::Error,
+        "awaiting" => BadgeIntent::Warning,
+        _ => BadgeIntent::Default,
     };
-    el(El::Span)
-        .st([St::TextXs, color, St::BorderDefault, St::Rounded0, St::PxXs])
-        .text(status)
+    Badge::new()
+        .intent(intent)
+        .shape(BadgeShape::Square)
+        .fill(BadgeFill::Outline)
+        .text(status.to_owned())
+        .build()
 }
 
 #[handler]

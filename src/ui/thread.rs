@@ -5,27 +5,15 @@
 //! same.
 
 use rwire::{El, ElementBuilder, St, el};
+use rwire_components::ChatScroll;
 
 use super::chat::accent_bar;
 
-/// The scrolling transcript area. `column-reverse` is the no-JS autoscroll: the bottom is the
-/// scroll origin, so the view stays pinned to the newest entry as content grows — yet a reader
-/// who scrolls up keeps their place (new entries land below, off screen). The inner column
-/// carries `MbAuto` (bottom auto margin = push to the *visual top* in a reversed column) so an
-/// empty/short thread reads from the top instead of floating at the bottom of a void. An auto
-/// margin — NOT `justify-content` — because justify on a scroll container makes overflowing
-/// content unreachable (the "threads scrolling is broken" regression); an auto margin collapses
-/// to 0 once content overflows, so the bottom pin takes over untouched.
+/// The scrolling transcript area — rwire's `ChatScroll` (the column-reverse bottom-pinned
+/// autoscroll, promoted upstream from this app after the "threads scrolling is broken"
+/// regression taught us the auto-margin-not-justify-content rule).
 pub fn scroll(inner: ElementBuilder) -> ElementBuilder {
-    el(El::Div)
-        .st([
-            St::MinH0,
-            St::OverflowAuto,
-            St::Flex1,
-            St::DisplayFlex,
-            St::FlexColReverse,
-        ])
-        .append([inner.st([St::MbAuto])])
+    ChatScroll::new(inner).build()
 }
 
 /// An authored entry: a header (`author` in `author_color`, an optional phase `tag` like
