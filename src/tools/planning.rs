@@ -120,12 +120,33 @@ impl PlanningToolbox {
             });
         }
         let titles: Vec<String> = items.iter().map(|item| item.title.clone()).collect();
+        // A re-proposal that repeats an existing title is the model revising its breakdown —
+        // replace the proposal instead of appending (the live failure: a "merged" second call
+        // duplicated the plan into 5 overlapping cards). Disjoint calls still append, so the
+        // chunked style (one call per task, blockers across chunks) keeps working.
+        let existing = proposal::get(conn, plan_id).unwrap_or_default();
+        let overlaps = items.iter().any(|item| {
+            existing
+                .iter()
+                .any(|prior| prior.title.eq_ignore_ascii_case(&item.title))
+        });
+        if overlaps && let Err(err) = proposal::clear(conn, plan_id) {
+            return ToolOutcome::error(format!("error: propose_tasks failed: {err}"));
+        }
         match proposal::append(conn, plan_id, &items) {
-            Ok(total) => ToolOutcome::text(format!(
-                "proposed {} task(s) ({total} in the plan): {}",
-                items.len(),
-                titles.join(", ")
-            )),
+            Ok(total) => ToolOutcome::text(if overlaps {
+                format!(
+                    "replaced the earlier proposal with {} task(s): {}",
+                    items.len(),
+                    titles.join(", ")
+                )
+            } else {
+                format!(
+                    "proposed {} task(s) ({total} in the plan): {}",
+                    items.len(),
+                    titles.join(", ")
+                )
+            }),
             Err(err) => ToolOutcome::error(format!("error: propose_tasks failed: {err}")),
         }
     }
@@ -349,6 +370,29 @@ mod tests {
         let proposal = proposal_of(&tb);
         assert_eq!(proposal.len(), 2);
         assert_eq!(proposal[1].blockers, vec!["A".to_owned()]);
+    }
+
+    #[test]
+    fn a_reproposal_repeating_a_title_replaces_instead_of_appending() {
+        let tb = toolbox();
+        assert!(
+            tb.call(
+                PROPOSE_TASKS,
+                r#"{"tasks":[{"title":"Implement","spec":"s"},{"title":"Add tests","spec":"s"},{"title":"Review","spec":"s"}]}"#
+            )
+            .ok
+        );
+        // The model reconsiders and submits a merged 2-task list re-using a title — the live
+        // failure appended both lists into 5 overlapping cards. Now it replaces.
+        let out = tb.call(
+            PROPOSE_TASKS,
+            r#"{"tasks":[{"title":"Implement with tests","spec":"s"},{"title":"review","spec":"s"}]}"#,
+        );
+        assert!(out.ok, "{}", out.result);
+        assert!(out.result.contains("replaced"));
+        let proposal = proposal_of(&tb);
+        assert_eq!(proposal.len(), 2);
+        assert_eq!(proposal[0].title, "Implement with tests");
     }
 
     #[test]
