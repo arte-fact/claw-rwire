@@ -10,7 +10,7 @@ use rwire_components::{Spinner, SpinnerSize, Text};
 
 use super::thread;
 use crate::bridge::{self, Command};
-use crate::state::{App, ChatMemory, ChatMessage, MessageRole, TranscriptItem};
+use crate::state::{App, ChatMessage, MessageRole, TranscriptItem};
 use crate::ui::memory;
 
 // The shared reading measure for conversation surfaces is `St::MaxW60rem` + `St::MxAuto` —
@@ -90,15 +90,18 @@ fn transcript(app: &App) -> ElementBuilder {
         // Concierge parity (R3.5 M3): the chat is the concierge's thread, so it opens on the
         // same fold line + memory card the agent pages have — the global scope row.
         let mut messages: Vec<ElementBuilder> = Vec::new();
-        if let Some(mem) = app.chat_memory.as_ref() {
-            if !mem.summary.trim().is_empty() {
-                messages.push(memory::muted_line(
-                    "· older messages condensed into memory ·",
-                ));
-            }
-            if !mem.summary.trim().is_empty() || mem.paused {
-                messages.push(chat_memory_card(mem));
-            }
+        if let Some(mem) = app.chat_memory.as_ref()
+            && !mem.summary.trim().is_empty()
+        {
+            let line = if mem.last_fold.is_empty() {
+                "· older messages condensed into memory ·".to_owned()
+            } else {
+                format!(
+                    "· older messages condensed into memory · last fold {} ·",
+                    mem.last_fold
+                )
+            };
+            messages.push(memory::muted_line(&line));
         }
         messages.extend(
             app.messages
@@ -134,69 +137,6 @@ fn transcript(app: &App) -> ElementBuilder {
             St::GapLg,
         ])
         .append(items)
-}
-
-/// The concierge's memory card (shared widget), targeting the web agent's **global** row.
-fn chat_memory_card(mem: &ChatMemory) -> ElementBuilder {
-    let mut meta = format!("what {} carries across everything", mem.agent_name);
-    if !mem.last_fold.is_empty() {
-        meta.push_str(&format!(" · last fold {}", mem.last_fold));
-    }
-    if mem.paused {
-        meta.push_str(" · ⏸ auto-fold paused");
-    }
-    memory::memory_card(memory::MemoryCard {
-        id_suffix: format!("chat-{}", mem.agent_id),
-        meta,
-        summary: &mem.summary,
-        paused: mem.paused,
-        on_save: chat_save_memory(),
-        on_clear: chat_clear_memory(),
-        on_pause: chat_toggle_memory_pause(),
-    })
-}
-
-/// The concierge's global scope — every chat-page memory mutation targets (web agent, None).
-fn chat_scope(app: &App) -> Option<String> {
-    app.chat_memory.as_ref().map(|mem| mem.agent_id.clone())
-}
-
-#[handler]
-fn chat_save_memory(app: &mut App, ctx: &EventContext) {
-    let Some(agent_id) = chat_scope(app) else {
-        return;
-    };
-    let summary = ctx.field("summary").unwrap_or_default().to_owned();
-    bridge::send(Command::SetMemory {
-        agent_id,
-        workspace: None,
-        summary,
-    });
-}
-
-#[handler]
-fn chat_clear_memory(app: &mut App, ctx: &EventContext) {
-    let _ = ctx;
-    let Some(agent_id) = chat_scope(app) else {
-        return;
-    };
-    bridge::send(Command::ClearMemory {
-        agent_id,
-        workspace: None,
-    });
-}
-
-#[handler]
-fn chat_toggle_memory_pause(app: &mut App, ctx: &EventContext) {
-    let Some(agent_id) = chat_scope(app) else {
-        return;
-    };
-    let paused = ctx.data("paused") == Some("true");
-    bridge::send(Command::SetMemoryPaused {
-        agent_id,
-        workspace: None,
-        paused,
-    });
 }
 
 /// A 2px accent strip — rust-claw's left-bar marker for agent turns / active rows.

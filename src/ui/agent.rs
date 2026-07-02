@@ -11,10 +11,9 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, St, el, handler, renderer};
+use rwire::{El, ElementBuilder, St, el, renderer};
 use rwire_components::Text;
 
-use crate::bridge::{self, Command};
 use crate::state::{AgentThread, AgentThreadItem, AgentTurn, App, LiveItem};
 use crate::ui::memory;
 use crate::ui::run_chain::verdict_chip_of;
@@ -106,9 +105,6 @@ fn timeline(app: &App) -> ElementBuilder {
             if let Some(line) = fold_line(thread) {
                 rows.push(line);
             }
-            if !thread.memory.trim().is_empty() || thread.memory_paused {
-                rows.push(memory_card(thread));
-            }
             for item in &thread.items {
                 rows.push(match item {
                     AgentThreadItem::Turn(turn) => turn_row(turn),
@@ -182,68 +178,6 @@ fn fold_line(thread: &AgentThread) -> Option<ElementBuilder> {
         (false, n) => format!("· {n} earlier turns not shown ·"),
     };
     Some(memory::muted_line(&text))
-}
-
-/// The page's memory card (shared widget), targeting the thread's (agent, workspace) row.
-fn memory_card(thread: &AgentThread) -> ElementBuilder {
-    let mut meta = format!("what {} remembers here", thread.agent_name);
-    if thread.memory_paused {
-        meta.push_str(" · ⏸ auto-fold paused");
-    }
-    memory::memory_card(memory::MemoryCard {
-        id_suffix: format!("{}-{}", thread.agent_id, thread.workspace_id),
-        meta,
-        summary: &thread.memory,
-        paused: thread.memory_paused,
-        on_save: save_memory(),
-        on_clear: clear_memory(),
-        on_pause: toggle_memory_pause(),
-    })
-}
-
-/// The open thread's (agent, workspace) pair — every memory mutation targets that scope row.
-fn open_scope(app: &App) -> Option<(String, String)> {
-    app.agent_thread
-        .as_ref()
-        .map(|thread| (thread.agent_id.clone(), thread.workspace_id.clone()))
-}
-
-#[handler]
-fn save_memory(app: &mut App, ctx: &EventContext) {
-    let Some((agent_id, workspace)) = open_scope(app) else {
-        return;
-    };
-    let summary = ctx.field("summary").unwrap_or_default().to_owned();
-    bridge::send(Command::SetMemory {
-        agent_id,
-        workspace: Some(workspace),
-        summary,
-    });
-}
-
-#[handler]
-fn clear_memory(app: &mut App, ctx: &EventContext) {
-    let _ = ctx;
-    let Some((agent_id, workspace)) = open_scope(app) else {
-        return;
-    };
-    bridge::send(Command::ClearMemory {
-        agent_id,
-        workspace: Some(workspace),
-    });
-}
-
-#[handler]
-fn toggle_memory_pause(app: &mut App, ctx: &EventContext) {
-    let Some((agent_id, workspace)) = open_scope(app) else {
-        return;
-    };
-    let paused = ctx.data("paused") == Some("true");
-    bridge::send(Command::SetMemoryPaused {
-        agent_id,
-        workspace: Some(workspace),
-        paused,
-    });
 }
 
 /// One conversational turn, on the shared [`thread::entry`] vocabulary: author + phase tag +

@@ -53,25 +53,6 @@ pub fn get(conn: &Connection, agent_id: &str, workspace: Option<&str>) -> rusqli
     .map(Option::unwrap_or_default)
 }
 
-/// Freeze or resume auto-summarization for one scope (operator control). Upserts so it works
-/// before any summary exists.
-pub fn set_paused(
-    conn: &Connection,
-    agent_id: &str,
-    workspace: Option<&str>,
-    paused: bool,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO agent_memory
-           (agent_group_id, workspace_id, summary, summarized_through_id, paused, updated_at)
-         VALUES (?1, ?2, '', 0, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-         ON CONFLICT(agent_group_id, workspace_id) DO UPDATE SET
-           paused = excluded.paused, updated_at = excluded.updated_at",
-        params![agent_id, scope_key(workspace), i64::from(paused)],
-    )?;
-    Ok(())
-}
-
 /// One scope row for the memory overview (R3.5 M5): whose memory, where, how big, how fresh.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeRow {
@@ -194,29 +175,6 @@ mod tests {
         let conn = seeded();
         set(&conn, "ag-1", None, "   \n\t", 5).expect("set");
         assert_eq!(get(&conn, "ag-1", None).expect("get").text(), None);
-    }
-
-    #[test]
-    fn pause_round_trips_and_survives_a_summary_write() {
-        let conn = seeded();
-        set_paused(&conn, "ag-1", None, true).expect("pause");
-        assert!(get(&conn, "ag-1", None).expect("get").paused);
-        // A later summarizer write must not unfreeze the operator's pause.
-        set(&conn, "ag-1", None, "folded something", 10).expect("set");
-        let memory = get(&conn, "ag-1", None).expect("get");
-        assert!(memory.paused, "pause preserved across a summary write");
-        assert_eq!(memory.summary, "folded something");
-        set_paused(&conn, "ag-1", None, false).expect("resume");
-        assert!(!get(&conn, "ag-1", None).expect("get").paused);
-    }
-
-    #[test]
-    fn pause_is_per_scope() {
-        let conn = seeded();
-        set_paused(&conn, "ag-1", Some("ws-a"), true).expect("pause ws-a");
-        assert!(get(&conn, "ag-1", Some("ws-a")).expect("get").paused);
-        assert!(!get(&conn, "ag-1", None).expect("get").paused);
-        assert!(!get(&conn, "ag-1", Some("ws-b")).expect("get").paused);
     }
 
     #[test]

@@ -306,23 +306,6 @@ pub enum Command {
         note: String,
         source: Option<String>,
     },
-    /// Operator memory controls (the Prompts inspector's memory panel): overwrite the summary
-    /// (keeping the marker), clear it (reset summary + marker), or pause/resume auto-summary.
-    /// Each acts on one scope row (`workspace` as in [`Command::UpdateMemory`]).
-    SetMemory {
-        agent_id: String,
-        workspace: Option<String>,
-        summary: String,
-    },
-    ClearMemory {
-        agent_id: String,
-        workspace: Option<String>,
-    },
-    SetMemoryPaused {
-        agent_id: String,
-        workspace: Option<String>,
-        paused: bool,
-    },
     /// Save a workspace's `AGENT.md` brief (the Overview editor).
     SaveBrief {
         workspace: String,
@@ -825,29 +808,6 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
                 &note,
                 &summary,
             );
-            project_memory_surfaces(conn, shared);
-        }
-        Command::SetMemory {
-            agent_id,
-            workspace,
-            summary,
-        } => {
-            memory::operator_edit(conn, &agent_id, workspace.as_deref(), &summary);
-            project_memory_surfaces(conn, shared);
-        }
-        Command::ClearMemory {
-            agent_id,
-            workspace,
-        } => {
-            memory::operator_clear(conn, &agent_id, workspace.as_deref());
-            project_memory_surfaces(conn, shared);
-        }
-        Command::SetMemoryPaused {
-            agent_id,
-            workspace,
-            paused,
-        } => {
-            memory::operator_set_paused(conn, &agent_id, workspace.as_deref(), paused);
             project_memory_surfaces(conn, shared);
         }
         Command::SaveBrief { workspace, content } => {

@@ -156,11 +156,11 @@ fn run_chip(run: RunKind, active: bool) -> ElementBuilder {
     }
 }
 
-/// The Working-memory layer, made operator-controllable: a size/scope/paused line, an editable
-/// summary (Save overwrites it), Clear (reset), and Pause/Resume (freeze auto-summary). All act
-/// on the scope row the selected run kind actually reads. A validator run composes no memory
-/// layer, so the card explains that instead of offering an editor.
+/// The Working-memory layer, read-only: memory is **fully automatic** (folds at task/turn
+/// boundaries, budget-fitted at compose time) — the inspector shows what the run receives and
+/// where it came from, nothing to manage.
 fn memory_card(agent: Option<&str>, preview: &PromptPreview) -> ElementBuilder {
+    let _ = agent;
     if !preview.memory_applies {
         return card(
             "4 · Working memory",
@@ -169,51 +169,15 @@ fn memory_card(agent: Option<&str>, preview: &PromptPreview) -> ElementBuilder {
                 .text(&preview.memory_meta),
         );
     }
-    let mut meta = preview.memory_meta.clone();
-    if preview.memory_paused {
-        meta.push_str(" · ⏸ paused");
-    }
-    let editor = el(El::Form)
-        .on(Ev::Submit, save_memory())
-        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
-        .append([
-            Textarea::new()
-                .id(format!("mem-{}", agent.unwrap_or("none")))
-                .name("summary")
-                .rows(5)
-                .placeholder("(empty — fills as the conversation grows)")
-                .value(preview.memory.clone())
-                .build(),
-            el(El::Div)
-                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-                .append([
-                    accent_submit(icons::Icon::Check, "Save"),
-                    plain_button("Clear", clear_memory(), None),
-                    plain_button(
-                        if preview.memory_paused {
-                            "Resume"
-                        } else {
-                            "Pause"
-                        },
-                        toggle_pause(),
-                        Some((
-                            "paused",
-                            if preview.memory_paused {
-                                "false"
-                            } else {
-                                "true"
-                            },
-                        )),
-                    ),
-                ]),
-        ]);
     card(
         "4 · Working memory",
         el(El::Div)
             .st([St::DisplayFlex, St::FlexCol, St::GapSm])
             .append([
-                el(El::Div).st([St::TextXs, St::TextMuted]).text(&meta),
-                editor,
+                el(El::Div)
+                    .st([St::TextXs, St::TextMuted])
+                    .text(&preview.memory_meta),
+                text_block(&preview.memory),
             ]),
     )
 }
@@ -232,6 +196,14 @@ fn plain_button(
         Some((key, value)) => button.data(key, value),
         None => button,
     }
+}
+
+/// Re-compose the preview after a role edit, so the assembled layer reflects it.
+fn refresh(app: &App) {
+    bridge::send(Command::LoadPrompt {
+        agent: app.prompt_agent.clone(),
+        run: app.prompt_run,
+    });
 }
 
 /// A short "Agent · run · workspace" context line above the layers.
@@ -276,62 +248,6 @@ fn pick_run(app: &mut App, ctx: &EventContext) {
             run: RunKind::from_str(run),
         });
     }
-}
-
-/// The scope row the open preview's run kind reads — memory mutations must hit the same row.
-fn memory_scope(app: &App) -> Option<String> {
-    app.prompt_preview
-        .as_ref()
-        .and_then(|preview| preview.memory_scope.clone())
-}
-
-#[handler]
-fn save_memory(app: &mut App, ctx: &EventContext) {
-    let Some(agent_id) = app.prompt_agent.clone() else {
-        return;
-    };
-    let summary = ctx.field("summary").unwrap_or_default().to_owned();
-    bridge::send(Command::SetMemory {
-        agent_id,
-        workspace: memory_scope(app),
-        summary,
-    });
-    refresh(app);
-}
-
-#[handler]
-fn clear_memory(app: &mut App, ctx: &EventContext) {
-    let _ = ctx;
-    let Some(agent_id) = app.prompt_agent.clone() else {
-        return;
-    };
-    bridge::send(Command::ClearMemory {
-        agent_id,
-        workspace: memory_scope(app),
-    });
-    refresh(app);
-}
-
-#[handler]
-fn toggle_pause(app: &mut App, ctx: &EventContext) {
-    let Some(agent_id) = app.prompt_agent.clone() else {
-        return;
-    };
-    let paused = ctx.data("paused") == Some("true");
-    bridge::send(Command::SetMemoryPaused {
-        agent_id,
-        workspace: memory_scope(app),
-        paused,
-    });
-    refresh(app);
-}
-
-/// Re-compose the preview after a memory mutation, so the panel reflects it.
-fn refresh(app: &App) {
-    bridge::send(Command::LoadPrompt {
-        agent: app.prompt_agent.clone(),
-        run: app.prompt_run,
-    });
 }
 
 #[handler]
