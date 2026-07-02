@@ -524,10 +524,7 @@ pub(crate) fn review_gate(task_id: &str) -> ElementBuilder {
                 .on(Ev::Submit, request_changes())
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
-                    el(El::Input)
-                        .at(At::Type, Av::Hidden)
-                        .at_str(At::Name, "task")
-                        .at_str(At::Value, task_id),
+                    crate::ui::widgets::hidden("task", task_id),
                     Input::text()
                         .name("feedback")
                         .placeholder("What to change…")

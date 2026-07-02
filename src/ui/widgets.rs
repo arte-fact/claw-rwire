@@ -224,3 +224,22 @@ pub fn bare_button(on_click: HandlerSpec) -> ElementBuilder {
         .on(rwire::Ev::Click, on_click)
         .st([St::BgTransparent, St::BorderNone, St::CursorPointer])
 }
+
+/// A labeled control: a muted caption over the input/select, wrapped in a `<label>` so
+/// clicking the caption focuses the control.
+pub fn labeled(label: &str, control: ElementBuilder) -> ElementBuilder {
+    el(El::Label)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
+        .append([
+            el(El::Span).st([St::TextXs, St::TextMuted]).text(label),
+            control,
+        ])
+}
+
+/// A hidden form field — the id/name a submit handler needs that isn't user-visible.
+pub fn hidden(name: &str, value: &str) -> ElementBuilder {
+    el(El::Input)
+        .at(At::Type, Av::Hidden)
+        .at_str(At::Name, name)
+        .at_str(At::Value, value)
+}

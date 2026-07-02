@@ -3,7 +3,7 @@
 //! receives. Read-only transparency — composed by the bridge via `Command::LoadPrompt`.
 
 use rwire::style::Style;
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, PromptPreview, RunKind};
@@ -98,10 +98,7 @@ fn role_default_card(label: &str, run: RunKind, value: &str) -> ElementBuilder {
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
             // The run rides as a hidden field (Submit doesn't expose data-attrs).
-            el(El::Input)
-                .at(At::Type, Av::Hidden)
-                .at_str(At::Name, "run")
-                .at_str(At::Value, run.as_str()),
+            crate::ui::widgets::hidden("run", run.as_str()),
             Textarea::new()
                 .id(format!("role-{}", run.as_str()))
                 .name("prompt")

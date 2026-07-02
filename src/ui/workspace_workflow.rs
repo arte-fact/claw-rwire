@@ -8,7 +8,7 @@ use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, StepForm, StepView, WorkspaceView};
-use crate::ui::widgets::page_header;
+use crate::ui::widgets::{hidden, labeled, page_header};
 use rwire_components::{
     Alert, Button, ButtonSize, Drawer, DrawerPosition, Input, Select, Textarea,
 };
@@ -325,22 +325,6 @@ fn add_btn(label: &str, on_click: rwire::HandlerSpec) -> ElementBuilder {
 }
 
 // ── small form helpers ─────────────────────────────────────────────────────────
-
-fn labeled(label: &str, field: ElementBuilder) -> ElementBuilder {
-    el(El::Label)
-        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
-        .append([
-            el(El::Span).st([St::TextXs, St::TextMuted]).text(label),
-            field,
-        ])
-}
-
-fn hidden(name: &str, value: &str) -> ElementBuilder {
-    el(El::Input)
-        .at(At::Type, Av::Hidden)
-        .at_str(At::Name, name)
-        .at_str(At::Value, value)
-}
 
 fn text_field(name: &str, value: &str, placeholder: &str) -> ElementBuilder {
     Input::text()
