@@ -290,24 +290,30 @@ pub enum Command {
         chat: String,
         text: String,
     },
-    /// A summarizer worker folded older turns into an agent's rolling memory — persist the
-    /// new summary and how far it has consumed the transcript.
+    /// A summarizer worker folded older context into an agent's rolling memory — persist the
+    /// new summary and how far it has consumed the transcript. `workspace` picks the scope row:
+    /// `None` is the agent's global (concierge) memory, `Some` a workspace-scoped one.
     UpdateMemory {
         agent_id: String,
+        workspace: Option<String>,
         summary: String,
         summarized_through: i64,
     },
     /// Operator memory controls (the Prompts inspector's memory panel): overwrite the summary
     /// (keeping the marker), clear it (reset summary + marker), or pause/resume auto-summary.
+    /// Each acts on one scope row (`workspace` as in [`Command::UpdateMemory`]).
     SetMemory {
         agent_id: String,
+        workspace: Option<String>,
         summary: String,
     },
     ClearMemory {
         agent_id: String,
+        workspace: Option<String>,
     },
     SetMemoryPaused {
         agent_id: String,
+        workspace: Option<String>,
         paused: bool,
     },
     /// Save a workspace's `AGENT.md` brief (the Overview editor).
@@ -788,30 +794,52 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::Notified { chat, text } => notified(conn, shared, &chat, &text),
         Command::UpdateMemory {
             agent_id,
+            workspace,
             summary,
             summarized_through,
         } => {
-            if let Err(err) = db::agent_memory::set(conn, &agent_id, &summary, summarized_through) {
+            if let Err(err) = db::agent_memory::set(
+                conn,
+                &agent_id,
+                workspace.as_deref(),
+                &summary,
+                summarized_through,
+            ) {
                 log_line(format!("bridge: update memory failed: {err}"));
             }
         }
-        Command::SetMemory { agent_id, summary } => {
+        Command::SetMemory {
+            agent_id,
+            workspace,
+            summary,
+        } => {
             // Keep the marker so the windowing stays consistent with the edited summary.
-            let marker = db::agent_memory::get(conn, &agent_id)
+            let scope = workspace.as_deref();
+            let marker = db::agent_memory::get(conn, &agent_id, scope)
                 .map(|m| m.summarized_through)
                 .unwrap_or(0);
-            if let Err(err) = db::agent_memory::set(conn, &agent_id, summary.trim(), marker) {
+            if let Err(err) = db::agent_memory::set(conn, &agent_id, scope, summary.trim(), marker)
+            {
                 log_line(format!("bridge: set memory failed: {err}"));
             }
         }
-        Command::ClearMemory { agent_id } => {
+        Command::ClearMemory {
+            agent_id,
+            workspace,
+        } => {
             // Reset the summary and the marker — the next turn re-windows from scratch.
-            if let Err(err) = db::agent_memory::set(conn, &agent_id, "", 0) {
+            if let Err(err) = db::agent_memory::set(conn, &agent_id, workspace.as_deref(), "", 0) {
                 log_line(format!("bridge: clear memory failed: {err}"));
             }
         }
-        Command::SetMemoryPaused { agent_id, paused } => {
-            if let Err(err) = db::agent_memory::set_paused(conn, &agent_id, paused) {
+        Command::SetMemoryPaused {
+            agent_id,
+            workspace,
+            paused,
+        } => {
+            if let Err(err) =
+                db::agent_memory::set_paused(conn, &agent_id, workspace.as_deref(), paused)
+            {
                 log_line(format!("bridge: pause memory failed: {err}"));
             }
         }
@@ -938,9 +966,10 @@ fn dispatch_native(
         .workspace
         .as_deref()
         .map(|id| workspace::dir_for(&data_dir(), id));
-    // The agent's rolling memory: its summary frames the system prompt, and its marker
-    // windows the transcript so only the turns after the condensed portion are sent raw.
-    let memory = db::agent_memory::get(conn, &inference.agent_id).unwrap_or_default();
+    // The concierge's rolling memory (its **global** scope row — one conversation, one memory):
+    // the summary frames the system prompt, and the marker windows the transcript so only the
+    // turns after the condensed portion are sent raw.
+    let memory = db::agent_memory::get(conn, &inference.agent_id, None).unwrap_or_default();
     let role = role_prompt(conn, RunKind::Chat);
     let system_prompt = run_system_prompt(
         &role,
@@ -1062,10 +1091,16 @@ fn role_prompt(conn: &rusqlite::Connection, run: RunKind) -> String {
     db::settings::get_or(conn, key, default)
 }
 
-/// The agent's rolling memory wrapped as a system-prompt layer, or `None` when it has no
-/// memory yet. Built from `agent_memory`; injected into every run for that agent.
-fn memory_layer(conn: &rusqlite::Connection, agent_id: &str) -> Option<String> {
-    db::agent_memory::get(conn, agent_id)
+/// The agent's rolling memory in one scope, wrapped as a system-prompt layer, or `None` when
+/// that scope has no memory yet. The injection matrix (R3): chat reads the global row
+/// (`workspace = None`), task and planning runs read their workspace's row, and validator
+/// runs get **no** memory layer at all — fresh eyes per deliverable.
+fn memory_layer(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    workspace: Option<&str>,
+) -> Option<String> {
+    db::agent_memory::get(conn, agent_id, workspace)
         .ok()
         .and_then(|memory| memory.text())
         .map(|summary| wrap_memory(&summary))
@@ -1290,7 +1325,7 @@ fn maybe_summarize(conn: &rusqlite::Connection, chat_id: &str, prompt_tokens: Op
     else {
         return;
     };
-    let memory = db::agent_memory::get(conn, &inference.agent_id).unwrap_or_default();
+    let memory = db::agent_memory::get(conn, &inference.agent_id, None).unwrap_or_default();
     if memory.paused {
         return; // operator froze this agent's memory
     }
@@ -1337,6 +1372,7 @@ fn maybe_summarize(conn: &rusqlite::Connection, chat_id: &str, prompt_tokens: Op
                 {
                     send(Command::UpdateMemory {
                         agent_id,
+                        workspace: None,
                         summary,
                         summarized_through: new_marker,
                     });

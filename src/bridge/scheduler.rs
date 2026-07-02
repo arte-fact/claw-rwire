@@ -108,7 +108,7 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             Some(&workspace_dir),
             &inference.agent_name,
             inference.agent_prompt.clone(),
-            super::memory_layer(conn, &inference.agent_id),
+            super::memory_layer(conn, &inference.agent_id, Some(&task.workspace_id)),
         );
         // Scope context to the current attempt: a restart (a fresh attempt) must not inherit an
         // earlier attempt's runs. Reconstruct the producer's own thread across this attempt's
@@ -140,12 +140,15 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             .validator_prompt
             .clone()
             .unwrap_or_else(|| super::role_prompt(conn, crate::state::RunKind::Validator));
+        // No memory layer: a validator is deliberately amnesiac beyond the task — accumulated
+        // review memory breeds anchoring and rubber-stamping. Its loop continuity comes from
+        // the replayed thread below, nothing else (the R3 injection matrix).
         let system_prompt = run_system_prompt(
             &preamble,
             Some(&workspace_dir),
             &inference.agent_name,
             inference.agent_prompt.clone(),
-            super::memory_layer(conn, &inference.agent_id),
+            None,
         );
         let files = workspace::list_files(&workspace_dir, 200);
         // Reconstruct the validator's own thread across this attempt's passes so a re-review

@@ -78,6 +78,7 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_workspace_owner_column(conn).map_err(DbError::Schema)?;
     widen_agent_workspaces_to_m_n(conn).map_err(DbError::Schema)?;
     add_agent_memory_paused_column(conn).map_err(DbError::Schema)?;
+    rekey_agent_memory_by_workspace(conn).map_err(DbError::Schema)?;
     add_task_pipeline_columns(conn).map_err(DbError::Schema)?;
     add_task_run_transcript_column(conn).map_err(DbError::Schema)?;
     add_task_control_columns(conn).map_err(DbError::Schema)?;
@@ -181,6 +182,39 @@ fn add_task_pipeline_columns(conn: &Connection) -> rusqlite::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Re-key `agent_memory` from one row per agent to one per (agent, workspace) — R3's scope
+/// change: memory horizon = responsibility scope. Existing rows (the old agent-global model)
+/// become the agent's global row (`workspace_id = ''`), which is what they were in practice —
+/// only the concierge's chat path ever wrote a summary. A composite PK can't be ALTERed in,
+/// so the table is rebuilt; skipped once `workspace_id` exists.
+fn rekey_agent_memory_by_workspace(conn: &Connection) -> rusqlite::Result<()> {
+    let already: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('agent_memory') WHERE name = 'workspace_id'",
+        [],
+        |row| row.get(0),
+    )?;
+    if already > 0 {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE agent_memory RENAME TO agent_memory_v1;
+         CREATE TABLE agent_memory (
+           agent_group_id        TEXT NOT NULL REFERENCES agent_groups(id),
+           workspace_id          TEXT NOT NULL DEFAULT '',
+           summary               TEXT NOT NULL DEFAULT '',
+           summarized_through_id INTEGER NOT NULL DEFAULT 0,
+           paused                INTEGER NOT NULL DEFAULT 0,
+           updated_at            TEXT NOT NULL,
+           PRIMARY KEY (agent_group_id, workspace_id)
+         );
+         INSERT INTO agent_memory
+           (agent_group_id, workspace_id, summary, summarized_through_id, paused, updated_at)
+           SELECT agent_group_id, '', summary, summarized_through_id, paused, updated_at
+             FROM agent_memory_v1;
+         DROP TABLE agent_memory_v1;",
+    )
 }
 
 /// Add `agent_memory.paused` to a DB whose `agent_memory` predates it. A fresh DB already has

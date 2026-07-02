@@ -410,6 +410,13 @@ pub struct PromptPreview {
     /// Memory metadata for the panel: a size/marker line and whether it's paused.
     pub memory_meta: String,
     pub memory_paused: bool,
+    /// The memory scope this run kind reads (R3 injection matrix): `None` = the agent's global
+    /// row (chat), `Some(workspace)` = that workspace's row (task/planning runs). The panel's
+    /// Save / Clear / Pause act on this row.
+    pub memory_scope: Option<String>,
+    /// Whether this run kind gets a memory layer at all — false for validators, whose runs are
+    /// deliberately memory-free (the panel explains instead of editing).
+    pub memory_applies: bool,
 }
 
 /// The effective (override-or-default) role preambles — the editable global behaviour rules

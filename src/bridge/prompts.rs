@@ -71,7 +71,19 @@ pub fn load(
         .as_ref()
         .map(|id| workspace::dir_for(&super::data_dir(), id))
         .and_then(|dir| workspace::read_agent_md(&dir));
-    let mem = db::agent_memory::get(conn, &agent_id).unwrap_or_default();
+    // The R3 injection matrix, mirrored so the preview matches the live run exactly: chat reads
+    // the agent's global row, task/planning read the (representative) workspace's row, and a
+    // validator run composes **no** memory layer at all.
+    let (memory_applies, memory_scope) = match run {
+        RunKind::Chat => (true, None),
+        RunKind::Task | RunKind::Planning => (true, workspace_id.clone()),
+        RunKind::Validator => (false, None),
+    };
+    let mem = if memory_applies {
+        db::agent_memory::get(conn, &agent_id, memory_scope.as_deref()).unwrap_or_default()
+    } else {
+        db::agent_memory::Memory::default()
+    };
     let memory = mem.text();
 
     let assembled = workspace::compose_system_prompt(
@@ -80,13 +92,16 @@ pub fn load(
         brief.clone(),
         memory.as_deref().map(super::wrap_memory),
     );
-    let memory_meta = if mem.summary.trim().is_empty() {
-        "no memory yet".to_owned()
+    let memory_meta = if !memory_applies {
+        "validators run memory-free — fresh eyes per deliverable".to_owned()
+    } else if mem.summary.trim().is_empty() {
+        format!("no memory yet · {}", scope_label(memory_scope.as_deref()))
     } else {
         format!(
-            "{} chars · condensed through msg #{}",
+            "{} chars · condensed through msg #{} · {}",
             mem.summary.chars().count(),
-            mem.summarized_through
+            mem.summarized_through,
+            scope_label(memory_scope.as_deref())
         )
     };
     let preview = PromptPreview {
@@ -100,6 +115,8 @@ pub fn load(
         assembled,
         memory_meta,
         memory_paused: mem.paused,
+        memory_scope,
+        memory_applies,
     };
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
@@ -113,6 +130,14 @@ pub fn load(
             app.prompt_preview = Some(preview);
         },
     );
+}
+
+/// A short human label for a memory scope — the panel's meta line.
+fn scope_label(workspace: Option<&str>) -> String {
+    match workspace {
+        Some(id) => format!("scope: workspace {id}"),
+        None => "scope: global".to_owned(),
+    }
 }
 
 /// The selected agent, else the concierge (web agent), else the first agent.

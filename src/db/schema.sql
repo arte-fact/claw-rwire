@@ -312,14 +312,20 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
--- Per-agent rolling memory (Phase D): a summarized, persistent recollection of the agent's
--- own thread, injected into its runs so context survives without unbounded transcript growth.
--- `summarized_through_id` is the last chat message folded into `summary` (the concierge's
--- thread); turns after it are still sent raw. Additive (claw-rwire-only).
+-- Per-(agent, workspace) rolling memory (Phase D, re-keyed in R3): a summarized, persistent
+-- recollection injected into the agent's runs so context survives without unbounded transcript
+-- growth. Scope key mirrors responsibility scope: `workspace_id = ''` is the agent's **global**
+-- row (the concierge's one conversation); a workspace id scopes a producer/planner's memory to
+-- that workspace — an agent in two workspaces holds two independent memories. The empty string
+-- (not NULL) encodes "global" so the composite PK upserts correctly (NULL never equals NULL).
+-- `summarized_through_id` is the last chat message folded into `summary` (global row only;
+-- workspace rows fold whole tasks and keep it 0). Additive (claw-rwire-only).
 CREATE TABLE IF NOT EXISTS agent_memory (
-  agent_group_id        TEXT PRIMARY KEY REFERENCES agent_groups(id),
+  agent_group_id        TEXT NOT NULL REFERENCES agent_groups(id),
+  workspace_id          TEXT NOT NULL DEFAULT '',
   summary               TEXT NOT NULL DEFAULT '',
   summarized_through_id INTEGER NOT NULL DEFAULT 0,
   paused                INTEGER NOT NULL DEFAULT 0,
-  updated_at            TEXT NOT NULL
+  updated_at            TEXT NOT NULL,
+  PRIMARY KEY (agent_group_id, workspace_id)
 );

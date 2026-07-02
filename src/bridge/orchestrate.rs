@@ -88,12 +88,14 @@ fn launch_planning(
     };
     let workspace_dir = workspace::dir_for(&data_dir(), workspace);
     let role = super::role_prompt(conn, crate::state::RunKind::Planning);
+    // Planning reads the same (agent, workspace) memory row as the owner's producer runs —
+    // same memory, different hat: plans build on what shipped and what failed there.
     let system_prompt = run_system_prompt(
         &role,
         Some(&workspace_dir),
         &inference.agent_name,
         inference.agent_prompt.clone(),
-        super::memory_layer(conn, &inference.agent_id),
+        super::memory_layer(conn, &inference.agent_id, Some(workspace)),
     );
     let brief = ChatMessage {
         role: MessageRole::User,

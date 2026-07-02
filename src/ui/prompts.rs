@@ -156,9 +156,19 @@ fn run_chip(run: RunKind, active: bool) -> ElementBuilder {
     }
 }
 
-/// The Working-memory layer, made operator-controllable: a size/paused line, an editable
-/// summary (Save overwrites it), Clear (reset), and Pause/Resume (freeze auto-summary).
+/// The Working-memory layer, made operator-controllable: a size/scope/paused line, an editable
+/// summary (Save overwrites it), Clear (reset), and Pause/Resume (freeze auto-summary). All act
+/// on the scope row the selected run kind actually reads. A validator run composes no memory
+/// layer, so the card explains that instead of offering an editor.
 fn memory_card(agent: Option<&str>, preview: &PromptPreview) -> ElementBuilder {
+    if !preview.memory_applies {
+        return card(
+            "4 · Working memory",
+            el(El::Div)
+                .st([St::TextXs, St::TextMuted, St::Italic])
+                .text(&preview.memory_meta),
+        );
+    }
     let mut meta = preview.memory_meta.clone();
     if preview.memory_paused {
         meta.push_str(" · ⏸ paused");
@@ -268,13 +278,24 @@ fn pick_run(app: &mut App, ctx: &EventContext) {
     }
 }
 
+/// The scope row the open preview's run kind reads — memory mutations must hit the same row.
+fn memory_scope(app: &App) -> Option<String> {
+    app.prompt_preview
+        .as_ref()
+        .and_then(|preview| preview.memory_scope.clone())
+}
+
 #[handler]
 fn save_memory(app: &mut App, ctx: &EventContext) {
     let Some(agent_id) = app.prompt_agent.clone() else {
         return;
     };
     let summary = ctx.field("summary").unwrap_or_default().to_owned();
-    bridge::send(Command::SetMemory { agent_id, summary });
+    bridge::send(Command::SetMemory {
+        agent_id,
+        workspace: memory_scope(app),
+        summary,
+    });
     refresh(app);
 }
 
@@ -284,7 +305,10 @@ fn clear_memory(app: &mut App, ctx: &EventContext) {
     let Some(agent_id) = app.prompt_agent.clone() else {
         return;
     };
-    bridge::send(Command::ClearMemory { agent_id });
+    bridge::send(Command::ClearMemory {
+        agent_id,
+        workspace: memory_scope(app),
+    });
     refresh(app);
 }
 
@@ -294,7 +318,11 @@ fn toggle_pause(app: &mut App, ctx: &EventContext) {
         return;
     };
     let paused = ctx.data("paused") == Some("true");
-    bridge::send(Command::SetMemoryPaused { agent_id, paused });
+    bridge::send(Command::SetMemoryPaused {
+        agent_id,
+        workspace: memory_scope(app),
+        paused,
+    });
     refresh(app);
 }
 
