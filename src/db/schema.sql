@@ -329,3 +329,21 @@ CREATE TABLE IF NOT EXISTS agent_memory (
   updated_at            TEXT NOT NULL,
   PRIMARY KEY (agent_group_id, workspace_id)
 );
+
+-- The memory journal (R3.5 M1): an append-only log of every memory mutation — task/chat folds,
+-- operator edits/clears, pause toggles — with the summary *after* the event. Provenance ("what
+-- does this agent know and where did it come from"), the source of the thread's fold-event
+-- lines, and the substrate for future undo/diff. Pruned to the last ~50 rows per scope on
+-- write. Additive (claw-rwire-only).
+CREATE TABLE IF NOT EXISTS agent_memory_log (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_group_id TEXT NOT NULL REFERENCES agent_groups(id),
+  workspace_id   TEXT NOT NULL DEFAULT '',
+  kind           TEXT NOT NULL,             -- fold | edit | clear | pause | resume
+  source         TEXT,                      -- the task/chat the event came from; NULL = operator
+  note           TEXT NOT NULL,             -- the human line ("condensed 'title' into memory")
+  summary        TEXT NOT NULL,             -- the summary after this event
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_log
+  ON agent_memory_log(agent_group_id, workspace_id, id);

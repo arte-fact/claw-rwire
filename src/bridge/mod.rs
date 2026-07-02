@@ -293,12 +293,15 @@ pub enum Command {
     },
     /// A summarizer worker folded older context into an agent's rolling memory — persist the
     /// new summary and how far it has consumed the transcript. `workspace` picks the scope row:
-    /// `None` is the agent's global (concierge) memory, `Some` a workspace-scoped one.
+    /// `None` is the agent's global (concierge) memory, `Some` a workspace-scoped one. `note`
+    /// (the human fold line) and `source` (the task/chat it came from) go to the journal.
     UpdateMemory {
         agent_id: String,
         workspace: Option<String>,
         summary: String,
         summarized_through: i64,
+        note: String,
+        source: Option<String>,
     },
     /// Operator memory controls (the Prompts inspector's memory panel): overwrite the summary
     /// (keeping the marker), clear it (reset summary + marker), or pause/resume auto-summary.
@@ -798,16 +801,24 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             workspace,
             summary,
             summarized_through,
+            note,
+            source,
         } => {
-            if let Err(err) = db::agent_memory::set(
-                conn,
-                &agent_id,
-                workspace.as_deref(),
-                &summary,
-                summarized_through,
-            ) {
+            let scope = workspace.as_deref();
+            if let Err(err) =
+                db::agent_memory::set(conn, &agent_id, scope, &summary, summarized_through)
+            {
                 log_line(format!("bridge: update memory failed: {err}"));
             }
+            journal_memory(
+                conn,
+                &agent_id,
+                scope,
+                db::agent_memory_log::MemoryEventKind::Fold,
+                source.as_deref(),
+                &note,
+                &summary,
+            );
             // A background fold can land while its agent's page is open — reflect it live.
             agent_thread::refresh_if_open(conn, shared);
         }
@@ -821,10 +832,19 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             let marker = db::agent_memory::get(conn, &agent_id, scope)
                 .map(|m| m.summarized_through)
                 .unwrap_or(0);
-            if let Err(err) = db::agent_memory::set(conn, &agent_id, scope, summary.trim(), marker)
-            {
+            let summary = summary.trim();
+            if let Err(err) = db::agent_memory::set(conn, &agent_id, scope, summary, marker) {
                 log_line(format!("bridge: set memory failed: {err}"));
             }
+            journal_memory(
+                conn,
+                &agent_id,
+                scope,
+                db::agent_memory_log::MemoryEventKind::Edit,
+                None,
+                "memory edited",
+                summary,
+            );
             agent_thread::refresh_if_open(conn, shared);
         }
         Command::ClearMemory {
@@ -832,9 +852,19 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             workspace,
         } => {
             // Reset the summary and the marker — the next turn re-windows from scratch.
-            if let Err(err) = db::agent_memory::set(conn, &agent_id, workspace.as_deref(), "", 0) {
+            let scope = workspace.as_deref();
+            if let Err(err) = db::agent_memory::set(conn, &agent_id, scope, "", 0) {
                 log_line(format!("bridge: clear memory failed: {err}"));
             }
+            journal_memory(
+                conn,
+                &agent_id,
+                scope,
+                db::agent_memory_log::MemoryEventKind::Clear,
+                None,
+                "memory cleared",
+                "",
+            );
             agent_thread::refresh_if_open(conn, shared);
         }
         Command::SetMemoryPaused {
@@ -842,11 +872,25 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             workspace,
             paused,
         } => {
-            if let Err(err) =
-                db::agent_memory::set_paused(conn, &agent_id, workspace.as_deref(), paused)
-            {
+            let scope = workspace.as_deref();
+            if let Err(err) = db::agent_memory::set_paused(conn, &agent_id, scope, paused) {
                 log_line(format!("bridge: pause memory failed: {err}"));
             }
+            let (kind, note) = if paused {
+                (
+                    db::agent_memory_log::MemoryEventKind::Pause,
+                    "auto-fold paused",
+                )
+            } else {
+                (
+                    db::agent_memory_log::MemoryEventKind::Resume,
+                    "auto-fold resumed",
+                )
+            };
+            let summary = db::agent_memory::get(conn, &agent_id, scope)
+                .map(|memory| memory.summary)
+                .unwrap_or_default();
+            journal_memory(conn, &agent_id, scope, kind, None, note, &summary);
             agent_thread::refresh_if_open(conn, shared);
         }
         Command::SaveBrief { workspace, content } => {
@@ -1125,6 +1169,23 @@ fn role_prompt(conn: &rusqlite::Connection, run: RunKind) -> String {
     db::settings::get_or(conn, key, default)
 }
 
+/// Record a memory mutation in the journal (R3.5 M1) — best-effort, never blocks the mutation.
+fn journal_memory(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    workspace: Option<&str>,
+    kind: db::agent_memory_log::MemoryEventKind,
+    source: Option<&str>,
+    note: &str,
+    summary: &str,
+) {
+    if let Err(err) =
+        db::agent_memory_log::append(conn, agent_id, workspace, kind, source, note, summary)
+    {
+        log_line(format!("bridge: memory journal failed: {err}"));
+    }
+}
+
 /// Frame a rolling summary as the "working memory" system-prompt layer.
 fn wrap_memory(summary: &str) -> String {
     format!(
@@ -1372,6 +1433,7 @@ fn maybe_summarize(conn: &rusqlite::Connection, chat_id: &str, prompt_tokens: Op
     let excerpt = render_turns(batch);
     let previous = memory.summary;
     let agent_id = inference.agent_id.clone();
+    let chat = chat_id.to_owned();
     std::thread::spawn(move || {
         let user = crate::state::ChatMessage {
             role: MessageRole::User,
@@ -1389,11 +1451,14 @@ fn maybe_summarize(conn: &rusqlite::Connection, chat_id: &str, prompt_tokens: Op
                     .map(|reply| reply.trim().to_owned())
                     .filter(|reply| !reply.is_empty())
                 {
+                    let plural = if fold_count == 1 { "" } else { "s" };
                     send(Command::UpdateMemory {
                         agent_id,
                         workspace: None,
                         summary,
                         summarized_through: new_marker,
+                        note: format!("condensed {fold_count} older message{plural} into memory"),
+                        source: Some(chat),
                     });
                 }
             }

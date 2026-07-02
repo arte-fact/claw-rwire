@@ -536,13 +536,16 @@ pub struct AgentTurn {
     pub link_task: bool,
 }
 
-/// One entry in an agent's thread: a conversational turn, or a parked task's inline review
-/// composer (kept at the tail — the pending question sits at the bottom, like a chat). The turn
-/// is boxed so the small gate variant doesn't pay the large one's size.
+/// One entry in an agent's thread: a conversational turn, a parked task's inline review
+/// composer (kept at the tail — the pending question sits at the bottom, like a chat), or a
+/// memory event (R3.5 M2) — a fold/edit/clear rendered as one muted line at the moment it
+/// happened, so history becoming memory is watchable. The turn is boxed so the small variants
+/// don't pay the large one's size.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentThreadItem {
     Turn(Box<AgentTurn>),
     ReviewGate { task_id: String },
+    Memory { time: String, note: String },
 }
 
 /// A currently-running task of the agent, for its live streaming entry on the agent page. The

@@ -146,8 +146,8 @@ fn build_with_window(
         .into_iter()
         .filter(|task| task.workspace_id == workspace_id)
         .collect();
-    // (sort stamp, turn) — ISO-8601 UTC stamps sort lexicographically.
-    let mut stamped: Vec<(String, AgentTurn)> = Vec::new();
+    // (sort stamp, item) — ISO-8601 UTC stamps sort lexicographically.
+    let mut stamped: Vec<(String, AgentThreadItem)> = Vec::new();
     let mut gates: Vec<AgentThreadItem> = Vec::new();
     let mut live: Vec<AgentLive> = Vec::new();
     for task in &lane {
@@ -158,7 +158,7 @@ fn build_with_window(
         };
         stamped.push((
             task.created_at.clone(),
-            AgentTurn {
+            turn_item(AgentTurn {
                 author: "you".to_owned(),
                 own: false,
                 time: hh_mm(&task.created_at),
@@ -170,12 +170,12 @@ fn build_with_window(
                 ok: true,
                 task: link.clone(),
                 link_task: true,
-            },
+            }),
         ));
         for run in task_runs::list_for_task(conn, &task.id).unwrap_or_default() {
             stamped.push((
                 run.created_at.clone(),
-                run_turn(&names, agent_id, &run, link.clone(), false),
+                turn_item(run_turn(&names, agent_id, &run, link.clone(), false)),
             ));
         }
         if task.status == TaskStatus::Awaiting {
@@ -205,7 +205,20 @@ fn build_with_window(
         };
         stamped.push((
             review.run.created_at.clone(),
-            run_turn(&names, agent_id, &review.run, link, true),
+            turn_item(run_turn(&names, agent_id, &review.run, link, true)),
+        ));
+    }
+    // Memory events (R3.5 M2): folds/edits merged in at the moment they happened — one muted
+    // line each, so history becoming memory is part of the conversation.
+    for event in crate::db::agent_memory_log::recent(conn, agent_id, Some(workspace_id), window)
+        .unwrap_or_default()
+    {
+        stamped.push((
+            event.created_at.clone(),
+            AgentThreadItem::Memory {
+                time: hh_mm(&event.created_at),
+                note: event.note,
+            },
         ));
     }
     stamped.sort_by(|a, b| a.0.cmp(&b.0));
@@ -213,7 +226,7 @@ fn build_with_window(
     let mut items: Vec<AgentThreadItem> = stamped
         .into_iter()
         .skip(truncated)
-        .map(|(_, turn)| AgentThreadItem::Turn(Box::new(turn)))
+        .map(|(_, item)| item)
         .collect();
     items.append(&mut gates);
     // The thread's memory row — the fold line's target, shown/editable at the top of the page.
@@ -230,6 +243,10 @@ fn build_with_window(
         memory: memory.summary,
         memory_paused: memory.paused,
     })
+}
+
+fn turn_item(turn: AgentTurn) -> AgentThreadItem {
+    AgentThreadItem::Turn(Box::new(turn))
 }
 
 fn build(conn: &Connection, agent_id: &str, workspace_id: &str) -> Option<AgentThread> {
@@ -349,9 +366,54 @@ mod tests {
             .iter()
             .filter_map(|item| match item {
                 AgentThreadItem::Turn(turn) => Some(turn.as_ref()),
-                AgentThreadItem::ReviewGate { .. } => None,
+                AgentThreadItem::ReviewGate { .. } | AgentThreadItem::Memory { .. } => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn memory_events_merge_into_the_timeline_scoped_to_the_workspace() {
+        let conn = seeded();
+        tasks::create(&conn, &new_task("t1", "Build")).expect("t1");
+        crate::db::agent_memory_log::append(
+            &conn,
+            "ag-a",
+            Some("ws"),
+            crate::db::agent_memory_log::MemoryEventKind::Fold,
+            Some("t0"),
+            "condensed “Earlier task” into memory",
+            "knows things",
+        )
+        .expect("journal");
+        // Another scope's event must not leak into this thread.
+        crate::db::agent_memory_log::append(
+            &conn,
+            "ag-a",
+            Some("elsewhere"),
+            crate::db::agent_memory_log::MemoryEventKind::Fold,
+            None,
+            "other workspace fold",
+            "",
+        )
+        .expect("journal other");
+        let thread = build(&conn, "ag-a", "ws").expect("thread");
+        let notes: Vec<&str> = thread
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                AgentThreadItem::Memory { note, .. } => Some(note.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notes, vec!["condensed “Earlier task” into memory"]);
+        // The fold and the task-opened turn share the same clock, so both are present and the
+        // memory line carries a rendered time.
+        assert_eq!(turns(&thread).len(), 1);
+        let has_time = thread
+            .items
+            .iter()
+            .any(|item| matches!(item, AgentThreadItem::Memory { time, .. } if !time.is_empty()));
+        assert!(has_time);
     }
 
     #[test]

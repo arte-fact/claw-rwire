@@ -1,4 +1,5 @@
 pub mod agent_memory;
+pub mod agent_memory_log;
 pub mod agent_prompts;
 pub mod agent_tools;
 pub mod agents;

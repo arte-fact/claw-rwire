@@ -319,6 +319,8 @@ pub(super) fn fold_finished_task(
         let previous = memory.summary.clone();
         let workspace = task.workspace_id.clone();
         let recap = recap.clone();
+        let task_id = task.id.clone();
+        let title = task.title.clone();
         std::thread::spawn(move || {
             let user = ChatMessage {
                 role: MessageRole::User,
@@ -341,6 +343,8 @@ pub(super) fn fold_finished_task(
                             workspace: Some(workspace),
                             summary,
                             summarized_through: 0,
+                            note: format!("condensed \u{201c}{title}\u{201d} into memory"),
+                            source: Some(task_id),
                         });
                     }
                 }

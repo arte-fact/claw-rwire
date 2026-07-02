@@ -113,6 +113,7 @@ fn timeline(app: &App) -> ElementBuilder {
                 rows.push(match item {
                     AgentThreadItem::Turn(turn) => turn_row(turn),
                     AgentThreadItem::ReviewGate { task_id } => review_prompt(task_id),
+                    AgentThreadItem::Memory { time, note } => memory_event_line(time, note),
                 });
             }
             if thread.items.is_empty() && thread.live.is_empty() {
@@ -185,6 +186,14 @@ fn fold_line(thread: &AgentThread) -> Option<ElementBuilder> {
             .st([St::TextXs, St::TextLow, St::TextCenter])
             .text(&text),
     )
+}
+
+/// A memory event in the timeline (R3.5 M2) — one muted line at the moment a fold/edit/clear
+/// happened. The thread stays a conversation; memory is its quiet narrator.
+fn memory_event_line(time: &str, note: &str) -> ElementBuilder {
+    el(El::Div)
+        .st([St::TextXs, St::TextLow, St::TextCenter])
+        .text(&format!("· {time} — {note} ·"))
 }
 
 /// The memory affordance (R3): the (agent, workspace) working memory, inspectable and editable
