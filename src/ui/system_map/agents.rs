@@ -114,7 +114,7 @@ fn tool_chip(name: &str, on: bool) -> ElementBuilder {
         .at(At::Type, Av::Button)
         .data("tool", name)
         .on(Ev::Click, tool_toggled())
-        .st([St::FontInheritAll])
+        .st([])
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
@@ -122,7 +122,6 @@ fn tool_chip(name: &str, on: bool) -> ElementBuilder {
             St::PxSm,
             St::PyXs,
             St::BorderDefault,
-            St::Rounded0,
             St::TextXs,
             St::CursorPointer,
             bg,

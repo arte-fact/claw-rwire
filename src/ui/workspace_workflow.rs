@@ -199,7 +199,6 @@ fn step_card(
         .st([
             St::BgSurface,
             St::BorderDefault,
-            St::Rounded0,
             St::PMd,
             St::DisplayFlex,
             St::FlexCol,
@@ -296,12 +295,10 @@ fn edit_form(step: &StepView, members: &[(String, String)], wid: &str) -> Elemen
             ),
             el(El::Button)
                 .at(At::Type, Av::Submit)
-                .st([St::FontInheritAll])
                 .st([
                     St::TextXs,
                     St::PxSm,
                     St::PyXs,
-                    St::Rounded0,
                     St::BgAccent,
                     St::TextOnAccent,
                     St::BorderAccent,

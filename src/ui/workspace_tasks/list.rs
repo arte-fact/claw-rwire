@@ -39,7 +39,6 @@ fn task_card(
         // The title links to the task's detail view (its run chain).
         Link::route(&format!("/w/{wid}/tasks/{}", task.id))
             .st([
-                St::FontInheritAll,
                 St::Flex1,
                 St::TextSm,
                 St::TextHigh,
@@ -98,7 +97,6 @@ fn task_card(
         .st([
             St::BgSurface,
             St::BorderDefault,
-            St::Rounded0,
             St::PMd,
             St::DisplayFlex,
             St::FlexCol,

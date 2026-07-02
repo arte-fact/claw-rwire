@@ -45,7 +45,7 @@ fn list(app: &App) -> ElementBuilder {
             .append([Text::body("No logs yet.").muted().build()]);
     }
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::FontMono, St::TextXs])
+        .st([St::DisplayFlex, St::FlexCol, St::TextXs])
         .append(app.logs.iter().map(line))
 }
 

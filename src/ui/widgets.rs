@@ -71,11 +71,9 @@ pub fn submit(label: &str) -> ElementBuilder {
             St::PxMd,
             St::PySm,
             St::BorderDefault,
-            St::Rounded0,
             St::BgApp,
             St::TextHigh,
             St::CursorPointer,
-            St::FontInheritAll,
         ])
         .hover([St::BorderAccent])
         .text(label)
@@ -145,15 +143,12 @@ pub fn md_editor(
                 .at_str(At::Placeholder, placeholder)
                 .style(Style::new().set("min-height", min_height))
                 .st([
-                    St::FontInheritAll,
                     St::ResizeY,
                     St::WFull,
                     St::PSm,
                     St::BorderDefault,
-                    St::Rounded0,
                     St::BgApp,
                     St::TextHigh,
-                    St::FontMono,
                     St::TextXs,
                     St::OutlineNone,
                 ])
@@ -181,12 +176,10 @@ pub fn ghost(label: &str, on_click: HandlerSpec) -> ElementBuilder {
         .at(At::Type, Av::Button)
         .on(rwire::Ev::Click, on_click)
         .st([
-            St::FontInheritAll,
             St::TextXs,
             St::TextMuted,
             St::BgTransparent,
             St::BorderDefault,
-            St::Rounded0,
             St::PxSm,
             St::PyXs,
             St::CursorPointer,

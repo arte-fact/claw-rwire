@@ -32,12 +32,13 @@ const DATA_DIR_ENV: &str = "CLAW_DATA_DIR";
 
 #[theme]
 fn app_theme() -> Theme {
-    // rust-claw look: Nord palette + the flat `soft` style (no shadow, 1px hairline borders) +
-    // **sharp corners** (`None`). The raw chips/cards were also swept from `RoundedSm` → `Rounded0`,
-    // and the two status badges reverted from the `Badge` pill to sharp outlined chips, so the whole
-    // UI is consistently square — the crisp terminal aesthetic. (Circular avatars keep `RoundedFull`.)
+    // rust-claw look, now a framework preset: Nord palette + `ThemeStyle::flat()` (hairline
+    // borders, no shadows, monospace UI font) + sharp corners. The per-element `FontMono` /
+    // `Rounded0` sweeps this app used to carry are gone — the theme owns the aesthetic.
+    // (Circular avatars keep `RoundedFull`; `RoundedFull` ignores the radius scale.)
     Theme::dark()
         .palette(palettes::nord())
+        .style(rwire::theme::ThemeStyle::flat())
         .radius(RadiusScale::None)
 }
 

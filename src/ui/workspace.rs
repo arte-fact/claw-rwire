@@ -127,7 +127,6 @@ fn tab_link(tab: WsTab, path: &str, active: bool) -> ElementBuilder {
         .st([
             St::PxSm,
             St::PySm,
-            St::Rounded0,
             St::TextSm,
             St::NoUnderline,
             St::CursorPointer,
@@ -222,13 +221,11 @@ fn auto_approve_toggle(workspace: &WorkspaceView) -> ElementBuilder {
                 .data("workspace", &workspace.id)
                 .data("on", if on { "1" } else { "0" })
                 .on(Ev::Click, toggle_auto_approve())
-                .st([St::FontInheritAll])
                 .st([
                     St::SelfStart,
                     St::TextXs,
                     St::PxSm,
                     St::PyXs,
-                    St::Rounded0,
                     St::BorderDefault,
                     chip,
                     if on { St::TextOnAccent } else { St::TextHigh },
@@ -390,7 +387,6 @@ fn member_chip(id: &str, name: &str, on: bool, is_owner: bool) -> ElementBuilder
         .data("agent", id)
         .data("on", if on { "1" } else { "0" })
         .on(Ev::Click, toggle_member())
-        .st([St::FontInheritAll])
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
@@ -398,7 +394,6 @@ fn member_chip(id: &str, name: &str, on: bool, is_owner: bool) -> ElementBuilder
             St::PxSm,
             St::PyXs,
             St::BorderDefault,
-            St::Rounded0,
             St::TextXs,
             St::CursorPointer,
             bg,

@@ -67,7 +67,7 @@ fn live_row(event: &LiveEvent) -> ElementBuilder {
         "/w/{}/tasks/{}",
         event.workspace_id, event.task_id
     ))
-    .st([St::FontInheritAll])
+    .st([])
     .st([
         St::DisplayFlex,
         St::ItemsCenter,
@@ -78,9 +78,7 @@ fn live_row(event: &LiveEvent) -> ElementBuilder {
     ])
     .hover([St::BgSurface])
     .append([
-        el(El::Span)
-            .st([St::TextLow, St::TextXs, St::FontMono])
-            .text(&event.time),
+        el(El::Span).st([St::TextLow, St::TextXs]).text(&event.time),
         el(El::Span).st([color, St::TextXs]).text(mark),
         el(El::Span)
             .st([St::TextHigh, St::TextXs, St::FontSemibold])
@@ -113,12 +111,8 @@ fn row(entry: &ActivityEntry) -> ElementBuilder {
         ActivityKind::Failed => ("failed", St::TextError),
     };
     let mut children = vec![
-        el(El::Span)
-            .st([St::TextLow, St::TextXs, St::FontMono])
-            .text(&entry.time),
-        el(El::Span)
-            .st([color, St::TextXs, St::FontMono])
-            .text(label),
+        el(El::Span).st([St::TextLow, St::TextXs]).text(&entry.time),
+        el(El::Span).st([color, St::TextXs]).text(label),
         el(El::Span)
             .st([St::TextHigh, St::Flex1, St::Truncate])
             .text(&entry.title),
@@ -140,7 +134,7 @@ fn row(entry: &ActivityEntry) -> ElementBuilder {
     // Task lifecycle rows deep-link to the task detail; chat rows are plain.
     match (&entry.task_id, &entry.workspace_id) {
         (Some(task), Some(workspace)) => Link::route(&format!("/w/{workspace}/tasks/{task}"))
-            .st([St::FontInheritAll])
+            .st([])
             .st(row_st)
             .st([St::NoUnderline])
             .hover([St::BgSurface])

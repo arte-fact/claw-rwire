@@ -83,7 +83,6 @@ fn locked_banner(app: &App) -> ElementBuilder {
             St::TextMuted,
             St::PxSm,
             St::PyXs,
-            St::Rounded0,
             St::BgSubtle,
         ])
         .text("⏳ Pipeline locked while tasks are in flight — finish or stop them to edit the workflow.")
@@ -148,7 +147,6 @@ fn new_task_button() -> ElementBuilder {
             St::GapSm,
             St::PxSm,
             St::PyXs,
-            St::Rounded0,
             St::BgAccent,
             St::TextOnAccent,
             St::BorderAccent,

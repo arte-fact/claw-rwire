@@ -205,7 +205,6 @@ fn text_block(content: &str) -> ElementBuilder {
         .st([
             St::WhitespacePreWrap,
             St::BreakWords,
-            St::FontInheritAll,
             St::TextXs,
             St::TextHigh,
         ])

@@ -289,7 +289,6 @@ fn message_input(field_id: &str) -> ElementBuilder {
             St::BgTransparent,
             St::BorderNone,
             St::OutlineNone,
-            St::FontInheritAll,
             St::ResizeNone,
             St::OverflowYAuto,
             St::FieldSizingContent,
@@ -329,7 +328,6 @@ fn send_button() -> ElementBuilder {
         .at_str(At::AriaLabel, "Send")
         .data("act", "send")
         .st([
-            St::FontInheritAll,
             St::BorderNone,
             St::DisplayFlex,
             St::ItemsCenter,

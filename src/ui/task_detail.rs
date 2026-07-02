@@ -66,7 +66,6 @@ pub fn peek_modal(app: &App) -> ElementBuilder {
                     St::FlexCol,
                     St::BgSurface,
                     St::BorderDefault,
-                    St::Rounded0,
                     St::OverflowHidden,
                 ])
                 .append([content]),
@@ -433,7 +432,6 @@ fn proposed_view(proposed: &[ProposedTask], awaiting: bool) -> ElementBuilder {
                 .st([
                     St::BgApp,
                     St::BorderDefault,
-                    St::Rounded0,
                     St::PSm,
                     St::DisplayFlex,
                     St::FlexCol,
@@ -539,11 +537,9 @@ pub(crate) fn review_gate(task_id: &str) -> ElementBuilder {
                     el(El::Button)
                         .at(At::Type, Av::Submit)
                         .st([
-                            St::FontInheritAll,
                             St::TextXs,
                             St::PxSm,
                             St::PyXs,
-                            St::Rounded0,
                             St::BorderDefault,
                             St::BgApp,
                             St::TextMuted,

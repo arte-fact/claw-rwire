@@ -134,14 +134,12 @@ fn card(
         );
     }
     Link::route(&format!("/w/{}", workspace.id))
-        .st([St::FontInheritAll])
         .st([
             St::DisplayFlex,
             St::FlexCol,
             St::GapSm,
             St::BgSurface,
             St::BorderDefault,
-            St::Rounded0,
             St::PMd,
             St::NoUnderline,
             St::CursorPointer,

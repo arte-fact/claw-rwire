@@ -109,7 +109,6 @@ fn column_header(
 ) -> ElementBuilder {
     let label = format!("{name} · {count}");
     let header_st = [
-        St::FontInheritAll,
         St::TextXs,
         St::TextMuted,
         St::TextUppercase,
@@ -159,7 +158,6 @@ fn kanban_card(task: &TaskView, steps: &[String], wid: &str) -> ElementBuilder {
                     .data("task", &task.id)
                     .on(Ev::Click, crate::ui::task_detail::open_peek())
                     .st([
-                        St::FontInheritAll,
                         St::Flex1,
                         St::TextXs,
                         St::TextHigh,
@@ -191,7 +189,6 @@ fn kanban_card(task: &TaskView, steps: &[String], wid: &str) -> ElementBuilder {
         .st([
             St::BgSurface,
             St::BorderDefault,
-            St::Rounded0,
             St::PSm,
             St::DisplayFlex,
             St::FlexCol,

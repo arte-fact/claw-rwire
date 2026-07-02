@@ -130,7 +130,6 @@ pub fn app() -> ElementBuilder {
         .st([
             St::HDvh,
             St::BgApp,
-            St::FontMono,
             St::TextSm,
             St::DisplayFlex,
             St::OverflowHidden,
@@ -514,13 +513,7 @@ fn awaiting_badge(count: usize) -> ElementBuilder {
         return el(El::Span);
     }
     el(El::Span)
-        .st([
-            St::TextXs,
-            St::PxXs,
-            St::Rounded0,
-            St::BgAccent,
-            St::TextOnAccent,
-        ])
+        .st([St::TextXs, St::PxXs, St::BgAccent, St::TextOnAccent])
         .text(&count.to_string())
 }
 
@@ -535,9 +528,7 @@ fn status(app: &App) -> ElementBuilder {
         .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
         .append([
             el(El::Span).st([St::WSp2, St::HSp2, St::RoundedFull, dot]),
-            el(El::Span)
-                .st([St::FontMono, St::TextXs, St::TextMuted])
-                .text(label),
+            el(El::Span).st([St::TextXs, St::TextMuted]).text(label),
         ])
 }
 
@@ -604,7 +595,6 @@ fn hamburger() -> ElementBuilder {
             St::PySm,
             St::BgApp,
             St::BorderDefault,
-            St::Rounded0,
             St::TextHigh,
             St::CursorPointer,
         ])

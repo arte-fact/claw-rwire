@@ -54,7 +54,6 @@ pub(crate) fn memory_row(memory: &str, key: &str, toggled: &[String]) -> Element
                 St::WhitespacePreWrap,
                 St::PSm,
                 St::BgApp,
-                St::Rounded0,
             ])
             .text(memory)
     });
@@ -96,13 +95,11 @@ fn disclosure_row(
         .data("tool", key)
         .on(Ev::Click, toggle_tool())
         .st([
-            St::FontInheritAll,
             St::WFull,
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
             St::TextXs,
-            St::FontMono,
             St::BgTransparent,
             St::BorderNone,
             St::P0,
@@ -223,7 +220,6 @@ fn tool_body(tool: &ToolCardView) -> ElementBuilder {
         .st([
             St::BgCode,
             St::BorderDefault,
-            St::Rounded0,
             St::PSm,
             St::DisplayFlex,
             St::FlexCol,
@@ -280,7 +276,7 @@ fn argument_rows(tool: &ToolCardView) -> Vec<ElementBuilder> {
         return vec![
             el(El::Div)
                 .st([St::WhitespacePreWrap])
-                .st([St::FontMono, St::TextXs, St::TextMuted, St::BreakWords])
+                .st([St::TextXs, St::TextMuted, St::BreakWords])
                 .text(&format!("$ {command}")),
         ];
     }
@@ -302,7 +298,7 @@ fn field_row(key: &str, value: &Value) -> ElementBuilder {
         other => other.to_string(),
     };
     let key_label = el(El::Span)
-        .st([St::TextXs, St::TextMuted, St::FontMono, St::FlexShrink0])
+        .st([St::TextXs, St::TextMuted, St::FlexShrink0])
         .text(key);
     if text.contains('\n') || text.chars().count() > 72 {
         el(El::Div)
@@ -314,13 +310,7 @@ fn field_row(key: &str, value: &Value) -> ElementBuilder {
             .append([
                 key_label,
                 el(El::Span)
-                    .st([
-                        St::TextXs,
-                        St::TextLow,
-                        St::FontMono,
-                        St::MinW0,
-                        St::BreakWords,
-                    ])
+                    .st([St::TextXs, St::TextLow, St::MinW0, St::BreakWords])
                     .text(&text),
             ])
     }
@@ -333,7 +323,6 @@ fn result_pre(text: &str) -> ElementBuilder {
         .st([
             St::TextXs,
             St::TextLow,
-            St::FontMono,
             St::WhitespacePreWrap,
             St::M0,
             St::OverflowAuto,
@@ -385,7 +374,7 @@ fn edit_diff_rows(tool: &ToolCardView) -> Option<Vec<ElementBuilder>> {
     let new = args.get("new_string").and_then(|v| v.as_str())?;
     let mut rows = vec![
         el(El::Div)
-            .st([St::TextXs, St::TextMuted, St::FontMono])
+            .st([St::TextXs, St::TextMuted])
             .text(&format!("edit {path}")),
     ];
     for line in line_diff(old, new) {
@@ -397,7 +386,7 @@ fn edit_diff_rows(tool: &ToolCardView) -> Option<Vec<ElementBuilder>> {
         rows.push(
             el(El::Div)
                 .st([St::WhitespacePreWrap, St::BreakWords])
-                .st([St::FontMono, St::TextXs, color])
+                .st([St::TextXs, color])
                 .text(&format!("{prefix} {}", line.text)),
         );
     }

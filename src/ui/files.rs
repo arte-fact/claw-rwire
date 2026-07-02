@@ -39,7 +39,6 @@ fn error_banner(app: &App) -> ElementBuilder {
                 St::TextError,
                 St::BgSurface,
                 St::BorderDefault,
-                St::Rounded0,
             ])
             .append([el(El::Span).text(&format!("⚠ {message}"))]),
         None => el(El::Div).st([St::DisplayNone]),
@@ -153,7 +152,6 @@ fn breadcrumb(path: &str) -> ElementBuilder {
             St::ItemsCenter,
             St::GapXs,
             St::TextXs,
-            St::FontMono,
             St::TextMuted,
             St::Truncate,
         ])
@@ -166,7 +164,6 @@ fn crumb(label: &str, path: &str) -> ElementBuilder {
         .data("path", path)
         .on(Ev::Click, navigate())
         .st([
-            St::FontInheritAll,
             St::BorderNone,
             St::BgTransparent,
             St::CursorPointer,
@@ -218,12 +215,10 @@ fn create_row(kind: &str, value: &str) -> ElementBuilder {
                 .at_str(At::Placeholder, &format!("new {label} name…"))
                 .on(Ev::Change, new_name_changed())
                 .st([
-                    St::FontInheritAll,
                     St::Flex1,
                     St::PxSm,
                     St::PyXs,
                     St::BorderDefault,
-                    St::Rounded0,
                     St::BgApp,
                     St::TextHigh,
                     St::OutlineNone,
@@ -332,7 +327,6 @@ fn tree_row(node: &FileNode, selected: bool, pending_delete: bool, active: bool)
         .data("path", &node.path)
         .on(Ev::Click, handler)
         .st([
-            St::FontInheritAll,
             St::BorderNone,
             St::BgTransparent,
             St::TextLeft,
@@ -372,7 +366,6 @@ fn tree_row(node: &FileNode, selected: bool, pending_delete: bool, active: bool)
             St::GapSm,
             St::PyXs,
             St::PxSm,
-            St::Rounded0,
         ])
         .hover([St::BgSubtle]);
     if highlight {
@@ -398,12 +391,10 @@ fn rename_row(current: &str) -> ElementBuilder {
                 .at_str(At::Value, current)
                 .at(At::Autocomplete, Av::Off)
                 .st([
-                    St::FontInheritAll,
                     St::Flex1,
                     St::PxSm,
                     St::PyXs,
                     St::BorderDefault,
-                    St::Rounded0,
                     St::BgApp,
                     St::TextHigh,
                     St::OutlineNone,
@@ -435,16 +426,14 @@ fn row_action(
 fn editor(app: &App) -> ElementBuilder {
     let Some(open) = &app.files_open else {
         return panel(
-            el(El::Span)
-                .st([St::TextXs, St::TextMuted, St::FontMono])
-                .text("editor"),
+            el(El::Span).st([St::TextXs, St::TextMuted]).text("editor"),
             placeholder("Select a file to view or edit it."),
         );
     };
 
     let filename = el(El::Span)
         .st([St::MinW0])
-        .st([St::TextSm, St::FontMono, St::TextHigh, St::Truncate])
+        .st([St::TextSm, St::TextHigh, St::Truncate])
         .text(&open.path);
 
     if !open.editable {
@@ -488,7 +477,6 @@ fn editor(app: &App) -> ElementBuilder {
                     St::PMd,
                     St::BgApp,
                     St::TextDefault,
-                    St::FontMono,
                     St::TextXs,
                     St::OutlineNone,
                     St::BorderNone,
@@ -503,7 +491,6 @@ fn editor(app: &App) -> ElementBuilder {
                     St::BorderTSubtle,
                     St::TextLow,
                     St::TextXs,
-                    St::FontMono,
                     St::PositionSticky,
                     St::Bottom0,
                     St::Left0,

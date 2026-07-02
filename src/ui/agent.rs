@@ -345,7 +345,6 @@ fn review_prompt(task_id: &str) -> ElementBuilder {
             St::GapSm,
             St::PSm,
             St::BorderDefault,
-            St::Rounded0,
             St::BgSurface,
         ])
         .append([
