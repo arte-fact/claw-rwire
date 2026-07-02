@@ -12,7 +12,6 @@ use rwire_components::{Avatar, AvatarSize, Card, Input, Select, Text, TextColor,
 use crate::bridge::{self, Command};
 use crate::state::{App, WorkspaceView};
 use crate::ui::files;
-use crate::ui::workspace_tasks::initials;
 
 /// The sections of a workspace, in tab order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,12 +105,7 @@ fn member_avatars(workspace: &WorkspaceView) -> ElementBuilder {
         .take(8)
         .map(|name| {
             Tooltip::new(name.clone())
-                .child(
-                    Avatar::new()
-                        .fallback(initials(name))
-                        .size(AvatarSize::Sm)
-                        .build(),
-                )
+                .child(Avatar::new().name(name).size(AvatarSize::Sm).build())
                 .build()
         })
         .collect();

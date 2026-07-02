@@ -7,13 +7,14 @@
 
 use rwire::style::Style;
 use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
-use rwire_components::{Avatar, AvatarSize, Button, ButtonSize, Input, Text};
+use rwire_components::{
+    Avatar, AvatarSize, Button, ButtonSize, Input, StatusDot, StatusDotIntent, Text,
+};
 
 use super::thread;
 use crate::bridge::{self, Command};
 use crate::state::{App, LiveItem, ProposedTask, TaskDetail};
 use crate::ui::workspace::card;
-use crate::ui::workspace_tasks::initials;
 
 /// The Peek modal: a self-contained overlay opened over the board when a task is selected. A plain
 /// builder (not its own `#[renderer]`) called inside the board renderer — so reading
@@ -120,10 +121,7 @@ fn peek_header(app: &App, detail: &TaskDetail) -> ElementBuilder {
     let task = app.tasks.iter().find(|t| t.id == detail.id);
     let assignee = task.and_then(|t| t.agent.as_deref()).unwrap_or("owner");
     let mut row = vec![
-        Avatar::new()
-            .fallback(initials(assignee))
-            .size(AvatarSize::Sm)
-            .build(),
+        Avatar::new().name(assignee).size(AvatarSize::Sm).build(),
         el(El::Span)
             .st([St::Flex1, St::TextLg, St::TextHigh, St::FontSemibold])
             .text(&detail.title),
@@ -364,18 +362,10 @@ pub(crate) fn live_stream_body(items: &[LiveItem]) -> Vec<ElementBuilder> {
 
 /// A small `● running` marker for a live entry's header. Shared with the agent thread.
 pub(crate) fn running_dot() -> ElementBuilder {
-    el(El::Span)
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::TextXs,
-            St::TextAccent,
-        ])
-        .append([
-            el(El::Span).st([St::WSp2, St::HSp2, St::RoundedFull, St::BgAccent]),
-            el(El::Span).text("running"),
-        ])
+    StatusDot::new()
+        .intent(StatusDotIntent::Primary)
+        .label("running")
+        .build()
 }
 
 /// One live tool event: an in-progress / ok / failed mark, its time, and the humanized action.

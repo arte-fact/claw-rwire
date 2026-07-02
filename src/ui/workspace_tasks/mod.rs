@@ -9,8 +9,8 @@ use crate::bridge::{self, Command};
 use crate::state::{App, TaskView, WorkspaceView};
 use crate::ui::widgets::accent_submit;
 use rwire_components::{
-    Badge, BadgeFill, BadgeIntent, BadgeShape, Drawer, DrawerPosition, Input, Select, Text,
-    Textarea,
+    Badge, BadgeFill, BadgeIntent, BadgeShape, Drawer, DrawerPosition, EmptyState, Input, Select,
+    Text, Textarea,
 };
 
 mod board;
@@ -35,7 +35,16 @@ pub fn tasks(app: &App) -> ElementBuilder {
         .filter(|a| workspace.members.iter().any(|m| m == &a.id))
         .map(|a| (a.id.clone(), a.name.clone()))
         .collect();
-    let board = if app.tasks_list_view {
+    // A brand-new workspace gets a real empty state with the two ways to start; once any
+    // task exists (even archived filters can empty a view), the boards render themselves.
+    let board = if app.tasks.is_empty() {
+        EmptyState::new()
+            .title("No tasks yet")
+            .description(
+                "Delegate work from the chat and the plan lands here, or queue one directly                  with New task.",
+            )
+            .build()
+    } else if app.tasks_list_view {
         list_board(app, &members, &workspace.id)
     } else {
         kanban_board(app, &workspace.id)
@@ -176,21 +185,6 @@ fn open_new_task(app: &mut App, ctx: &EventContext) {
 fn close_new_task(app: &mut App, ctx: &EventContext) {
     let _ = ctx;
     app.new_task_panel_open = false;
-}
-
-/// Up to two uppercase initials for an avatar fallback (`Forge` → `F`, `John Doe` → `JD`).
-pub(crate) fn initials(name: &str) -> String {
-    let letters: String = name
-        .split_whitespace()
-        .filter_map(|word| word.chars().next())
-        .take(2)
-        .collect::<String>()
-        .to_uppercase();
-    if letters.is_empty() {
-        "?".to_owned()
-    } else {
-        letters
-    }
 }
 
 /// The Kanban ↔ List view switch (immediate-apply chips).

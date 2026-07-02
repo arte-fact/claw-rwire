@@ -31,6 +31,7 @@ use rwire::style::Style;
 use rwire::{
     At, Av, CurrentRoute, El, ElementBuilder, Ev, Router, St, el, handler, icons, outlet, renderer,
 };
+use rwire_components::{StatusDot, StatusDotIntent};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, Tab};
@@ -325,11 +326,15 @@ fn agent_row(row: &crate::state::AgentNavRow, workspace_id: &str, active: bool) 
 /// The leading status glyph: an accent **pulsing** dot while the agent is working, else a muted
 /// dot (an awaiting agent is idle-but-parked — its approval badge carries that signal).
 fn status_dot(status: crate::state::AgentStatus) -> ElementBuilder {
-    let dot = el(El::Span).st([St::WSp2, St::HSp2, St::RoundedFull]);
-    match status {
-        crate::state::AgentStatus::Working => dot.st([St::BgAccent, St::AnimatePulse]),
-        _ => dot.st([St::BgMuted]),
-    }
+    let working = status == crate::state::AgentStatus::Working;
+    StatusDot::new()
+        .intent(if working {
+            StatusDotIntent::Primary
+        } else {
+            StatusDotIntent::Muted
+        })
+        .pulse(working)
+        .build()
 }
 
 /// The create affordance at the tail of the agent nav — workspaces are created on the dashboard.

@@ -292,12 +292,12 @@ fn message_input(field_id: &str) -> ElementBuilder {
             St::FontInheritAll,
             St::ResizeNone,
             St::OverflowYAuto,
+            St::FieldSizingContent,
         ])
-        // `padding`/`field-sizing`/`max-height: 40vh` — auto-grow to content, capped; no tokens.
+        // `padding`/`max-height: 40vh` stay inline (genuinely dynamic); field-sizing has a token.
         .style(
             Style::new()
                 .set("padding", "0.25rem")
-                .set("field-sizing", "content")
                 .set("max-height", "40vh"),
         )
 }

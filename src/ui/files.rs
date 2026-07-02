@@ -494,9 +494,7 @@ fn editor(app: &App) -> ElementBuilder {
                     St::BorderNone,
                     St::WhitespacePre,
                 ])
-                // `field-sizing` has no token yet (auto-grow to content).
-                .st([St::BreakWords])
-                .style(Style::new().set("field-sizing", "content"))
+                .st([St::BreakWords, St::FieldSizingContent])
                 .text(&open.content),
             el(El::Div)
                 .st([

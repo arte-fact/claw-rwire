@@ -10,7 +10,7 @@ use rwire_components::{Avatar, AvatarSize, Tag, TagIntent, Tooltip};
 use crate::bridge::{self, Command};
 use crate::state::{App, TaskView};
 
-use super::{control_buttons, initials, status_badge, task_matches_filter};
+use super::{control_buttons, status_badge, task_matches_filter};
 
 /// The kanban board: one column per pipeline step, then Done and Closed. A task sits in its
 /// current step's column (or Done/Closed when terminal) and moves left→right as it advances.
@@ -255,12 +255,7 @@ fn spec_preview(spec: &str) -> ElementBuilder {
 fn card_meta_row(task: &TaskView) -> ElementBuilder {
     let assignee = task.agent.as_deref().unwrap_or("owner");
     let avatar = Tooltip::new(assignee.to_owned())
-        .child(
-            Avatar::new()
-                .fallback(initials(assignee))
-                .size(AvatarSize::Sm)
-                .build(),
-        )
+        .child(Avatar::new().name(assignee).size(AvatarSize::Sm).build())
         .build();
     let mut row = vec![avatar];
     row.extend(signal_tags(task));
