@@ -14,7 +14,6 @@ use rwire::style::Style;
 use rwire::{El, ElementBuilder, St, el, renderer};
 use rwire_components::Text;
 
-use super::chat::CHAT_MAX_W;
 use crate::state::{AgentThreadItem, AgentTurn, App, LiveItem};
 use crate::ui::run_chain::verdict_chip_of;
 use crate::ui::task_detail::{live_stream_body, review_gate, running_dot};
@@ -29,44 +28,61 @@ pub fn page() -> ElementBuilder {
             header_bar(),
             thread::scroll(
                 el(El::Div)
-                    .style(
-                        Style::new()
-                            .set("max-width", CHAT_MAX_W)
-                            .set("margin", "0 auto"),
-                    )
-                    .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
+                    .st([
+                        St::MaxW60rem,
+                        St::MxAuto,
+                        St::WFull,
+                        St::DisplayFlex,
+                        St::FlexCol,
+                        St::GapLg,
+                        St::PMd,
+                    ])
                     .md([St::PLg])
                     .append([timeline(), live_tail()]),
             ),
         ])
 }
 
-/// The pinned page header: the agent's name, centered on the reading measure. The border spans
-/// the page; the content aligns with the conversation column below.
+/// The pinned page header: the agent's name + its workspace, centered on the reading measure.
+/// The border spans the page; the content aligns with the conversation column below.
 fn header_bar() -> ElementBuilder {
     el(El::Div)
         .st([St::FlexShrink0, St::PMd, St::BorderBDefault])
         .md([St::PxLg])
         .append([el(El::Div)
-            .style(
-                Style::new()
-                    .set("max-width", CHAT_MAX_W)
-                    .set("margin", "0 auto"),
-            )
-            .st([St::WFull, St::DisplayFlex, St::ItemsCenter, St::GapSm])
+            .st([
+                St::MaxW60rem,
+                St::MxAuto,
+                St::WFull,
+                St::DisplayFlex,
+                St::ItemsCenter,
+                St::GapSm,
+            ])
             .append([agent_title()])])
 }
 
-/// The agent's name in the header — its own small region so the static scaffold never re-renders.
+/// The agent's name + workspace in the header — its own small region so the static scaffold
+/// never re-renders. "Forge · Studio": the thread is (agent, workspace)-scoped.
 #[renderer]
 fn agent_title(app: &App) -> ElementBuilder {
-    let name = app
-        .agent_thread
-        .as_ref()
-        .map_or("…", |thread| thread.agent_name.as_str());
+    let (name, workspace) = app.agent_thread.as_ref().map_or(("…", ""), |thread| {
+        (thread.agent_name.as_str(), thread.workspace_name.as_str())
+    });
+    let mut parts = vec![
+        el(El::Span)
+            .st([St::TextLg, St::TextHigh, St::FontSemibold])
+            .text(name),
+    ];
+    if !workspace.is_empty() {
+        parts.push(
+            el(El::Span)
+                .st([St::TextSm, St::TextMuted])
+                .text(&format!("· {workspace}")),
+        );
+    }
     el(El::Span)
-        .st([St::TextLg, St::TextHigh, St::FontSemibold])
-        .text(name)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+        .append(parts)
 }
 
 /// The conversation history: the windowed, chronological turns + any review gates at the tail.
@@ -75,7 +91,12 @@ fn agent_title(app: &App) -> ElementBuilder {
 #[renderer]
 fn timeline(app: &App) -> ElementBuilder {
     let thread = app.agent_thread.as_ref();
-    let key = thread.map_or("loading", |t| t.agent_id.as_str());
+    // The key carries BOTH ids: the same agent under two workspaces is two threads, and the
+    // morph must replace the subtree when either changes.
+    let key = thread.map_or_else(
+        || "loading".to_owned(),
+        |t| format!("{}-{}", t.agent_id, t.workspace_id),
+    );
     let mut rows: Vec<ElementBuilder> = Vec::new();
     match thread {
         None => rows.push(Text::body("Loading…").muted().build()),
@@ -137,7 +158,10 @@ fn live_tail(app: &App) -> ElementBuilder {
         })
         .collect();
     el(El::Div)
-        .id(&format!("agent-live-{}", thread.agent_id))
+        .id(&format!(
+            "agent-live-{}-{}",
+            thread.agent_id, thread.workspace_id
+        ))
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
         .append(entries)
 }

@@ -91,7 +91,9 @@ pub fn routes() -> Router {
         .page("/w/:wid/team", |p| {
             view(workspace::shell(wid(p), WsTab::Team, workspace::team()))
         })
-        .page("/agent/:id", |_| view(agent::page()))
+        // An agent's thread is workspace-scoped (an agent in two workspaces has two threads,
+        // mirroring its two memories) — so the URL carries both ids.
+        .page("/w/:wid/agent/:aid", |_| view(agent::page()))
         .page("/archived", |_| view(archived::page()))
         .page("/prompts", |_| view(prompts::page()))
         .page("/system", |_| view(system_map::page()))
@@ -202,11 +204,12 @@ fn section_label(text: &str) -> ElementBuilder {
 #[renderer]
 fn agents_nav(app: &App) -> ElementBuilder {
     let open = app.open_agent.as_deref();
+    let open_ws = app.open_agent_workspace.as_deref();
     let active_ws = app.active_workspace.as_deref();
     let nav = &app.agent_nav;
     let mut rows: Vec<ElementBuilder> = vec![section_label("Concierge")];
     if let Some(concierge) = &nav.concierge {
-        // The concierge row opens its one persistent conversation at `/` (not an /agent
+        // The concierge row opens its one persistent conversation at `/` (not an agent-thread
         // task log). Highlighted whenever no other agent's page is open — the sticky
         // selection the old thread list used.
         rows.push(concierge_row(concierge, open.is_none()));
@@ -219,7 +222,11 @@ fn agents_nav(app: &App) -> ElementBuilder {
             group.awaiting,
         ));
         for agent in &group.agents {
-            rows.push(agent_row(agent, open == Some(agent.id.as_str())));
+            // Threads are (agent, workspace)-scoped, so the same agent under two workspace
+            // groups is two distinct rows with two distinct URLs — only the open pair lights up.
+            let active =
+                open == Some(agent.id.as_str()) && open_ws == Some(group.workspace_id.as_str());
+            rows.push(agent_row(agent, &group.workspace_id, active));
         }
     }
     rows.push(new_workspace_link());
@@ -288,10 +295,11 @@ fn concierge_row(row: &crate::state::AgentNavRow, active: bool) -> ElementBuilde
 }
 
 /// One agent row: the leading gutter (accent rail + status dot), the name, and — when it has tasks
-/// parked at a gate — the approval badge. Deep-links to the agent's thread (`/agent/:id`).
-fn agent_row(row: &crate::state::AgentNavRow, active: bool) -> ElementBuilder {
+/// parked at a gate — the approval badge. Deep-links to the agent's thread **in this workspace**
+/// (`/w/:wid/agent/:aid`), mirroring the (agent, workspace) context scoping.
+fn agent_row(row: &crate::state::AgentNavRow, workspace_id: &str, active: bool) -> ElementBuilder {
     let color = if active { St::TextHigh } else { St::TextMuted };
-    Link::route(&format!("/agent/{}", row.id))
+    Link::route(&format!("/w/{workspace_id}/agent/{}", row.id))
         .on(Ev::Click, close_nav())
         .st([
             St::DisplayFlex,
@@ -686,13 +694,17 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     }
     // `/chat/:id` needs no side-effect: there is one persistent concierge conversation, always
     // loaded — the route just shows it (stale bookmarks resolve to the one thread).
-    // Opening an agent's thread projects its merged tasks/runs/live timeline; leaving the agent
-    // pages clears the open agent so the nav highlight follows the route.
-    match RoutePattern::new("/agent/:id")
+    // Opening an agent's workspace thread projects its merged tasks/runs/live timeline; leaving
+    // the agent pages clears the open pair so the nav highlight follows the route.
+    match RoutePattern::new("/w/:wid/agent/:aid")
         .matches(path)
-        .and_then(|params| params.get("id").map(str::to_owned))
-    {
-        Some(id) => bridge::send(Command::OpenAgentThread { agent: id }),
+        .map(|params| {
+            (
+                params.get("aid").unwrap_or("").to_owned(),
+                params.get("wid").unwrap_or("").to_owned(),
+            )
+        }) {
+        Some((agent, workspace)) => bridge::send(Command::OpenAgentThread { agent, workspace }),
         None => bridge::send(Command::CloseAgentThread),
     }
 }
@@ -707,6 +719,7 @@ fn workspace_of(path: &str) -> Option<String> {
         "/w/:wid/tasks/:tid",
         "/w/:wid/workflow",
         "/w/:wid/team",
+        "/w/:wid/agent/:aid",
     ] {
         if let Some(params) = RoutePattern::new(pattern).matches(path)
             && let Some(wid) = params.get("wid")

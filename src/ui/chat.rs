@@ -12,10 +12,9 @@ use super::thread;
 use crate::bridge::{self, Command};
 use crate::state::{App, ChatMessage, MessageRole, TranscriptItem};
 
-/// The shared reading measure for conversation surfaces — the chat transcript, its composer,
-/// and the agent thread all cap and center on it. `60rem` (960px) ≈ 120 mono columns at the
-/// app's 0.82rem body — room for code blocks and tool cards without full-viewport sprawl.
-pub(super) const CHAT_MAX_W: &str = "60rem";
+// The shared reading measure for conversation surfaces is `St::MaxW60rem` + `St::MxAuto` —
+// tokens, not inline styles: the client morph reliably patches classes across route swaps,
+// whereas a reused node's inline `style` can go stale (the width-loss bug this replaced).
 
 // ── Main area ───────────────────────────────────────────────────────────────
 
@@ -51,8 +50,13 @@ fn composer_bar() -> ElementBuilder {
 /// Width-limited column holding the error banner above the composer pill.
 fn composer_column() -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().set("max-width", CHAT_MAX_W))
-        .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapSm])
+        .st([
+            St::MaxW60rem,
+            St::WFull,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapSm,
+        ])
         .append([error_banner(), composer()])
 }
 
@@ -103,15 +107,18 @@ fn transcript(app: &App) -> ElementBuilder {
     let key = format!("thread-{}", app.open_chat.as_deref().unwrap_or("none"));
     el(El::Div)
         .id(&key)
-        // Centered and width-limited. The composer reserves its own space below, so no
-        // outsized bottom padding is needed — just breathing room above and below.
-        .style(
-            Style::new()
-                .set("max-width", CHAT_MAX_W)
-                .set("margin", "0 auto")
-                .set("padding", "1.5rem 1.25rem"),
-        )
-        .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapLg])
+        // Centered and width-limited (tokens — see the reading-measure note at the top). The
+        // composer reserves its own space below, so just breathing room above and below.
+        .st([
+            St::MaxW60rem,
+            St::MxAuto,
+            St::WFull,
+            St::PyLg,
+            St::PxMd,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapLg,
+        ])
         .append(items)
 }
 

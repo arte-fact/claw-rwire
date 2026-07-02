@@ -549,14 +549,18 @@ pub struct AgentLive {
     pub tag: String,
 }
 
-/// An agent's whole-life thread: its identity plus the merged, time-ordered, **windowed**
-/// conversation of its work and any live runs — the projection the `/agent/:id` page renders.
+/// An agent's thread **in one workspace**: its identity plus the merged, time-ordered,
+/// **windowed** conversation of its work there and any live runs — the projection the
+/// `/w/:wid/agent/:aid` page renders. Workspace-scoped to mirror the context model: an agent in
+/// two workspaces has two threads, as it has two memories.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentThread {
     pub agent_id: String,
     pub agent_name: String,
+    pub workspace_id: String,
+    pub workspace_name: String,
     pub items: Vec<AgentThreadItem>,
-    /// The agent's tasks that are running right now (0 or 1 per workspace) — their live streams.
+    /// The agent's tasks here that are running right now — their live streams.
     pub live: Vec<AgentLive>,
     /// How many older turns fell outside the window (a muted note at the top when > 0).
     pub truncated: usize,
@@ -786,9 +790,12 @@ pub struct App {
     pub role_defaults: RoleDefaults,
     /// The task whose detail view (run chain) is open, or `None`.
     pub task_detail: Option<TaskDetail>,
-    /// The agent whose thread page (`/agent/:id`) is open, or `None` — so background lifecycle
-    /// events know whether to re-project [`Self::agent_thread`].
+    /// The agent whose thread page (`/w/:wid/agent/:aid`) is open, or `None` — so background
+    /// lifecycle events know whether to re-project [`Self::agent_thread`].
     pub open_agent: Option<String>,
+    /// The workspace the open agent thread is scoped to (an agent in two workspaces has two
+    /// threads); pairs with [`Self::open_agent`] for the nav row highlight.
+    pub open_agent_workspace: Option<String>,
     /// The open agent's merged, time-ordered thread (its tasks + runs + live runs), or `None`.
     pub agent_thread: Option<AgentThread>,
     /// The agent-list nav (Phase 2): the concierge pinned on top, then agents grouped by

@@ -20,7 +20,7 @@ use rwire::{ChangeSet, SharedServerState};
 
 use crate::db::task_runs::TaskRun;
 use crate::db::tasks::TaskStatus;
-use crate::db::{agents, pipeline, task_runs, tasks};
+use crate::db::{agents, pipeline, task_runs, tasks, workspaces};
 use crate::state::{AgentLive, AgentThread, AgentThreadItem, AgentTurn, App, TaskLink};
 
 use super::tasks::agent_names;
@@ -32,19 +32,19 @@ const TURN_WINDOW: usize = 50;
 /// The SQL cap on out-of-lane runs considered for the merge (each is at most one turn).
 const RECENT_RUNS: usize = 50;
 
-/// The open agent, mirrored bridge-side so `refresh_if_open` can build the projection without
-/// holding the shared-state lock. Written by `load`/`close` (both run on the bridge thread).
-static OPEN_AGENT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+/// The open (agent, workspace) pair, mirrored bridge-side so `refresh_if_open` can build the
+/// projection without holding the shared-state lock. Written by `load`/`close` (bridge thread).
+static OPEN_AGENT: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::new();
 
-fn open_agent_slot() -> &'static Mutex<Option<String>> {
+fn open_agent_slot() -> &'static Mutex<Option<(String, String)>> {
     OPEN_AGENT.get_or_init(|| Mutex::new(None))
 }
 
-fn set_open_agent(id: Option<String>) {
-    *open_agent_slot().lock().unwrap_or_else(|e| e.into_inner()) = id;
+fn set_open_agent(pair: Option<(String, String)>) {
+    *open_agent_slot().lock().unwrap_or_else(|e| e.into_inner()) = pair;
 }
 
-fn open_agent() -> Option<String> {
+fn open_agent() -> Option<(String, String)> {
     open_agent_slot()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -128,13 +128,24 @@ fn run_turn(
     }
 }
 
-/// Build an agent's thread: the chronological merge of its lane (task-opened turns + every run
-/// on those tasks) and its out-of-lane runs, windowed to the newest `window` turns, with review
-/// gates for parked lane tasks at the tail. `None` if the agent id doesn't resolve.
-fn build_with_window(conn: &Connection, agent_id: &str, window: usize) -> Option<AgentThread> {
+/// Build an agent's thread **in one workspace**: the chronological merge of its lane there
+/// (task-opened turns + every run on those tasks) and its out-of-lane runs in that workspace,
+/// windowed to the newest `window` turns, with review gates for parked lane tasks at the tail.
+/// `None` if the agent or workspace id doesn't resolve.
+fn build_with_window(
+    conn: &Connection,
+    agent_id: &str,
+    workspace_id: &str,
+    window: usize,
+) -> Option<AgentThread> {
     let agent = agents::get(conn, agent_id).ok().flatten()?;
+    let workspace = workspaces::get(conn, workspace_id).ok().flatten()?;
     let names = agent_names(conn);
-    let lane = tasks::list_for_agent(conn, agent_id).unwrap_or_default();
+    let lane: Vec<tasks::Task> = tasks::list_for_agent(conn, agent_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|task| task.workspace_id == workspace_id)
+        .collect();
     // (sort stamp, turn) — ISO-8601 UTC stamps sort lexicographically.
     let mut stamped: Vec<(String, AgentTurn)> = Vec::new();
     let mut gates: Vec<AgentThreadItem> = Vec::new();
@@ -180,9 +191,11 @@ fn build_with_window(conn: &Connection, agent_id: &str, window: usize) -> Option
             });
         }
     }
-    // Out-of-lane runs (reviews of other agents' tasks) — lane runs are already covered above.
+    // Out-of-lane runs (reviews of other agents' tasks) in this workspace — lane runs are
+    // already covered above.
     for review in task_runs::recent_by_agent(conn, agent_id, RECENT_RUNS).unwrap_or_default() {
-        if lane.iter().any(|task| task.id == review.task_id) {
+        if review.workspace_id != workspace_id || lane.iter().any(|task| task.id == review.task_id)
+        {
             continue;
         }
         let link = TaskLink {
@@ -206,56 +219,71 @@ fn build_with_window(conn: &Connection, agent_id: &str, window: usize) -> Option
     Some(AgentThread {
         agent_id: agent.id,
         agent_name: agent.name,
+        workspace_id: workspace.id,
+        workspace_name: workspace.name,
         items,
         live,
         truncated,
     })
 }
 
-fn build(conn: &Connection, agent_id: &str) -> Option<AgentThread> {
-    build_with_window(conn, agent_id, TURN_WINDOW)
+fn build(conn: &Connection, agent_id: &str, workspace_id: &str) -> Option<AgentThread> {
+    build_with_window(conn, agent_id, workspace_id, TURN_WINDOW)
 }
 
-/// Open (or re-open) an agent's thread — set as the open agent and project its timeline. Called
-/// when a `/agent/:id` route resolves.
-pub fn load(conn: &Connection, shared: &SharedServerState, agent_id: &str) {
-    set_open_agent(Some(agent_id.to_owned()));
-    let thread = build(conn, agent_id);
+/// Open (or re-open) an agent's workspace thread — set as the open pair and project its
+/// timeline. Called when a `/w/:wid/agent/:aid` route resolves.
+pub fn load(conn: &Connection, shared: &SharedServerState, agent_id: &str, workspace_id: &str) {
+    set_open_agent(Some((agent_id.to_owned(), workspace_id.to_owned())));
+    let thread = build(conn, agent_id, workspace_id);
     let agent_id = agent_id.to_owned();
+    let workspace_id = workspace_id.to_owned();
     shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_OPEN_AGENT, App::FIELD_AGENT_THREAD]),
+        ChangeSet::from_fields(&[
+            App::FIELD_OPEN_AGENT,
+            App::FIELD_OPEN_AGENT_WORKSPACE,
+            App::FIELD_AGENT_THREAD,
+        ]),
         move |app| {
             app.open_agent = Some(agent_id);
+            app.open_agent_workspace = Some(workspace_id);
             app.agent_thread = thread;
         },
     );
 }
 
-/// Close the agent page — clear the open agent + its projection so the nav highlight (and the
+/// Close the agent page — clear the open pair + the projection so the nav highlight (and the
 /// lifecycle refresh guard) follow the route off the agent pages.
 pub fn close(shared: &SharedServerState) {
     set_open_agent(None);
     shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_OPEN_AGENT, App::FIELD_AGENT_THREAD]),
+        ChangeSet::from_fields(&[
+            App::FIELD_OPEN_AGENT,
+            App::FIELD_OPEN_AGENT_WORKSPACE,
+            App::FIELD_AGENT_THREAD,
+        ]),
         |app| {
             app.open_agent = None;
+            app.open_agent_workspace = None;
             app.agent_thread = None;
         },
     );
 }
 
-/// Re-project the open agent's thread after a task lifecycle change, so a run finishing / a task
+/// Re-project the open agent thread after a task lifecycle change, so a run finishing / a task
 /// advancing updates the page live. A cheap no-op when no agent page is open; the projection is
 /// built **before** taking the shared-state lock (the DB work never blocks renders).
 pub fn refresh_if_open(conn: &Connection, shared: &SharedServerState) {
-    let Some(agent_id) = open_agent() else {
+    let Some((agent_id, workspace_id)) = open_agent() else {
         return;
     };
-    let thread = build(conn, &agent_id);
+    let thread = build(conn, &agent_id, &workspace_id);
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_AGENT_THREAD]),
         move |app| {
-            if app.open_agent.as_deref() == Some(agent_id.as_str()) {
+            if app.open_agent.as_deref() == Some(agent_id.as_str())
+                && app.open_agent_workspace.as_deref() == Some(workspace_id.as_str())
+            {
                 app.agent_thread = thread;
             }
         },
@@ -324,10 +352,10 @@ mod tests {
     #[test]
     fn build_projects_identity_and_returns_none_for_unknown_agent() {
         let conn = seeded();
-        let thread = build(&conn, "ag-a").expect("thread");
+        let thread = build(&conn, "ag-a", "ws").expect("thread");
         assert_eq!(thread.agent_id, "ag-a");
         assert_eq!(thread.agent_name, "Forge");
-        assert!(build(&conn, "nope").is_none(), "unknown agent → None");
+        assert!(build(&conn, "nope", "ws").is_none(), "unknown agent → None");
     }
 
     #[test]
@@ -359,7 +387,7 @@ mod tests {
         )
         .expect("r2");
 
-        let thread = build(&conn, "ag-a").expect("thread");
+        let thread = build(&conn, "ag-a", "ws").expect("thread");
         let turns = turns(&thread);
         assert_eq!(turns.len(), 3);
         // you: the spec, linked to the task.
@@ -397,7 +425,7 @@ mod tests {
         )
         .expect("r1");
 
-        let thread = build(&conn, "ag-a").expect("thread");
+        let thread = build(&conn, "ag-a", "ws").expect("thread");
         let turn = turns(&thread)[1];
         assert_eq!(turn.author, "you");
         assert!(!turn.own);
@@ -424,7 +452,7 @@ mod tests {
         )
         .expect("r1");
 
-        let thread = build(&conn, "ag-c").expect("critic thread");
+        let thread = build(&conn, "ag-c", "ws").expect("critic thread");
         let critic_turns = turns(&thread);
         // No task-opened turn (not Critic's lane) — just its review activity, linked.
         assert_eq!(critic_turns.len(), 1);
@@ -435,7 +463,7 @@ mod tests {
         assert_eq!(critic_turns[0].verdict.as_deref(), Some("pass"));
 
         // And Forge's thread carries the same run as an *incoming* turn exactly once.
-        let forge = build(&conn, "ag-a").expect("forge thread");
+        let forge = build(&conn, "ag-a", "ws").expect("forge thread");
         let incoming: Vec<_> = turns(&forge)
             .into_iter()
             .filter(|t| t.author == "Critic")
@@ -460,7 +488,7 @@ mod tests {
         }
 
         // 4 turns total (opened + 3 runs); window 2 keeps the newest 2.
-        let thread = build_with_window(&conn, "ag-a", 2).expect("thread");
+        let thread = build_with_window(&conn, "ag-a", "ws", 2).expect("thread");
         let turns = turns(&thread);
         assert_eq!(thread.truncated, 2);
         assert_eq!(turns.len(), 2);
@@ -476,7 +504,7 @@ mod tests {
         tasks::set_status(&conn, "t1", TaskStatus::Awaiting).expect("park");
         tasks::set_status(&conn, "t2", TaskStatus::Running).expect("run");
 
-        let thread = build(&conn, "ag-a").expect("thread");
+        let thread = build(&conn, "ag-a", "ws").expect("thread");
         // The gate is the last item, after every turn.
         assert!(
             matches!(

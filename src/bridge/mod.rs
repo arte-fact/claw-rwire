@@ -152,9 +152,11 @@ pub enum Command {
     LoadTaskDetail {
         task_id: String,
     },
-    /// Open an agent's thread (`/agent/:id`) — project its merged tasks/runs/live timeline.
+    /// Open an agent's workspace thread (`/w/:wid/agent/:aid`) — project its merged
+    /// tasks/runs/live timeline scoped to that workspace.
     OpenAgentThread {
         agent: String,
+        workspace: String,
     },
     /// Leaving the agent pages — clear the open agent so the nav highlight follows the route.
     CloseAgentThread,
@@ -691,7 +693,9 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadTasks { workspace } => tasks::load(conn, shared, &workspace),
         Command::LoadDashboard => tasks::project_dashboard(conn, shared),
         Command::LoadTaskDetail { task_id } => tasks::load_detail(conn, shared, &task_id),
-        Command::OpenAgentThread { agent } => agent_thread::load(conn, shared, &agent),
+        Command::OpenAgentThread { agent, workspace } => {
+            agent_thread::load(conn, shared, &agent, &workspace)
+        }
         Command::CloseAgentThread => agent_thread::close(shared),
         Command::LoadWorkflow { workspace } => workflow::load(conn, shared, &workspace),
         Command::AddStep { workspace, kind } => workflow::add(conn, shared, &workspace, &kind),
