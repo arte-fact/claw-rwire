@@ -105,9 +105,20 @@ fn run_turn(
         .map(str::trim)
         .filter(|f| !f.is_empty())
         .map(str::to_owned);
-    // A human verdict records a "(you) pass" stub as output — the feedback is the real message.
+    // A human verdict records a "(you) pass" stub as output — the feedback is the real
+    // message; without feedback, a plain verb (the author + chip already say the rest —
+    // rendering the raw "(you) pass" stub read as noise in the live audit).
     let (body, feedback) = if run.agent.is_none() && feedback.is_some() {
         (feedback.clone().unwrap_or_default(), None)
+    } else if run.agent.is_none() && run.verdict.is_some() {
+        (
+            match run.verdict.as_deref() {
+                Some("pass") => "Approved.".to_owned(),
+                Some("reject") => "Rejected.".to_owned(),
+                _ => "Requested changes.".to_owned(),
+            },
+            None,
+        )
     } else if output.is_empty() {
         ("(no output)".to_owned(), feedback)
     } else {
@@ -501,6 +512,27 @@ mod tests {
         assert_eq!(turn.body, "make the header blue");
         assert_eq!(turn.feedback, None);
         assert_eq!(turn.verdict.as_deref(), Some("revise"));
+    }
+
+    #[test]
+    fn human_verdict_without_feedback_reads_as_a_plain_verb() {
+        let conn = seeded();
+        tasks::create(&conn, &new_task("t1", "Task")).expect("create");
+        task_runs::append(
+            &conn,
+            &NewRun {
+                role: "validator",
+                output: Some("(you) pass"),
+                verdict: Some("pass"),
+                ..base_run("r1", "t1")
+            },
+        )
+        .expect("r1");
+        let thread = build(&conn, "ag-a", "ws").expect("thread");
+        let turn = turns(&thread)[1];
+        // Author + chip already say who and what — the raw "(you) pass" stub read as noise.
+        assert_eq!(turn.body, "Approved.");
+        assert_eq!(turn.verdict.as_deref(), Some("pass"));
     }
 
     #[test]

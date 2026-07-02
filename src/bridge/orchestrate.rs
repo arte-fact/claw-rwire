@@ -91,26 +91,25 @@ fn launch_planning(
     // Planning reads the same (agent, workspace) memory row as the owner's producer runs —
     // same memory, different hat: plans build on what shipped and what failed there. Budgeted
     // F→U→W→M like every other run; the planning unit is one brief, so memory gets real room.
-    let shares = memory::shares_for(crate::state::RunKind::Planning);
-    let budget = memory::prompt_budget(
-        super::cached_context(&inference).unwrap_or(super::DEFAULT_CONTEXT_TOKENS),
-    );
     let ws_brief = workspace::read_agent_md(&workspace_dir).unwrap_or_default();
-    let fixed = memory::estimate_tokens(
-        role.chars().count()
-            + inference
-                .agent_prompt
-                .as_deref()
-                .unwrap_or("")
-                .chars()
-                .count()
-            + ws_brief.chars().count(),
-    );
-    let unit = memory::estimate_tokens(brief_text.chars().count());
-    let allowance = memory::memory_allowance(budget, fixed, unit, &shares);
+    let fixed_chars = role.chars().count()
+        + inference
+            .agent_prompt
+            .as_deref()
+            .unwrap_or("")
+            .chars()
+            .count()
+        + ws_brief.chars().count();
     let row = db::agent_memory::get(conn, &inference.agent_id, Some(workspace)).unwrap_or_default();
-    let memory_text = memory::fill_memory(allowance, None, row.text().as_deref())
-        .map(|text| memory::wrap_workspace_memory(&text));
+    let memory_text = memory::budget_fill(
+        super::cached_context(&inference).unwrap_or(super::DEFAULT_CONTEXT_TOKENS),
+        crate::state::RunKind::Planning,
+        fixed_chars,
+        brief_text.chars().count(),
+        None,
+        row.text().as_deref(),
+    )
+    .map(|text| memory::wrap_workspace_memory(&text));
     let system_prompt = run_system_prompt(
         &role,
         Some(&workspace_dir),

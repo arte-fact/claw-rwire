@@ -30,41 +30,15 @@ pub(crate) fn tool_row(tool: &ToolCardView, key: &str, toggled: &[String]) -> El
     } else {
         ("✗", St::TextError)
     };
-    let header = el(El::Button)
-        .at(At::Type, Av::Button)
-        .data("tool", key)
-        .on(Ev::Click, toggle_tool())
-        .st([
-            St::FontInheritAll,
-            St::WFull,
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::TextXs,
-            St::FontMono,
-            St::BgTransparent,
-            St::BorderNone,
-            St::P0,
-            St::CursorPointer,
-            St::TextLeft,
-        ])
-        .append([
-            el(El::Span)
-                .st([St::TextLow])
-                .text(if open { "▾" } else { "▸" }),
-            el(El::Span).st([St::TextMuted]).text(&tool.name),
-            el(El::Span)
-                .st([St::MinW0, St::Flex1, St::TextLow, St::Truncate])
-                .text(&tool_summary(tool)),
-            el(El::Span).st([mark_color]).text(mark),
-        ]);
-    let mut children = vec![header];
-    if open {
-        children.push(tool_body(tool));
-    }
-    el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
-        .append(children)
+    let mark = el(El::Span).st([mark_color]).text(mark);
+    disclosure_row(
+        key,
+        open,
+        &tool.name,
+        &tool_summary(tool),
+        Some(mark),
+        open.then(|| tool_body(tool)),
+    )
 }
 
 /// The run's launch-time memory as a disclosure row (R3.5 M4 provenance): a muted "memory ·
@@ -72,6 +46,51 @@ pub(crate) fn tool_row(tool: &ToolCardView, key: &str, toggled: &[String]) -> El
 /// tool rows, so "why did it do that?" sits right where the forensics live.
 pub(crate) fn memory_row(memory: &str, key: &str, toggled: &[String]) -> ElementBuilder {
     let open = toggled.iter().any(|t| t == key);
+    let body = open.then(|| {
+        el(El::Div)
+            .st([
+                St::TextXs,
+                St::TextMuted,
+                St::WhitespacePreWrap,
+                St::PSm,
+                St::BgApp,
+                St::Rounded0,
+            ])
+            .text(memory)
+    });
+    disclosure_row(
+        key,
+        open,
+        "memory",
+        &format!("launched remembering · {}", one_line(memory, 96)),
+        None,
+        body,
+    )
+}
+
+/// The shared disclosure-row scaffold: a full-width toggle header (caret + name + a truncated
+/// summary + an optional trailing mark) over the body when open. One shape for tool calls and
+/// the memory snapshot, so the forensics read uniformly.
+fn disclosure_row(
+    key: &str,
+    open: bool,
+    name: &str,
+    summary: &str,
+    mark: Option<ElementBuilder>,
+    body: Option<ElementBuilder>,
+) -> ElementBuilder {
+    let mut header_parts = vec![
+        el(El::Span)
+            .st([St::TextLow])
+            .text(if open { "▾" } else { "▸" }),
+        el(El::Span).st([St::TextMuted]).text(name),
+        el(El::Span)
+            .st([St::MinW0, St::Flex1, St::TextLow, St::Truncate])
+            .text(summary),
+    ];
+    if let Some(mark) = mark {
+        header_parts.push(mark);
+    }
     let header = el(El::Button)
         .at(At::Type, Av::Button)
         .data("tool", key)
@@ -90,29 +109,10 @@ pub(crate) fn memory_row(memory: &str, key: &str, toggled: &[String]) -> Element
             St::CursorPointer,
             St::TextLeft,
         ])
-        .append([
-            el(El::Span)
-                .st([St::TextLow])
-                .text(if open { "▾" } else { "▸" }),
-            el(El::Span).st([St::TextMuted]).text("memory"),
-            el(El::Span)
-                .st([St::MinW0, St::Flex1, St::TextLow, St::Truncate])
-                .text(&format!("launched remembering · {}", one_line(memory, 96))),
-        ]);
+        .append(header_parts);
     let mut children = vec![header];
-    if open {
-        children.push(
-            el(El::Div)
-                .st([
-                    St::TextXs,
-                    St::TextMuted,
-                    St::WhitespacePreWrap,
-                    St::PSm,
-                    St::BgApp,
-                    St::Rounded0,
-                ])
-                .text(memory),
-        );
+    if let Some(body) = body {
+        children.push(body);
     }
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapXs])

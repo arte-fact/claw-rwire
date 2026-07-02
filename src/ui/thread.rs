@@ -10,8 +10,11 @@ use super::chat::accent_bar;
 
 /// The scrolling transcript area. `column-reverse` is the no-JS autoscroll: the bottom is the
 /// scroll origin, so the view stays pinned to the newest entry as content grows — yet a reader
-/// who scrolls up keeps their place (new entries land below, off screen). `inner` is the
-/// normal-order (top-to-bottom) entry column.
+/// who scrolls up keeps their place (new entries land below, off screen). `JustifyEnd` is the
+/// *visual top* in a reversed column: content shorter than the viewport (an empty thread, a
+/// fresh page) reads from the top instead of floating at the bottom of a void; once content
+/// overflows, it has no effect and the bottom pin takes over. `inner` is the normal-order
+/// (top-to-bottom) entry column.
 pub fn scroll(inner: ElementBuilder) -> ElementBuilder {
     el(El::Div)
         .st([
@@ -20,6 +23,7 @@ pub fn scroll(inner: ElementBuilder) -> ElementBuilder {
             St::Flex1,
             St::DisplayFlex,
             St::FlexColReverse,
+            St::JustifyEnd,
         ])
         .append([inner])
 }

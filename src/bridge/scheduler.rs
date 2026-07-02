@@ -113,35 +113,34 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
         // the current unit, reserve the producer's working headroom, and let memory fill only
         // what's left — the last-task recap first, then the workspace summary. A long loop
         // outgrowing half the budget compacts its oldest passes first (the mid-unit fold).
-        let shares = memory::shares_for(crate::state::RunKind::Task);
-        let budget = memory::prompt_budget(
-            super::cached_context(&inference).unwrap_or(super::DEFAULT_CONTEXT_TOKENS),
-        );
-        let unit_cap_chars = (f64::from(budget) * 0.5) as usize * 4;
+        let context = super::cached_context(&inference).unwrap_or(super::DEFAULT_CONTEXT_TOKENS);
+        let unit_cap_chars = (f64::from(memory::prompt_budget(context)) * 0.5) as usize * 4;
         let (condensed, skip) = memory::compact_attempt(&prior, unit_cap_chars);
         let prior = &prior[skip..];
         let brief = workspace::read_agent_md(&workspace_dir).unwrap_or_default();
-        let fixed = memory::estimate_tokens(
-            preamble.chars().count()
-                + inference
-                    .agent_prompt
-                    .as_deref()
-                    .unwrap_or("")
-                    .chars()
-                    .count()
-                + brief.chars().count(),
-        );
-        let unit = memory::estimate_tokens(
-            task.spec.chars().count()
-                + memory::attempt_chars(prior)
-                + condensed.as_deref().unwrap_or("").chars().count(),
-        );
-        let allowance = memory::memory_allowance(budget, fixed, unit, &shares);
+        let fixed_chars = preamble.chars().count()
+            + inference
+                .agent_prompt
+                .as_deref()
+                .unwrap_or("")
+                .chars()
+                .count()
+            + brief.chars().count();
+        let unit_chars = task.spec.chars().count()
+            + memory::attempt_chars(prior)
+            + condensed.as_deref().unwrap_or("").chars().count();
         let row = db::agent_memory::get(conn, &inference.agent_id, Some(&task.workspace_id))
             .unwrap_or_default();
         let recap =
             memory::last_task_recap(conn, &inference.agent_id, &task.workspace_id, &task.id);
-        let memory_fill = memory::fill_memory(allowance, recap.as_deref(), row.text().as_deref());
+        let memory_fill = memory::budget_fill(
+            context,
+            crate::state::RunKind::Task,
+            fixed_chars,
+            unit_chars,
+            recap.as_deref(),
+            row.text().as_deref(),
+        );
         // The provenance snapshot (R3.5 M4): what the run remembered at launch, capped so a
         // big-context model's memory doesn't bloat every run row.
         let snapshot = memory_fill.as_deref().map(memory::snapshot);

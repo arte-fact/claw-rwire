@@ -58,6 +58,28 @@ pub(super) fn memory_allowance(b: u32, f: u32, u: u32, shares: &RoleShares) -> u
     ceiling.min(left)
 }
 
+/// The whole F→U→W→M dance for one run, as call sites use it: budget from the model's context,
+/// per-role shares, allowance after the fixed identity (`fixed_chars`) and the current unit
+/// (`unit_chars`) are placed, then the fill (recap first, then summary). Returns the raw
+/// budget-fitted memory — the caller wraps it for its prompt (and M4 snapshots it).
+pub(super) fn budget_fill(
+    context_tokens: u32,
+    run: RunKind,
+    fixed_chars: usize,
+    unit_chars: usize,
+    recap: Option<&str>,
+    summary: Option<&str>,
+) -> Option<String> {
+    let shares = shares_for(run);
+    let allowance = memory_allowance(
+        prompt_budget(context_tokens),
+        estimate_tokens(fixed_chars),
+        estimate_tokens(unit_chars),
+        &shares,
+    );
+    fill_memory(allowance, recap, summary)
+}
+
 /// Marker appended when the rolling summary had to be cut to fit the allowance.
 const TRIM_MARKER: &str = "… (older memory trimmed to fit)";
 
@@ -280,6 +302,117 @@ memory. Keep durable knowledge — the workspace's layout, conventions, decision
 what failed and why; drop step-by-step forensics. Write terse notes, not prose, at most \
 {target} words. Output only the memory.";
 
+// ── Operator mutations (the memory card's Save / Clear / Pause) ──
+//
+// Each is a **no-op when nothing changes** — a reflexive Save or a redundant toggle must not
+// write, journal, or put a line in the timeline (the live-audit noise finding).
+
+/// Overwrite one scope's summary (keeping the fold marker), journaling the edit — unless the
+/// trimmed text is what's already stored.
+pub(super) fn operator_edit(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    workspace: Option<&str>,
+    summary: &str,
+) {
+    let current = db::agent_memory::get(conn, agent_id, workspace).unwrap_or_default();
+    let summary = summary.trim();
+    if summary == current.summary.trim() {
+        return;
+    }
+    if let Err(err) = db::agent_memory::set(
+        conn,
+        agent_id,
+        workspace,
+        summary,
+        current.summarized_through,
+    ) {
+        log_line(format!("memory: operator edit failed: {err}"));
+    }
+    journal(
+        conn,
+        agent_id,
+        workspace,
+        db::agent_memory_log::MemoryEventKind::Edit,
+        None,
+        "memory edited",
+        summary,
+    );
+}
+
+/// Reset one scope (summary + marker), journaling the clear — unless it's already empty.
+pub(super) fn operator_clear(conn: &rusqlite::Connection, agent_id: &str, workspace: Option<&str>) {
+    let current = db::agent_memory::get(conn, agent_id, workspace).unwrap_or_default();
+    if current.summary.trim().is_empty() && current.summarized_through == 0 {
+        return;
+    }
+    if let Err(err) = db::agent_memory::set(conn, agent_id, workspace, "", 0) {
+        log_line(format!("memory: operator clear failed: {err}"));
+    }
+    journal(
+        conn,
+        agent_id,
+        workspace,
+        db::agent_memory_log::MemoryEventKind::Clear,
+        None,
+        "memory cleared",
+        "",
+    );
+}
+
+/// Freeze/resume one scope's auto-fold, journaling the toggle — unless it's already there.
+pub(super) fn operator_set_paused(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    workspace: Option<&str>,
+    paused: bool,
+) {
+    let current = db::agent_memory::get(conn, agent_id, workspace).unwrap_or_default();
+    if current.paused == paused {
+        return;
+    }
+    if let Err(err) = db::agent_memory::set_paused(conn, agent_id, workspace, paused) {
+        log_line(format!("memory: operator pause failed: {err}"));
+    }
+    let (kind, note) = if paused {
+        (
+            db::agent_memory_log::MemoryEventKind::Pause,
+            "auto-fold paused",
+        )
+    } else {
+        (
+            db::agent_memory_log::MemoryEventKind::Resume,
+            "auto-fold resumed",
+        )
+    };
+    journal(
+        conn,
+        agent_id,
+        workspace,
+        kind,
+        None,
+        note,
+        &current.summary,
+    );
+}
+
+/// Record a memory mutation in the journal (R3.5 M1) — best-effort, never blocks the mutation.
+pub(super) fn journal(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    workspace: Option<&str>,
+    kind: db::agent_memory_log::MemoryEventKind,
+    source: Option<&str>,
+    note: &str,
+    summary: &str,
+) {
+    if let Err(err) =
+        db::agent_memory_log::append(conn, agent_id, workspace, kind, source, note, summary)
+    {
+        log_line(format!("memory: journal failed: {err}"));
+    }
+}
+
 /// Fold a finished task into its producing agents' (agent, workspace) memory — the task is the
 /// worker's natural turn boundary, as the message is the concierge's. One summarizer call per
 /// distinct producing agent (usually one), off the bridge thread; best-effort. Paused rows are
@@ -369,6 +502,47 @@ pub(super) fn fold_finished_task(
 mod tests {
     use super::*;
     use crate::db::tasks::{TaskKind, TaskStatus};
+
+    #[test]
+    fn operator_mutations_are_noops_when_nothing_changes() {
+        let conn = crate::db::open_in_memory().expect("db");
+        crate::db::agents::create(&conn, "ag-1", "A", None, None).expect("agent");
+        let journal_len = |conn: &rusqlite::Connection| {
+            db::agent_memory_log::recent(conn, "ag-1", None, 99)
+                .expect("recent")
+                .len()
+        };
+
+        // A real edit writes + journals once; saving the same text again does neither.
+        operator_edit(&conn, "ag-1", None, "  knows things  ");
+        assert_eq!(journal_len(&conn), 1);
+        operator_edit(&conn, "ag-1", None, "knows things");
+        assert_eq!(journal_len(&conn), 1, "reflexive Save journals nothing");
+        assert_eq!(
+            db::agent_memory::get(&conn, "ag-1", None)
+                .expect("row")
+                .summary,
+            "knows things"
+        );
+
+        // Pause once journals once; pausing again is silent; resume journals again.
+        operator_set_paused(&conn, "ag-1", None, true);
+        operator_set_paused(&conn, "ag-1", None, true);
+        assert_eq!(journal_len(&conn), 2);
+        operator_set_paused(&conn, "ag-1", None, false);
+        assert_eq!(journal_len(&conn), 3);
+
+        // Clear once journals once; clearing the already-empty scope is silent.
+        operator_clear(&conn, "ag-1", None);
+        operator_clear(&conn, "ag-1", None);
+        assert_eq!(journal_len(&conn), 4);
+        assert_eq!(
+            db::agent_memory::get(&conn, "ag-1", None)
+                .expect("row")
+                .text(),
+            None
+        );
+    }
 
     #[test]
     fn prompt_budget_reserves_an_eighth_within_bounds() {

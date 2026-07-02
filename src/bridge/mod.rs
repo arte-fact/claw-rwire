@@ -816,7 +816,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             {
                 log_line(format!("bridge: update memory failed: {err}"));
             }
-            journal_memory(
+            memory::journal(
                 conn,
                 &agent_id,
                 scope,
@@ -825,87 +825,30 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
                 &note,
                 &summary,
             );
-            // A background fold can land while its agent's page is open — reflect it live.
-            agent_thread::refresh_if_open(conn, shared);
-            project_chat_memory(conn, shared);
-            project_memory_overview(conn, shared);
+            project_memory_surfaces(conn, shared);
         }
         Command::SetMemory {
             agent_id,
             workspace,
             summary,
         } => {
-            // Keep the marker so the windowing stays consistent with the edited summary.
-            let scope = workspace.as_deref();
-            let marker = db::agent_memory::get(conn, &agent_id, scope)
-                .map(|m| m.summarized_through)
-                .unwrap_or(0);
-            let summary = summary.trim();
-            if let Err(err) = db::agent_memory::set(conn, &agent_id, scope, summary, marker) {
-                log_line(format!("bridge: set memory failed: {err}"));
-            }
-            journal_memory(
-                conn,
-                &agent_id,
-                scope,
-                db::agent_memory_log::MemoryEventKind::Edit,
-                None,
-                "memory edited",
-                summary,
-            );
-            agent_thread::refresh_if_open(conn, shared);
-            project_chat_memory(conn, shared);
-            project_memory_overview(conn, shared);
+            memory::operator_edit(conn, &agent_id, workspace.as_deref(), &summary);
+            project_memory_surfaces(conn, shared);
         }
         Command::ClearMemory {
             agent_id,
             workspace,
         } => {
-            // Reset the summary and the marker — the next turn re-windows from scratch.
-            let scope = workspace.as_deref();
-            if let Err(err) = db::agent_memory::set(conn, &agent_id, scope, "", 0) {
-                log_line(format!("bridge: clear memory failed: {err}"));
-            }
-            journal_memory(
-                conn,
-                &agent_id,
-                scope,
-                db::agent_memory_log::MemoryEventKind::Clear,
-                None,
-                "memory cleared",
-                "",
-            );
-            agent_thread::refresh_if_open(conn, shared);
-            project_chat_memory(conn, shared);
-            project_memory_overview(conn, shared);
+            memory::operator_clear(conn, &agent_id, workspace.as_deref());
+            project_memory_surfaces(conn, shared);
         }
         Command::SetMemoryPaused {
             agent_id,
             workspace,
             paused,
         } => {
-            let scope = workspace.as_deref();
-            if let Err(err) = db::agent_memory::set_paused(conn, &agent_id, scope, paused) {
-                log_line(format!("bridge: pause memory failed: {err}"));
-            }
-            let (kind, note) = if paused {
-                (
-                    db::agent_memory_log::MemoryEventKind::Pause,
-                    "auto-fold paused",
-                )
-            } else {
-                (
-                    db::agent_memory_log::MemoryEventKind::Resume,
-                    "auto-fold resumed",
-                )
-            };
-            let summary = db::agent_memory::get(conn, &agent_id, scope)
-                .map(|memory| memory.summary)
-                .unwrap_or_default();
-            journal_memory(conn, &agent_id, scope, kind, None, note, &summary);
-            agent_thread::refresh_if_open(conn, shared);
-            project_chat_memory(conn, shared);
-            project_memory_overview(conn, shared);
+            memory::operator_set_paused(conn, &agent_id, workspace.as_deref(), paused);
+            project_memory_surfaces(conn, shared);
         }
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)
@@ -1051,32 +994,31 @@ fn dispatch_native(
             .collect();
     // F→U→W→M: the summary layer takes only what the budget leaves once the identity and the
     // raw tail are placed and the concierge's working headroom is reserved.
-    let shares = memory::shares_for(RunKind::Chat);
-    let budget =
-        memory::prompt_budget(cached_context(&inference).unwrap_or(DEFAULT_CONTEXT_TOKENS));
     let brief = workspace_dir
         .as_deref()
         .and_then(workspace::read_agent_md)
         .unwrap_or_default();
-    let fixed = memory::estimate_tokens(
-        role.chars().count()
-            + inference
-                .agent_prompt
-                .as_deref()
-                .unwrap_or("")
-                .chars()
-                .count()
-            + brief.chars().count(),
-    );
-    let unit = memory::estimate_tokens(
-        model_turns
-            .iter()
-            .map(|turn| turn.text.chars().count() + 16)
-            .sum(),
-    );
-    let allowance = memory::memory_allowance(budget, fixed, unit, &shares);
-    let memory_text = memory::fill_memory(allowance, None, memory.text().as_deref())
-        .map(|summary| wrap_memory(&summary));
+    let fixed_chars = role.chars().count()
+        + inference
+            .agent_prompt
+            .as_deref()
+            .unwrap_or("")
+            .chars()
+            .count()
+        + brief.chars().count();
+    let unit_chars = model_turns
+        .iter()
+        .map(|turn| turn.text.chars().count() + 16)
+        .sum();
+    let memory_text = memory::budget_fill(
+        cached_context(&inference).unwrap_or(DEFAULT_CONTEXT_TOKENS),
+        RunKind::Chat,
+        fixed_chars,
+        unit_chars,
+        None,
+        memory.text().as_deref(),
+    )
+    .map(|summary| wrap_memory(&summary));
     let system_prompt = run_system_prompt(
         &role,
         workspace_dir.as_deref(),
@@ -1272,21 +1214,12 @@ fn project_memory_overview(conn: &rusqlite::Connection, shared: &SharedServerSta
     );
 }
 
-/// Record a memory mutation in the journal (R3.5 M1) — best-effort, never blocks the mutation.
-fn journal_memory(
-    conn: &rusqlite::Connection,
-    agent_id: &str,
-    workspace: Option<&str>,
-    kind: db::agent_memory_log::MemoryEventKind,
-    source: Option<&str>,
-    note: &str,
-    summary: &str,
-) {
-    if let Err(err) =
-        db::agent_memory_log::append(conn, agent_id, workspace, kind, source, note, summary)
-    {
-        log_line(format!("bridge: memory journal failed: {err}"));
-    }
+/// Re-project every surface that shows memory — the open agent thread (a fold can land while
+/// its page is open), the chat card, and the System overview. Called after any memory mutation.
+fn project_memory_surfaces(conn: &rusqlite::Connection, shared: &SharedServerState) {
+    agent_thread::refresh_if_open(conn, shared);
+    project_chat_memory(conn, shared);
+    project_memory_overview(conn, shared);
 }
 
 /// Frame a rolling summary as the "working memory" system-prompt layer.
