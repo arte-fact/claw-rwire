@@ -118,12 +118,14 @@ pub struct Task {
     pub plan_id: Option<String>,
     /// When set, the task is **archived** — hidden from the board to declutter it.
     pub archived_at: Option<String>,
+    /// ISO-8601 UTC creation stamp — the agent thread orders its "task opened" turn by it.
+    pub created_at: String,
 }
 
 const SELECT: &str = "SELECT id, workspace_id, agent_group_id, title, spec, kind, schedule, \
                       status, result, priority, origin_chat_id, next_run, step_position, \
                       iteration, run_epoch, auto_retries, max_retries, attempt, is_plan, plan_id, \
-                      archived_at \
+                      archived_at, created_at \
                       FROM tasks";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
@@ -149,6 +151,7 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         is_plan: row.get::<_, i64>(18)? != 0,
         plan_id: row.get(19)?,
         archived_at: row.get(20)?,
+        created_at: row.get(21)?,
     })
 }
 

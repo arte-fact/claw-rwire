@@ -95,6 +95,44 @@ pub fn list_for_task_attempt(
     rows.collect()
 }
 
+/// One of an agent's runs with its task's context — for the agent thread, where a run on
+/// *someone else's* task (a review) still needs the task's title + workspace for its link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRun {
+    pub run: TaskRun,
+    pub task_id: String,
+    pub workspace_id: String,
+    pub task_title: String,
+}
+
+/// The most recent `limit` runs executed *by* this agent, newest first, each joined with its
+/// task's context. The agent thread's source for work the agent did outside its own lane
+/// (reviews of other agents' tasks); capped in SQL so a long history never floods the projection.
+pub fn recent_by_agent(
+    conn: &Connection,
+    agent_id: &str,
+    limit: usize,
+) -> rusqlite::Result<Vec<AgentRun>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.position, r.role, r.agent_id, r.output, r.verdict, r.feedback, \
+         r.iteration, r.ok, r.transcript, r.attempt, r.created_at, r.task_id, t.workspace_id, \
+         t.title
+           FROM task_runs r JOIN tasks t ON t.id = r.task_id
+          WHERE r.agent_id = ?1
+          ORDER BY r.created_at DESC, r.id DESC
+          LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![agent_id, limit as i64], |row| {
+        Ok(AgentRun {
+            run: from_row(row)?,
+            task_id: row.get(12)?,
+            workspace_id: row.get(13)?,
+            task_title: row.get(14)?,
+        })
+    })?;
+    rows.collect()
+}
+
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskRun> {
     Ok(TaskRun {
         id: row.get(0)?,
@@ -211,5 +249,42 @@ mod tests {
         let scoped = list_for_task_attempt(&conn, "t1", 1).expect("scoped");
         assert_eq!(scoped.len(), 1);
         assert_eq!(scoped[0].output.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn recent_by_agent_joins_task_context_and_caps() {
+        let conn = seeded();
+        for (id, agent) in [("r1", "critic"), ("r2", "critic"), ("r3", "forge")] {
+            append(
+                &conn,
+                &NewRun {
+                    id,
+                    task_id: "t1",
+                    position: 0,
+                    role: "validator",
+                    agent: Some(agent),
+                    output: Some(id),
+                    verdict: Some("revise"),
+                    feedback: None,
+                    iteration: 0,
+                    ok: true,
+                    transcript: None,
+                    attempt: 0,
+                },
+            )
+            .expect(id);
+        }
+
+        let runs = recent_by_agent(&conn, "critic", 10).expect("by agent");
+        assert_eq!(runs.len(), 2, "only critic's runs");
+        assert_eq!(runs[0].task_title, "t", "joined with the task's title");
+        assert_eq!(runs[0].workspace_id, "ws");
+        assert_eq!(runs[0].task_id, "t1");
+        // Newest first, and the SQL cap holds.
+        assert_eq!(runs[0].run.id, "r2");
+        assert_eq!(
+            recent_by_agent(&conn, "critic", 1).expect("capped").len(),
+            1
+        );
     }
 }

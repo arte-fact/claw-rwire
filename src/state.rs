@@ -473,23 +473,68 @@ pub struct TaskDetail {
     pub runs: Vec<RunView>,
 }
 
-/// One entry in an agent's unified thread (Phase 1: task lifecycle + persisted runs, read-only).
-/// The agent page merges these — projected from `tasks` / `task_runs` — into one time-ordered
-/// timeline, the agent's whole working life rather than a single task's chain.
+/// A run's phase label: the role as a verb (`producer→Produce`, `validator→Review`, else
+/// `Stage`), plus the loop iteration when past the first. Shared by the run-chain entries and
+/// the agent thread's conversational turns, so a phase reads identically on both.
+#[must_use]
+pub fn role_phase(role: &str, iteration: i64) -> String {
+    let base = match role {
+        "validator" => "Review",
+        "producer" => "Produce",
+        _ => "Stage",
+    };
+    if iteration > 0 {
+        format!("{base} · iter {}", iteration + 1)
+    } else {
+        base.to_owned()
+    }
+}
+
+/// The task a thread turn belongs to — enough for its deep link into the board's Peek, where
+/// the full forensics (tool transcripts) live.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TaskLink {
+    pub id: String,
+    pub workspace_id: String,
+    pub title: String,
+}
+
+/// One conversational turn in an agent's thread (R2): chat grain — prose, not forensics. A turn
+/// is the task being opened (author "you", body = the spec), one of the agent's own runs (its
+/// reply prose), or an incoming reviewer's verdict + feedback. Tool work is carried only as a
+/// count — the muted "n tool calls · view task" line links to the Peek for the full story.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentTurn {
+    /// Who speaks: "you" for the operator (specs, human verdicts), else an agent's display name.
+    pub author: String,
+    /// The author is this thread's agent — its own reply (markdown body, accent author).
+    pub own: bool,
+    /// `HH:MM` stamp.
+    pub time: String,
+    /// Phase tag: "task" for an opened task, else the run's phase ("Produce · iter 2", "Review").
+    pub tag: String,
+    /// The turn's prose: the spec, the run's reply, or the reviewer's output.
+    pub body: String,
+    /// A validator's concrete asked changes, shown as an accent caption under the body.
+    pub feedback: Option<String>,
+    /// Verdict chip (validator turns): `pass` / `revise` / `reject`.
+    pub verdict: Option<String>,
+    /// How many tool calls the run made (0 = no meta line).
+    pub tool_count: usize,
+    /// The run succeeded (a failed run shows the error chip).
+    pub ok: bool,
+    /// The task this turn belongs to, for the deep link.
+    pub task: TaskLink,
+    /// Show the task link on the meta line (opened turns and out-of-lane reviews always do).
+    pub link_task: bool,
+}
+
+/// One entry in an agent's thread: a conversational turn, or a parked task's inline review
+/// composer (kept at the tail — the pending question sits at the bottom, like a chat). The turn
+/// is boxed so the small gate variant doesn't pay the large one's size.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentThreadItem {
-    /// A task assigned to this agent — the opening request marker its runs hang under.
-    Task {
-        id: String,
-        workspace_id: String,
-        title: String,
-        /// The task's lifecycle status (`running` / `done` / `awaiting` / …).
-        status: String,
-    },
-    /// One recorded run of one of the agent's tasks (rendered by the shared run-entry).
-    Run(RunView),
-    /// A task of this agent parked at a human gate — the inline approve / reject / request-changes
-    /// composer (Phase 3). Placed right after that task's runs, so review happens where the work is.
+    Turn(Box<AgentTurn>),
     ReviewGate { task_id: String },
 }
 
@@ -504,8 +549,8 @@ pub struct AgentLive {
     pub tag: String,
 }
 
-/// An agent's whole-life thread: its identity plus the merged, time-ordered timeline of its
-/// work and any live runs — the read-only projection the `/agent/:id` page renders.
+/// An agent's whole-life thread: its identity plus the merged, time-ordered, **windowed**
+/// conversation of its work and any live runs — the projection the `/agent/:id` page renders.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentThread {
     pub agent_id: String,
@@ -513,6 +558,8 @@ pub struct AgentThread {
     pub items: Vec<AgentThreadItem>,
     /// The agent's tasks that are running right now (0 or 1 per workspace) — their live streams.
     pub live: Vec<AgentLive>,
+    /// How many older turns fell outside the window (a muted note at the top when > 0).
+    pub truncated: usize,
 }
 
 /// An agent's live status in the nav, derived from its in-flight tasks. `Awaiting` (a task parked

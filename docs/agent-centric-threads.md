@@ -300,22 +300,24 @@ Pull the old Phase 5 to the front: one persistent conversation, no "new chat".
       multi-chat marker bug)
 - [x] `fmt`/`clippy`/`test` green (221 tests)
 
-### R2 — Worker thread page, redone conversational
+### R2 — Worker thread page, redone conversational ✅
 Fix the freeze and the feel in one stroke. Pure projection over existing data — no new storage.
-- [ ] **Conversational grain**: you (spec) → agent (reply prose, step tag, verdict chip) → you
-      (feedback / approval) — tool work as one muted line ("n tool calls · view task" → the Peek);
-      forensics stay in the Peek
-- [ ] Strictly chronological, **bounded window** (last ~N turns, capped in SQL); tiny projection
-      state (no tool transcripts carried)
-- [ ] **Rendering structure**: two sibling regions under static scaffolding — the keyed timeline
-      (reads `agent_thread` only) and the live tail (reads `live_turns` only). No renderer nested
-      inside a keyed subtree; no per-token full re-render; projection built outside the
-      shared-state lock
-- [ ] **Per-role shape** (page = context made visible): producer = its workspace lane as a
-      conversation; validator = an activity index (no fake continuous thread)
-- [ ] Review gate stays inline (already wired); tool-toggle keys de-collided from the Peek's
-- [ ] `fmt`/`clippy`/`test` green + a live smoke pass: open an agent mid-task, watch it stream,
-      approve a parked task, switch agents
+- [x] **Conversational grain**: `AgentTurn` — you (spec, tag "task") → agent (reply prose,
+      phase tag, verdict chip) → you / reviewer (feedback; a human verdict's feedback IS the
+      body, not the "(you) …" stub) — tool work as the muted "n tool calls · task ↗" meta line
+      into the Peek; no transcripts carried in state
+- [x] Strictly chronological merge of the lane + out-of-lane reviews
+      (`task_runs::recent_by_agent`, capped in SQL); windowed to the newest 50 turns with a
+      "· n earlier turns not shown ·" note (R3 turns it into the memory fold line)
+- [x] **Rendering structure**: two sibling regions under static scaffolding — the keyed
+      `timeline` (reads `agent_thread` only) + the `live_tail` (the only `live_turns` reader);
+      no renderer nested in a keyed subtree; `refresh_if_open` builds **before** taking the
+      shared-state lock (open agent mirrored bridge-side)
+- [x] **Per-role shape emerges from the data**: a producer's thread = its lane as a conversation;
+      a validator (no lane) = just its linked review turns — no fake continuous thread
+- [x] Review gate stays inline at the tail; the Peek's tool-toggle key collision is gone (the
+      thread renders no tool rows at all)
+- [x] `fmt`/`clippy`/`test` green (224 tests, +3) — live smoke pass pending (operator)
 
 ### R3 — Memory mechanics (the substance)
 The budget model from the keystone section, landing into pages that already have the right shape.

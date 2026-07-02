@@ -16,16 +16,7 @@ use crate::state::{App, RunView, ToolCardView};
 /// A run's **phase tag** for a thread entry: the role as a verb (`producer→Produce`,
 /// `validator→Review`, else `Stage`), plus the loop iteration when past the first.
 pub(crate) fn role_tag(run: &RunView) -> String {
-    let base = match run.role.as_str() {
-        "validator" => "Review",
-        "producer" => "Produce",
-        _ => "Stage",
-    };
-    if run.iteration > 0 {
-        format!("{base} · iter {}", run.iteration + 1)
-    } else {
-        base.to_owned()
-    }
+    crate::state::role_phase(&run.role, run.iteration)
 }
 
 /// One tool call as a collapsible row: a caret + name + humanized summary + status (the header,
@@ -366,11 +357,16 @@ fn edit_diff_rows(tool: &ToolCardView) -> Option<Vec<ElementBuilder>> {
 }
 
 pub(crate) fn verdict_chip(run: &RunView) -> ElementBuilder {
-    let (text, color) = match run.verdict.as_deref() {
+    verdict_chip_of(run.verdict.as_deref(), run.ok)
+}
+
+/// The verdict / failure chip from raw parts — shared with the agent thread's turns.
+pub(crate) fn verdict_chip_of(verdict: Option<&str>, ok: bool) -> ElementBuilder {
+    let (text, color) = match verdict {
         Some("pass") => ("pass", St::TextAccent),
         Some("revise") => ("revise", St::TextMuted),
         Some("reject") => ("reject", St::TextLow),
-        _ if !run.ok => ("failed", St::TextLow),
+        _ if !ok => ("failed", St::TextLow),
         _ => ("", St::TextLow),
     };
     if text.is_empty() {
