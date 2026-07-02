@@ -200,38 +200,24 @@ pub fn dashboard(app: &App) -> ElementBuilder {
 /// flips it.
 fn auto_approve_toggle(workspace: &WorkspaceView) -> ElementBuilder {
     let on = workspace.auto_approve;
-    let (label, hint, chip) = if on {
+    let (label, hint) = if on {
         (
             "Auto-approve · ON",
             "Runs hands-off — the plan and per-task sign-offs pass automatically (agent review still runs).",
-            St::BgAccent,
         )
     } else {
         (
             "Auto-approve · OFF",
             "Delegated work waits for your approval — at the plan gate and each task's sign-off.",
-            St::BgApp,
         )
     };
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append([
-            el(El::Button)
-                .at(At::Type, Av::Button)
+            crate::ui::widgets::chip(label, on, toggle_auto_approve())
                 .data("workspace", &workspace.id)
                 .data("on", if on { "1" } else { "0" })
-                .on(Ev::Click, toggle_auto_approve())
-                .st([
-                    St::SelfStart,
-                    St::TextXs,
-                    St::PxSm,
-                    St::PyXs,
-                    St::BorderDefault,
-                    chip,
-                    if on { St::TextOnAccent } else { St::TextHigh },
-                    St::CursorPointer,
-                ])
-                .text(label),
+                .st([St::SelfStart]),
             Text::caption(hint).muted().build(),
         ])
 }
@@ -372,34 +358,14 @@ fn members_field(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
 }
 
 fn member_chip(id: &str, name: &str, on: bool, is_owner: bool) -> ElementBuilder {
-    let (bg, fg, mark) = if on {
-        (St::BgAccent, St::TextOnAccent, "✓")
-    } else {
-        (St::BgApp, St::TextMuted, "+")
-    };
     let label = if is_owner {
         format!("{name} (owner)")
     } else {
         name.to_owned()
     };
-    el(El::Button)
-        .at(At::Type, Av::Button)
+    crate::ui::widgets::toggle_chip(&label, on, toggle_member())
         .data("agent", id)
         .data("on", if on { "1" } else { "0" })
-        .on(Ev::Click, toggle_member())
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapXs,
-            St::PxSm,
-            St::PyXs,
-            St::BorderDefault,
-            St::TextXs,
-            St::CursorPointer,
-            bg,
-            fg,
-        ])
-        .append([el(El::Span).text(mark), el(El::Span).text(&label)])
 }
 
 fn delete_block(armed: bool) -> ElementBuilder {

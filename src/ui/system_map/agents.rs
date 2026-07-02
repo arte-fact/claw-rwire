@@ -3,7 +3,7 @@
 //! `AgentDraft`) so it can re-render when discovered models arrive without resetting
 //! the operator's input. Picking an endpoint fetches its `/v1/models` into a dropdown.
 
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
 
 use super::{action, badge, card, drawer_form, labeled, row_head, submit, text_input};
 use crate::bridge::{self, Command};
@@ -105,29 +105,7 @@ fn chip_wrap(chips: Vec<ElementBuilder>) -> ElementBuilder {
 
 /// A clickable on/off chip for one tool. The `data-tool` rides the name to the handler.
 fn tool_chip(name: &str, on: bool) -> ElementBuilder {
-    let (bg, fg, mark) = if on {
-        (St::BgAccent, St::TextOnAccent, "✓")
-    } else {
-        (St::BgApp, St::TextMuted, "+")
-    };
-    el(El::Button)
-        .at(At::Type, Av::Button)
-        .data("tool", name)
-        .on(Ev::Click, tool_toggled())
-        .st([])
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapXs,
-            St::PxSm,
-            St::PyXs,
-            St::BorderDefault,
-            St::TextXs,
-            St::CursorPointer,
-            bg,
-            fg,
-        ])
-        .append([el(El::Span).text(mark), el(El::Span).text(name)])
+    crate::ui::widgets::toggle_chip(name, on, tool_toggled()).data("tool", name)
 }
 
 /// The agent's identity prompt (its persona), stored in `agent_prompts` — operator-owned

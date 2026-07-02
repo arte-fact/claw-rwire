@@ -187,3 +187,40 @@ pub fn ghost(label: &str, on_click: HandlerSpec) -> ElementBuilder {
         .hover([St::TextHigh, St::BorderEmphasis])
         .text(label)
 }
+
+/// A membership toggle chip: "✓ label" accent-filled when on, "+ label" muted when off —
+/// the workspace-member and agent-tool pickers share this shape. Chain `.data(...)` for
+/// the handler's payload.
+pub fn toggle_chip(label: &str, on: bool, on_click: HandlerSpec) -> ElementBuilder {
+    let (bg, fg, mark) = if on {
+        (St::BgAccent, St::TextOnAccent, "✓")
+    } else {
+        (St::BgApp, St::TextMuted, "+")
+    };
+    el(El::Button)
+        .at(At::Type, Av::Button)
+        .on(rwire::Ev::Click, on_click)
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapXs,
+            St::PxSm,
+            St::PyXs,
+            St::BorderDefault,
+            St::TextXs,
+            St::CursorPointer,
+            bg,
+            fg,
+        ])
+        .append([el(El::Span).text(mark), el(El::Span).text(label)])
+}
+
+/// An unstyled clickable — no border, background, or padding reset beyond the browser's;
+/// the caller styles the content. The base under crumbs, tree rows, card titles, and
+/// collapsible headers. Chain `.data(...)` and `.st(...)` for the rest.
+pub fn bare_button(on_click: HandlerSpec) -> ElementBuilder {
+    el(El::Button)
+        .at(At::Type, Av::Button)
+        .on(rwire::Ev::Click, on_click)
+        .st([St::BgTransparent, St::BorderNone, St::CursorPointer])
+}

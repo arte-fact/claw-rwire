@@ -6,7 +6,7 @@
 //! `verdict_chip` the thread builds its authored entries from.
 
 use rwire::style::Style;
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler};
+use rwire::{El, ElementBuilder, St, el, handler};
 use rwire_components::Text;
 use serde_json::Value;
 
@@ -90,20 +90,15 @@ fn disclosure_row(
     if let Some(mark) = mark {
         header_parts.push(mark);
     }
-    let header = el(El::Button)
-        .at(At::Type, Av::Button)
+    let header = crate::ui::widgets::bare_button(toggle_tool())
         .data("tool", key)
-        .on(Ev::Click, toggle_tool())
         .st([
             St::WFull,
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
             St::TextXs,
-            St::BgTransparent,
-            St::BorderNone,
             St::P0,
-            St::CursorPointer,
             St::TextLeft,
         ])
         .append(header_parts);

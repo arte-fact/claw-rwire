@@ -4,7 +4,7 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler};
+use rwire::{El, ElementBuilder, St, el, handler};
 use rwire_components::{Avatar, AvatarSize, Tag, TagIntent, Tooltip};
 
 use crate::bridge::{self, Command};
@@ -120,18 +120,10 @@ fn column_header(
     }
     match step_id.filter(|_| !locked) {
         // A configured, editable step → open its editor drawer in place.
-        Some(id) => el(El::Button)
-            .at(At::Type, Av::Button)
+        Some(id) => crate::ui::widgets::bare_button(crate::ui::workspace_workflow::toggle_edit())
             .data("step", id)
-            .on(Ev::Click, crate::ui::workspace_workflow::toggle_edit())
             .st(header_st)
-            .st([
-                St::TextLeft,
-                St::BgTransparent,
-                St::BorderNone,
-                St::P0,
-                St::CursorPointer,
-            ])
+            .st([St::TextLeft, St::P0])
             .hover([St::TextAccent])
             .append([el(El::Span).text(&label)]),
         // The implicit default (no row) or a locked board → jump to the Workflow tab.
@@ -153,20 +145,15 @@ fn kanban_card(task: &TaskView, steps: &[String], wid: &str) -> ElementBuilder {
             .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
             .append([
                 // The title opens the task's Peek modal over the board (no navigation away).
-                el(El::Button)
-                    .at(At::Type, Av::Button)
+                crate::ui::widgets::bare_button(crate::ui::task_detail::open_peek())
                     .data("task", &task.id)
-                    .on(Ev::Click, crate::ui::task_detail::open_peek())
                     .st([
                         St::Flex1,
                         St::TextXs,
                         St::TextHigh,
                         St::FontSemibold,
                         St::TextLeft,
-                        St::BgTransparent,
-                        St::BorderNone,
                         St::P0,
-                        St::CursorPointer,
                     ])
                     .hover([St::TextAccent])
                     .text(&task.title),

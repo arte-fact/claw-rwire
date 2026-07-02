@@ -159,17 +159,9 @@ fn breadcrumb(path: &str) -> ElementBuilder {
 }
 
 fn crumb(label: &str, path: &str) -> ElementBuilder {
-    el(El::Button)
-        .at(At::Type, Av::Button)
+    crate::ui::widgets::bare_button(navigate())
         .data("path", path)
-        .on(Ev::Click, navigate())
-        .st([
-            St::BorderNone,
-            St::BgTransparent,
-            St::CursorPointer,
-            St::TextMuted,
-            St::FlexShrink0,
-        ])
+        .st([St::TextMuted, St::FlexShrink0])
         .hover([St::TextAccent])
         .text(label)
 }
@@ -322,13 +314,9 @@ fn tree_row(node: &FileNode, selected: bool, pending_delete: bool, active: bool)
             .text(&size_label(node)),
     );
 
-    let open_btn = el(El::Button)
-        .at(At::Type, Av::Button)
+    let open_btn = crate::ui::widgets::bare_button(handler)
         .data("path", &node.path)
-        .on(Ev::Click, handler)
         .st([
-            St::BorderNone,
-            St::BgTransparent,
             St::TextLeft,
             St::MinW0,
             St::DisplayFlex,
@@ -337,7 +325,6 @@ fn tree_row(node: &FileNode, selected: bool, pending_delete: bool, active: bool)
             St::Flex1,
             St::TextSm,
             name_color,
-            St::CursorPointer,
             St::Truncate,
         ])
         .append(leading);
