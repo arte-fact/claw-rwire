@@ -26,37 +26,38 @@ high coverage, regression test per bug. Newtypes for ids, enums over strings, ex
 (~300 line / ~40 line soft caps) — split before adding. SQLite is sync `rusqlite` behind
 blocking helpers; never block the async runtime.
 
-## rwire UI conventions (migrate toward these)
+## rwire UI conventions (the migration is DONE — hold the line)
 
-The UI leans on escape hatches today (124 `.style()`, 148 `.attr()`, 0 `.at()`, raw `el(El::Input)`
-forms). Migrate toward first-class tokens and components. **Full guide:**
-`../rwire/.claude/skills/rwire/SKILL.md` (read it before touching UI). rwire is a path dep, so its
-`St`/`At`/`Av` tokens and component methods are all available immediately.
+The escape-hatch migration finished 2026-07: **0 `.attr()`**, ~35 `.style()` (every survivor
+genuinely dynamic: `calc()`, `vh`, depth padding, CSS vars), zero hand-rolled chips / badges /
+dots / composers. **Full guide:** `../rwire/.claude/skills/rwire/SKILL.md`. rwire is a path dep
+we own — when a pattern repeats, promote it upstream instead of copying it (see below).
 
-**Styling — `St` tokens, not `.style()`.** Inline `.style(...)` is *only* for genuinely dynamic
-values (`calc()`, depth-based padding, custom flex-basis `"1 1 19rem"`, `vh`). Everything constant
-has a token — grep `style_tokens.rs` first:
+**The theme owns the aesthetic.** `main.rs`:
+`Theme::dark().palette(nord()).style(ThemeStyle::flat()).radius(RadiusScale::None)` gives the
+whole terminal look — monospace UI font, hairline borders, no shadows, sharp corners. Never
+re-assert it per element: no `FontMono` / `Rounded0` / `FontInheritAll` sprinkles (the base
+reset covers form-control fonts; themed components follow the radius scale). Circular things
+keep `RoundedFull` — it ignores the radius scale.
 
-| `.style(...)` today | use instead |
-|---|---|
-| `.set("font","inherit")` on form controls (×43) | the `Input`/`Textarea`/`Button`/`Select` components (they apply it), or `St::FontInheritAll` on a raw control |
-| `.min_height("0").overflow("auto")` | `St::MinH0`, `St::OverflowAuto` |
-| `.min_width("0")` · `.display("none")` | `St::MinW0` · `St::DisplayNone` |
-| `.set("flex","1")` · `.set("flex-wrap","wrap")` | `St::Flex1` · `St::FlexWrap` |
-| `.set("white-space","pre-wrap")` | `St::WhitespacePreWrap` |
-| `.set("position","sticky").set("top","0")` | `St::PositionSticky` + `St::Top0` |
-| `height:100dvh` / any `100vh` full-height | `St::HDvh` / `St::MinHDvh` (never raw `100vh`) |
+**Components first.** Before hand-rolling, check `rwire_components` — several exist *because
+this app needed them*: `Chip` (filters/tabs/toggles; chain `.data(...)` for the payload),
+`Composer` (chat bar, `.compact(true)` for inline), `ChatScroll` (bottom-pinned autoscroll —
+never justify-content on a scroll container), `StatusDot` (presence + pulse + label),
+`Badge` (`.shape(Square)` + `.fill(Outline)` for status chips), `Avatar::name(…)` (derives
+initials), `EmptyState`, `Drawer`, `Select`, `Input`/`Textarea`, `Button` (incl. `outline`).
+App-local shapes live in `ui/widgets.rs` (`md_editor`, `ghost`, `chip`/`accent_submit`
+wrappers, `icon_button`, `markdown`) — extend there before inlining a one-off.
 
-**Attributes — components first, then `At`/`Av` tokens, raw `.attr()` last.** Build inputs from the
-`rwire_components` form types, not raw `el(El::Input)`:
+**Attributes:** `At`/`Av` tokens or component methods, never string `.attr()`. **Styles:** `St`
+tokens; inline `.style()` only for genuinely dynamic values — if a constant lacks a token, add
+one in rwire's `style_tokens.rs` (that's how `FieldSizingContent`, `MbAuto`, `HDvh` got there).
 
-| raw today | use instead |
-|---|---|
-| `el(El::Input).attr("type","email").attr("name","x").attr("placeholder",…)` | `Input::email().name("x").placeholder(…)` |
-| `.attr("autocomplete","off")` (×16) | `Input::…autocomplete("off")` / `Textarea::…autocomplete("off")` (or `.at(At::Autocomplete, Av::Off)`) |
-| `.attr("min"/"max"/"step", …)` | `Input::number().min("0").max("100").step("1")` |
-| `.attr("spellcheck",…)` · `.attr("rows",…)` | `…spellcheck(false)` · `Textarea::…rows(n)` |
-| any other `.attr("k","v")` | `.at(At::K, Av::V)` / `.at_str(At::K, v)` / `.bool_attr(At::K)`; if no token exists, add one in rwire's `attr_tokens.rs` |
+**Promote to rwire when a pattern earns it** (repeats ≥2×, or encodes a hard-won fix): add the
+component + register it in `libs/rwire-components/src/catalog.rs` (it then appears in the
+design-system app automatically), gate rwire (`cargo fmt && clippy -D warnings && test`
+workspace-wide), commit there, then adopt here. This app is the framework's first big showcase
+— hardening flows both ways.
 
 **Other rules:** wrap changing UI in `#[renderer]` (synced regions); static scaffolding stays plain
 `el()`. Lists via `ItemRef` + `iter_with_ref()` + `on_ref()` — no `data-*`/index strings. Navigate
