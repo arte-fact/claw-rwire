@@ -808,6 +808,8 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             ) {
                 log_line(format!("bridge: update memory failed: {err}"));
             }
+            // A background fold can land while its agent's page is open — reflect it live.
+            agent_thread::refresh_if_open(conn, shared);
         }
         Command::SetMemory {
             agent_id,
@@ -823,6 +825,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             {
                 log_line(format!("bridge: set memory failed: {err}"));
             }
+            agent_thread::refresh_if_open(conn, shared);
         }
         Command::ClearMemory {
             agent_id,
@@ -832,6 +835,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             if let Err(err) = db::agent_memory::set(conn, &agent_id, workspace.as_deref(), "", 0) {
                 log_line(format!("bridge: clear memory failed: {err}"));
             }
+            agent_thread::refresh_if_open(conn, shared);
         }
         Command::SetMemoryPaused {
             agent_id,
@@ -843,6 +847,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             {
                 log_line(format!("bridge: pause memory failed: {err}"));
             }
+            agent_thread::refresh_if_open(conn, shared);
         }
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)

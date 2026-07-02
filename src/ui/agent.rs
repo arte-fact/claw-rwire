@@ -11,13 +11,15 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, St, el, renderer};
-use rwire_components::Text;
+use rwire::{El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire_components::{Button, ButtonSize, Text, Textarea};
 
-use crate::state::{AgentThreadItem, AgentTurn, App, LiveItem};
+use crate::bridge::{self, Command};
+use crate::state::{AgentThread, AgentThreadItem, AgentTurn, App, LiveItem};
 use crate::ui::run_chain::verdict_chip_of;
 use crate::ui::task_detail::{live_stream_body, review_gate, running_dot};
 use crate::ui::thread;
+use crate::ui::widgets::accent_submit;
 
 /// The page shell: a pinned header over the autoscrolling conversation — a static column whose
 /// two renderer children (timeline, live tail) are siblings, never nested.
@@ -101,12 +103,11 @@ fn timeline(app: &App) -> ElementBuilder {
     match thread {
         None => rows.push(Text::body("Loading…").muted().build()),
         Some(thread) => {
-            if thread.truncated > 0 {
-                rows.push(
-                    el(El::Div)
-                        .st([St::TextXs, St::TextLow, St::TextCenter])
-                        .text(&format!("· {} earlier turns not shown ·", thread.truncated)),
-                );
+            if let Some(line) = fold_line(thread) {
+                rows.push(line);
+            }
+            if !thread.memory.trim().is_empty() || thread.memory_paused {
+                rows.push(memory_card(thread));
             }
             for item in &thread.items {
                 rows.push(match item {
@@ -164,6 +165,154 @@ fn live_tail(app: &App) -> ElementBuilder {
         ))
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
         .append(entries)
+}
+
+/// The fold line at the top of the thread — where history passes into memory (R3): what's
+/// past it isn't gone, it's condensed into the working memory shown just below. Falls back to
+/// the plain truncation note when this scope has no memory yet.
+fn fold_line(thread: &AgentThread) -> Option<ElementBuilder> {
+    let has_memory = !thread.memory.trim().is_empty();
+    let text = match (has_memory, thread.truncated) {
+        (true, 0) => "· older work condensed into memory ·".to_owned(),
+        (true, n) => {
+            format!("· older work condensed into memory — {n} earlier turns past the fold ·")
+        }
+        (false, 0) => return None,
+        (false, n) => format!("· {n} earlier turns not shown ·"),
+    };
+    Some(
+        el(El::Div)
+            .st([St::TextXs, St::TextLow, St::TextCenter])
+            .text(&text),
+    )
+}
+
+/// The memory affordance (R3): the (agent, workspace) working memory, inspectable and editable
+/// in place — the Prompts panel's memory card, extended onto the page whose thread it frames.
+/// Save overwrites the summary, Clear resets it, Pause/Resume freezes the auto-fold.
+fn memory_card(thread: &AgentThread) -> ElementBuilder {
+    let mut meta = format!("what {} remembers here", thread.agent_name);
+    if thread.memory_paused {
+        meta.push_str(" · ⏸ auto-fold paused");
+    }
+    el(El::Form)
+        .on(Ev::Submit, save_memory())
+        .st([
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapSm,
+            St::PSm,
+            St::BorderDefault,
+            St::Rounded0,
+            St::BgSurface,
+        ])
+        .append([
+            el(El::Div)
+                .st([
+                    St::DisplayFlex,
+                    St::ItemsCenter,
+                    St::GapSm,
+                    St::TextXs,
+                    St::TextMuted,
+                ])
+                .append([
+                    el(El::Span)
+                        .st([St::TextUppercase, St::TrackingWide])
+                        .text("Memory"),
+                    el(El::Span).text(&format!("· {meta}")),
+                ]),
+            Textarea::new()
+                .id(format!(
+                    "agent-memory-{}-{}",
+                    thread.agent_id, thread.workspace_id
+                ))
+                .name("summary")
+                .rows(4)
+                .value(thread.memory.clone())
+                .build(),
+            el(El::Div)
+                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+                .append([
+                    accent_submit(icons::Icon::Check, "Save"),
+                    memory_button("Clear", clear_memory(), None),
+                    memory_button(
+                        if thread.memory_paused {
+                            "Resume"
+                        } else {
+                            "Pause"
+                        },
+                        toggle_memory_pause(),
+                        Some((
+                            "paused",
+                            if thread.memory_paused {
+                                "false"
+                            } else {
+                                "true"
+                            },
+                        )),
+                    ),
+                ]),
+        ])
+}
+
+/// A small secondary memory action, optionally carrying one `data-(key)=value` attribute.
+fn memory_button(
+    label: &str,
+    on_click: rwire::HandlerSpec,
+    data: Option<(&str, &str)>,
+) -> ElementBuilder {
+    let button = Button::secondary(label.to_owned())
+        .size(ButtonSize::Sm)
+        .on_click(on_click);
+    match data {
+        Some((key, value)) => button.data(key, value),
+        None => button,
+    }
+}
+
+/// The open thread's (agent, workspace) pair — every memory mutation targets that scope row.
+fn open_scope(app: &App) -> Option<(String, String)> {
+    app.agent_thread
+        .as_ref()
+        .map(|thread| (thread.agent_id.clone(), thread.workspace_id.clone()))
+}
+
+#[handler]
+fn save_memory(app: &mut App, ctx: &EventContext) {
+    let Some((agent_id, workspace)) = open_scope(app) else {
+        return;
+    };
+    let summary = ctx.field("summary").unwrap_or_default().to_owned();
+    bridge::send(Command::SetMemory {
+        agent_id,
+        workspace: Some(workspace),
+        summary,
+    });
+}
+
+#[handler]
+fn clear_memory(app: &mut App, ctx: &EventContext) {
+    let _ = ctx;
+    let Some((agent_id, workspace)) = open_scope(app) else {
+        return;
+    };
+    bridge::send(Command::ClearMemory {
+        agent_id,
+        workspace: Some(workspace),
+    });
+}
+
+#[handler]
+fn toggle_memory_pause(app: &mut App, ctx: &EventContext) {
+    let Some((agent_id, workspace)) = open_scope(app) else {
+        return;
+    };
+    let paused = ctx.data("paused") == Some("true");
+    bridge::send(Command::SetMemoryPaused {
+        agent_id,
+        workspace: Some(workspace),
+        paused,
+    });
 }
 
 /// One conversational turn, on the shared [`thread::entry`] vocabulary: author + phase tag +

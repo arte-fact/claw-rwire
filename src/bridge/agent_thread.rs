@@ -216,6 +216,9 @@ fn build_with_window(
         .map(|(_, turn)| AgentThreadItem::Turn(Box::new(turn)))
         .collect();
     items.append(&mut gates);
+    // The thread's memory row — the fold line's target, shown/editable at the top of the page.
+    let memory =
+        crate::db::agent_memory::get(conn, agent_id, Some(workspace_id)).unwrap_or_default();
     Some(AgentThread {
         agent_id: agent.id,
         agent_name: agent.name,
@@ -224,6 +227,8 @@ fn build_with_window(
         items,
         live,
         truncated,
+        memory: memory.summary,
+        memory_paused: memory.paused,
     })
 }
 

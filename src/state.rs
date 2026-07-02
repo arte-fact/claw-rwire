@@ -569,8 +569,13 @@ pub struct AgentThread {
     pub items: Vec<AgentThreadItem>,
     /// The agent's tasks here that are running right now — their live streams.
     pub live: Vec<AgentLive>,
-    /// How many older turns fell outside the window (a muted note at the top when > 0).
+    /// How many older turns fell outside the window (part of the fold line at the top).
     pub truncated: usize,
+    /// The agent's (agent, workspace) rolling memory — what the fold line folds *into*. Shown
+    /// and editable at the top of the thread (the R3 memory affordance).
+    pub memory: String,
+    /// Whether auto-folding is paused for this scope (operator control).
+    pub memory_paused: bool,
 }
 
 /// An agent's live status in the nav, derived from its in-flight tasks. `Awaiting` (a task parked
