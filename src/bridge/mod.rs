@@ -307,6 +307,9 @@ pub enum Command {
         note: String,
         source: Option<String>,
     },
+    /// A mid-run steer poll consumed messages (R5) — re-project the open thread so the
+    /// "queued" tag flips to delivered while the run is still going.
+    SteerConsumed,
     /// Steer (R4): the operator leaves a message on a worker's thread. Queued now; delivered
     /// at the agent's next pass boundary (or, to an idle agent, materialised as a task).
     SteerAgent {
@@ -826,6 +829,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             );
             project_memory_surfaces(conn, shared);
         }
+        Command::SteerConsumed => agent_thread::refresh_if_open(conn, shared),
         Command::SteerAgent {
             agent,
             workspace,

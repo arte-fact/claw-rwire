@@ -286,8 +286,33 @@ fn spawn_run(meta: RunMeta, role: RunRole, epoch: i64, prepared: Prepared) {
                             event,
                         });
                     };
-                    agent::run_turn_streamed(&inference, messages, toolbox.as_ref(), &mut sink)
-                        .map_err(|err| err.to_string())
+                    // Mid-run steering (R5): the loop polls between tool rounds through the
+                    // worker's own connection. The epoch guard inside `steer_poll` keeps a
+                    // superseded run (stopped / restarted) from consuming messages meant for
+                    // its successor.
+                    let steer_conn = crate::db::open(&data_dir().join("central.db")).ok();
+                    let task_for_steer = ctx.task_id.clone();
+                    let ws_for_steer = ctx.workspace_id.clone();
+                    let agent_for_steer = inference.agent_id.clone();
+                    let poll = move || {
+                        steer_conn.as_ref().map_or_else(Vec::new, |conn| {
+                            steer_poll(
+                                conn,
+                                &task_for_steer,
+                                epoch,
+                                &agent_for_steer,
+                                &ws_for_steer,
+                            )
+                        })
+                    };
+                    agent::run_turn_steered(
+                        &inference,
+                        messages,
+                        toolbox.as_ref(),
+                        &mut sink,
+                        &poll,
+                    )
+                    .map_err(|err| err.to_string())
                 };
                 send(Command::TaskFinished {
                     id: ctx.task_id,
@@ -329,6 +354,31 @@ fn run_meta(conn: &rusqlite::Connection, task: &Task) -> RunMeta {
 
 fn env_lookup(key: &str) -> Option<String> {
     std::env::var(key).ok()
+}
+
+/// The mid-run steer poll (R5): drain the running agent's queue **only while this run is
+/// still the task's current one** — a bumped epoch (stop / cancel / restart / re-dispatch)
+/// means the messages belong to the successor, so a stale run gets nothing. Consumption
+/// nudges the bridge to re-project the open thread (the "queued" tag flips live).
+fn steer_poll(
+    conn: &rusqlite::Connection,
+    task_id: &str,
+    epoch: i64,
+    agent_id: &str,
+    workspace_id: &str,
+) -> Vec<String> {
+    let current = tasks::get(conn, task_id)
+        .ok()
+        .flatten()
+        .map(|task| task.run_epoch);
+    if current != Some(epoch) {
+        return Vec::new();
+    }
+    let bodies = consume_steers(conn, agent_id, workspace_id);
+    if !bodies.is_empty() {
+        send(Command::SteerConsumed);
+    }
+    bodies
 }
 
 /// Drain the scope's queued steer messages for a launching pass: returns the bodies (oldest

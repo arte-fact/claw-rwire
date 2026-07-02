@@ -6,7 +6,7 @@
 
 mod client;
 
-pub use client::{context_length, list_models, run_turn, run_turn_streamed};
+pub use client::{context_length, list_models, run_turn, run_turn_steered};
 
 use serde::{Deserialize, Serialize};
 

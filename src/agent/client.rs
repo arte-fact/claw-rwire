@@ -10,7 +10,7 @@ use crate::db::resolution::ResolvedInference;
 use crate::tools::{ToolDef, Toolbox, VERDICT};
 
 use super::{
-    AgentError, AgentEvent, ChatMessage, Completion, EventSink, FunctionCall, ToolCall,
+    AgentError, AgentEvent, ChatMessage, Completion, EventSink, FunctionCall, Role, ToolCall,
     ToolInvocation, TurnResult,
 };
 
@@ -46,18 +46,22 @@ pub fn run_turn(
     messages: Vec<ChatMessage>,
     toolbox: &dyn Toolbox,
 ) -> Result<TurnResult, AgentError> {
-    run_loop(inf, messages, toolbox, &mut |_| {}, false)
+    run_loop(inf, messages, toolbox, &mut |_| {}, false, None)
 }
 
-/// As [`run_turn`], but reports live progress through `sink` (tool calls as they run, and the
-/// reply text as it streams) so callers can surface real-time agent activity.
-pub fn run_turn_streamed(
+/// As [`run_turn`], but streams progress through `sink` (tool calls as they run, the reply as
+/// it arrives), plus **mid-run steering** (R5): `steer` is polled between tool
+/// rounds; any strings it returns are injected as user turns before the next round, so an
+/// operator note lands in seconds instead of at the next launch. The poller owns the
+/// epoch/cancel discipline (a superseded run's poll must return nothing).
+pub fn run_turn_steered(
     inf: &ResolvedInference,
     messages: Vec<ChatMessage>,
     toolbox: &dyn Toolbox,
     sink: EventSink,
+    steer: &dyn Fn() -> Vec<String>,
 ) -> Result<TurnResult, AgentError> {
-    run_loop(inf, messages, toolbox, sink, true)
+    run_loop(inf, messages, toolbox, sink, true, Some(steer))
 }
 
 /// The shared tool loop. `stream` selects the streaming completion (token-by-token text +
@@ -69,6 +73,7 @@ fn run_loop(
     toolbox: &dyn Toolbox,
     sink: EventSink,
     stream: bool,
+    steer: Option<&dyn Fn() -> Vec<String>>,
 ) -> Result<TurnResult, AgentError> {
     let defs = toolbox.defs();
     // The closing round is **reserved for `verdict`** when the toolbox advertises it (a validator
@@ -80,10 +85,22 @@ fn run_loop(
     let mut invocations = Vec::new();
     let started = Instant::now();
 
-    for _ in 0..MAX_TOOL_ROUNDS {
+    for round in 0..MAX_TOOL_ROUNDS {
         // Out of wall-clock: stop offering the full toolset and go straight to the closing round.
         if started.elapsed() >= RUN_BUDGET {
             break;
+        }
+        // Mid-run steering (R5): between rounds — never before the first, whose messages were
+        // composed at launch — drain the operator's queue into the conversation.
+        if round > 0
+            && let Some(poll) = steer
+        {
+            for body in poll() {
+                messages.push(ChatMessage::text(
+                    Role::User,
+                    format!("Message from the operator (steer, mid-run): {body}"),
+                ));
+            }
         }
         let completion = complete(inf, &messages, &defs, sink, stream)?;
         if completion.tool_calls.is_empty() {
