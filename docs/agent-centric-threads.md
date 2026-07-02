@@ -411,13 +411,23 @@ memory interventions. Everything below was **found by the run** and fixed + gate
 - [x] **Boot orphan sweep**: tasks stranded `running` by a restart requeue to pending with a
       bumped epoch (zombie results dropped) — a restart mid-loop costs at most a re-review
 
-### R4 — Steer: leave a message (v1: queue at turn boundary)
-The moment it becomes agent-*centric*; unchanged from the old Phase 4.
-- [ ] Per-agent message store; composer at the bottom of the worker thread
-- [ ] Delivery: an idle agent starts a turn now; a mid-task agent picks it up at the **next pass
-      boundary**, injected as the next user turn via `replay.rs`
-- [ ] No corruption of in-flight work; bounded latency; test the queue→pickup path
-- [ ] `fmt`/`clippy`/`test` green
+### R4 — Steer: leave a message (v1: queue at turn boundary) — ✅ shipped
+The moment it becomes agent-*centric*.
+- [x] `agent_messages` store, scoped like the thread to (agent, workspace): queued on send,
+      delivered exactly once; the thread merges every message chronologically as an operator
+      turn ("message · queued" until a pass consumes it)
+- [x] Composer pinned under the worker thread ("Message Forge — delivered at its next pass…"),
+      keyed by the item count so it clears after a send
+- [x] Delivery, decided at send time: an agent with open work keeps the message queued and its
+      next **producer launch** injects it as a trailing user turn after the replayed thread
+      (`consume_steers`, unit-tested); an **idle** agent has no upcoming pass, so the message
+      materialises as a task assigned to it — and with assignee-outranks-step, it genuinely
+      runs as that agent
+- [x] In-flight work untouched: delivery only happens at a launch the scheduler was making
+      anyway; bounded latency = the current pass
+- [x] `fmt`/`clippy`/`test` green (250 tests); live-verified on the real endpoint: a steer to
+      idle Forge became his task, ran, passed Critic's review, and folded — the CLI gained a
+      working `--version` flag
 
 ### R5 — Later
 - [ ] Mid-run steering (v2: drain a channel between tool rounds, respecting epoch/cancel)
