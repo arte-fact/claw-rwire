@@ -7,3 +7,4 @@ Cargo.lock.bak
 # local automation / scratch artifacts
 .playwright-mcp/
 *.jpeg
+/claw-data-e2e

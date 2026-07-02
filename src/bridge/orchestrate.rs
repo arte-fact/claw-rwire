@@ -208,6 +208,9 @@ pub fn planned(
     super::tasks::project_if_active(conn, shared, workspace);
     // The plan parked at a human gate — refresh the sidebar "needs you" badge so it shows.
     super::review::project_awaiting(conn, shared);
+    // A re-planned proposal must land in the *open* Peek too — without this, the operator who
+    // just clicked "Request changes" stares at an empty plan forever (the live-repro bug).
+    super::tasks::refresh_detail_if_open(conn, shared, plan_id);
     let _ = origin_chat; // the notify turn (C-3b) will speak into this thread
     let title = format!("planning · {workspace}");
     let (kind, detail) = match result {

@@ -432,12 +432,16 @@ fn streaming_text(text: &str, cursor: bool) -> ElementBuilder {
 }
 
 /// A plan's proposed tasks as a small list of cards (title · assignee · schedule · spec) — the
-/// work the user approves when they approve the plan gate.
+/// work the user approves when they approve the plan gate. An empty list means the owner is
+/// (re-)drafting — after "Request changes" the old proposal is discarded and a planning turn
+/// runs for a while — so say that instead of a bare "(no tasks proposed)" beside live buttons.
 fn proposed_view(proposed: &[ProposedTask]) -> ElementBuilder {
     if proposed.is_empty() {
         return el(El::Div)
-            .st([St::TextXs, St::TextMuted, St::PSm])
-            .text("(no tasks proposed)");
+            .st([St::TextXs, St::TextMuted, St::Italic, St::PSm])
+            .text(
+                "Planning in progress — the owner is drafting the proposal; it will appear here.",
+            );
     }
     let cards: Vec<ElementBuilder> = proposed
         .iter()

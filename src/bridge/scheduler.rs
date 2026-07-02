@@ -1121,19 +1121,38 @@ fn plan_verdict(
 ) {
     match decision {
         "pass" => {
-            // Approve (R3 Option A): materialise the proposal into real queued tasks now — nothing
-            // existed on the board before this.
-            match tasks::proposal::materialize(conn, &task.id, task.origin_chat.as_deref()) {
-                Ok(count) => log_line(format!("scheduler: plan {} → {count} task(s)", task.id)),
-                Err(err) => log_line(format!("scheduler: materialize {} failed: {err}", task.id)),
+            // Approving a plan whose proposal is empty (mid-replan, or the planner never
+            // proposed) must NOT close the gate — it would finish "done" having materialized
+            // nothing, the silent "plan didn't land in the workspace" failure. Keep it parked.
+            let proposed = tasks::proposal::get(conn, &task.id).unwrap_or_default();
+            if proposed.is_empty() {
+                log_line(format!(
+                    "scheduler: plan {} approved with no proposal — kept at the gate",
+                    task.id
+                ));
+                activity(
+                    shared,
+                    task,
+                    ActivityKind::Started,
+                    "no proposal to approve yet — still planning".to_owned(),
+                );
+            } else {
+                // Approve (R3 Option A): materialise the proposal into real queued tasks now —
+                // nothing existed on the board before this.
+                match tasks::proposal::materialize(conn, &task.id, task.origin_chat.as_deref()) {
+                    Ok(count) => log_line(format!("scheduler: plan {} → {count} task(s)", task.id)),
+                    Err(err) => {
+                        log_line(format!("scheduler: materialize {} failed: {err}", task.id))
+                    }
+                }
+                let _ = tasks::finish(conn, &task.id, TaskStatus::Done, Some("approved"));
+                activity(
+                    shared,
+                    task,
+                    ActivityKind::Finished,
+                    "plan approved".to_owned(),
+                );
             }
-            let _ = tasks::finish(conn, &task.id, TaskStatus::Done, Some("approved"));
-            activity(
-                shared,
-                task,
-                ActivityKind::Finished,
-                "plan approved".to_owned(),
-            );
         }
         "reject" => {
             // Nothing was created — just discard the proposal and close the gate.
