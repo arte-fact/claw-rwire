@@ -990,26 +990,15 @@ fn dispatch_native(
             .collect();
     // F→U→W→M: the summary layer takes only what the budget leaves once the identity and the
     // raw tail are placed and the concierge's working headroom is reserved.
-    let brief = workspace_dir
-        .as_deref()
-        .and_then(workspace::read_agent_md)
-        .unwrap_or_default();
-    let fixed_chars = role.chars().count()
-        + inference
-            .agent_prompt
-            .as_deref()
-            .unwrap_or("")
-            .chars()
-            .count()
-        + brief.chars().count();
     let unit_chars = model_turns
         .iter()
         .map(|turn| turn.text.chars().count() + 16)
         .sum();
-    let memory_text = memory::budget_fill(
-        cached_context(&inference).unwrap_or(DEFAULT_CONTEXT_TOKENS),
+    let memory_text = memory::fill_for_launch(
+        &inference,
         RunKind::Chat,
-        fixed_chars,
+        &role,
+        workspace_dir.as_deref(),
         unit_chars,
         None,
         memory.text().as_deref(),
@@ -1151,10 +1140,7 @@ fn project_chat_memory(conn: &rusqlite::Connection, shared: &SharedServerState) 
         .into_iter()
         .rev()
         .find(|event| event.kind == db::agent_memory_log::MemoryEventKind::Fold)
-        .map(|event| {
-            let time = event.created_at.get(11..16).unwrap_or_default();
-            format!("{time} — {}", event.note)
-        })
+        .map(|event| format!("{} — {}", hh_mm(&event.created_at), event.note))
         .unwrap_or_default();
     let memory = crate::state::ChatMemory {
         agent_id,
@@ -1725,6 +1711,11 @@ fn describe_tool(name: &str, arguments: &str) -> String {
         "verdict" => "review".to_owned(),
         other => other.to_owned(),
     }
+}
+
+/// `2026-06-22T08:00:…Z` → `08:00` — the transcript-grain stamp every projection shows.
+pub(super) fn hh_mm(stamp: &str) -> String {
+    stamp.get(11..16).unwrap_or_default().to_owned()
 }
 
 /// `HH:MM:SS` (UTC) — seconds matter for the live feed (events land seconds apart).

@@ -23,7 +23,8 @@ use crate::db::tasks::TaskStatus;
 use crate::db::{agents, pipeline, task_runs, tasks, workspaces};
 use crate::state::{AgentLive, AgentThread, AgentThreadItem, AgentTurn, App, TaskLink};
 
-use super::tasks::agent_names;
+use super::hh_mm;
+use super::tasks::{agent_names, display_name};
 
 /// The newest turns kept in the projection; older ones fold away (R3 replaces the plain count
 /// with the memory fold line). "Load older" (R5) grows the open thread's window by this much
@@ -82,11 +83,6 @@ fn tool_count(transcript: Option<&str>) -> usize {
         .map_or(0, |calls| calls.len())
 }
 
-/// `2026-06-22T08:00:…Z` → `08:00`.
-fn hh_mm(stamp: &str) -> String {
-    stamp.get(11..16).unwrap_or_default().to_owned()
-}
-
 /// One run as a conversational turn. `own` marks the thread agent's replies; a run by anyone
 /// else (a reviewer, or "you" for a human verdict) renders as an incoming turn. A human
 /// verdict's substance is its feedback, so that becomes the body rather than the "(you) …" stub.
@@ -98,15 +94,7 @@ fn run_turn(
     link_task: bool,
 ) -> AgentTurn {
     let own = run.agent.as_deref() == Some(agent_id);
-    let author = run.agent.as_ref().map_or_else(
-        || "you".to_owned(),
-        |id| {
-            names
-                .iter()
-                .find(|(i, _)| i == id)
-                .map_or_else(|| id.clone(), |(_, n)| n.clone())
-        },
-    );
+    let author = display_name(names, run.agent.as_deref());
     let output = run.output.as_deref().unwrap_or("").trim().to_owned();
     let feedback = run
         .feedback

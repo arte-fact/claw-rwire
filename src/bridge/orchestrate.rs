@@ -91,20 +91,12 @@ fn launch_planning(
     // Planning reads the same (agent, workspace) memory row as the owner's producer runs —
     // same memory, different hat: plans build on what shipped and what failed there. Budgeted
     // F→U→W→M like every other run; the planning unit is one brief, so memory gets real room.
-    let ws_brief = workspace::read_agent_md(&workspace_dir).unwrap_or_default();
-    let fixed_chars = role.chars().count()
-        + inference
-            .agent_prompt
-            .as_deref()
-            .unwrap_or("")
-            .chars()
-            .count()
-        + ws_brief.chars().count();
     let row = db::agent_memory::get(conn, &inference.agent_id, Some(workspace)).unwrap_or_default();
-    let memory_text = memory::budget_fill(
-        super::cached_context(&inference).unwrap_or(super::DEFAULT_CONTEXT_TOKENS),
+    let memory_text = memory::fill_for_launch(
+        &inference,
         crate::state::RunKind::Planning,
-        fixed_chars,
+        &role,
+        Some(&workspace_dir),
         brief_text.chars().count(),
         None,
         row.text().as_deref(),

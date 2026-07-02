@@ -130,15 +130,6 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
         let unit_cap_chars = (f64::from(memory::prompt_budget(context)) * 0.5) as usize * 4;
         let (condensed, skip) = memory::compact_attempt(&prior, unit_cap_chars);
         let prior = &prior[skip..];
-        let brief = workspace::read_agent_md(&workspace_dir).unwrap_or_default();
-        let fixed_chars = preamble.chars().count()
-            + inference
-                .agent_prompt
-                .as_deref()
-                .unwrap_or("")
-                .chars()
-                .count()
-            + brief.chars().count();
         let unit_chars = task.spec.chars().count()
             + memory::attempt_chars(prior)
             + condensed.as_deref().unwrap_or("").chars().count();
@@ -146,10 +137,11 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             .unwrap_or_default();
         let recap =
             memory::last_task_recap(conn, &inference.agent_id, &task.workspace_id, &task.id);
-        let memory_fill = memory::budget_fill(
-            context,
+        let memory_fill = memory::fill_for_launch(
+            &inference,
             crate::state::RunKind::Task,
-            fixed_chars,
+            &preamble,
+            Some(&workspace_dir),
             unit_chars,
             recap.as_deref(),
             row.text().as_deref(),

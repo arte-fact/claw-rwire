@@ -91,15 +91,7 @@ pub(super) fn run_view(
     run: crate::db::task_runs::TaskRun,
 ) -> crate::state::RunView {
     crate::state::RunView {
-        agent: run.agent.as_ref().map_or_else(
-            || "you".to_owned(),
-            |id| {
-                names
-                    .iter()
-                    .find(|(i, _)| i == id)
-                    .map_or_else(|| id.clone(), |(_, n)| n.clone())
-            },
-        ),
+        agent: display_name(names, run.agent.as_deref()),
         role: run.role,
         output: run.output.unwrap_or_default(),
         verdict: run.verdict,
@@ -108,8 +100,7 @@ pub(super) fn run_view(
         ok: run.ok,
         tools: parse_transcript(run.transcript.as_deref()),
         attempt: run.attempt,
-        // `2026-06-22T08:00:…Z` → `08:00`, matching the chat transcript's HH:MM stamps.
-        time: run.created_at.get(11..16).unwrap_or_default().to_owned(),
+        time: super::hh_mm(&run.created_at),
         memory: run.memory.unwrap_or_default(),
     }
 }
@@ -557,6 +548,20 @@ pub(super) fn status_digest(conn: &rusqlite::Connection) -> Option<String> {
          conversation history says about what is running or done:]\n{}",
         lines.join("\n")
     ))
+}
+
+/// An agent id resolved against the `agent_names` list — the display name every projection
+/// shows, with "you" for a human run and the raw id when the agent is gone.
+pub(super) fn display_name(names: &[(String, String)], agent: Option<&str>) -> String {
+    agent.map_or_else(
+        || "you".to_owned(),
+        |id| {
+            names
+                .iter()
+                .find(|(i, _)| i == id)
+                .map_or_else(|| id.to_owned(), |(_, n)| n.clone())
+        },
+    )
 }
 
 pub(super) fn agent_names(conn: &rusqlite::Connection) -> Vec<(String, String)> {

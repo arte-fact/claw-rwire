@@ -62,6 +62,34 @@ pub(super) fn memory_allowance(b: u32, f: u32, u: u32, shares: &RoleShares) -> u
 /// per-role shares, allowance after the fixed identity (`fixed_chars`) and the current unit
 /// (`unit_chars`) are placed, then the fill (recap first, then summary). Returns the raw
 /// budget-fitted memory — the caller wraps it for its prompt (and M4 snapshots it).
+/// The shared core of every launch's F→U→W→M composition: resolve the model's real context
+/// window, count the fixed layers (role preamble + agent identity + the workspace brief read
+/// from disk), and let memory fill what the unit leaves. What varies per run kind — the unit
+/// size, the scope row, the recap — stays at the call site.
+pub(super) fn fill_for_launch(
+    inference: &resolution::ResolvedInference,
+    kind: RunKind,
+    preamble: &str,
+    workspace_dir: Option<&std::path::Path>,
+    unit_chars: usize,
+    recap: Option<&str>,
+    summary: Option<&str>,
+) -> Option<String> {
+    let context = super::cached_context(inference).unwrap_or(super::DEFAULT_CONTEXT_TOKENS);
+    let brief = workspace_dir
+        .and_then(crate::workspace::read_agent_md)
+        .unwrap_or_default();
+    let fixed_chars = preamble.chars().count()
+        + inference
+            .agent_prompt
+            .as_deref()
+            .unwrap_or("")
+            .chars()
+            .count()
+        + brief.chars().count();
+    budget_fill(context, kind, fixed_chars, unit_chars, recap, summary)
+}
+
 pub(super) fn budget_fill(
     context_tokens: u32,
     run: RunKind,
