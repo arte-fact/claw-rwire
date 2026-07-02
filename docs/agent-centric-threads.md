@@ -351,6 +351,32 @@ The budget model from the keystone section, landing into pages that already have
       on Forge · Studio, Pause/Resume round-trip scoped to the one row, legacy DB migrated in
       place on open
 
+### R3.5 — Materialize memory (agreed 2026-07-02)
+Memory acts invisibly today — folds overwrite the row in the background, and the summary is only
+reachable where R3 put it (the Prompts panel, the agent-page card). This phase makes memory a
+first-class citizen: every scope has a home on the page it governs, every change is an observable
+event with provenance. Fold events render compactly (one muted line, like the fold line itself) —
+the thread stays a conversation, with memory as its quiet narrator.
+- [ ] **M1 — Memory journal (foundation)**: append-only `agent_memory_log` — every mutation
+      (task fold, chat fold, operator edit / clear / pause) records (agent, workspace, kind,
+      source, note, summary_after, created_at), pruned to the last ~50 per scope. The substrate
+      M2/M3 read; buys future undo/diff for free.
+- [ ] **M2 — Folds visible in the thread**: the agent timeline merges journal rows in
+      chronologically — a muted system line ("condensed 'Build a color highlighter' into
+      memory") at the moment the fold happened. A new `AgentThreadItem` variant; no new App
+      fields. History becoming memory is *watchable* — the keystone's page rule, completed.
+- [ ] **M3 — Concierge parity**: the chat page gets the fold line + the editable memory card
+      for the **global** row (today it's only reachable via Prompts), plus M2's fold events.
+      If message ids are already in the projection, the fold line sits at the exact
+      `summarized_through` boundary inside the transcript; else top placement first.
+- [ ] **M4 — Run provenance**: stamp each producer run with the memory layer it launched with
+      (`task_runs.memory_snapshot`), shown in the Peek transcript — "what did Forge remember
+      when it did that?". Cheap at launch time; costs storage per run.
+- [ ] **M5 — Memory overview**: a System-page section (or `/memory`): every agent × scope with
+      size, last-updated, paused flag, links to its pages. Admin view — worth it once the
+      workspace count grows; last in line.
+- [ ] `fmt`/`clippy`/`test` green per piece
+
 ### R4 — Steer: leave a message (v1: queue at turn boundary)
 The moment it becomes agent-*centric*; unchanged from the old Phase 4.
 - [ ] Per-agent message store; composer at the bottom of the worker thread
