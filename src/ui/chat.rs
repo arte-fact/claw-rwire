@@ -13,9 +13,9 @@ use crate::bridge::{self, Command};
 use crate::state::{App, ChatMessage, MessageRole, TranscriptItem};
 
 /// The shared reading measure for conversation surfaces — the chat transcript, its composer,
-/// and the agent thread all cap and center on it. `40rem` ≈ 80 mono columns at the app's
-/// 0.82rem body: the classic terminal line, long enough for code, short enough to read.
-pub(super) const CHAT_MAX_W: &str = "40rem";
+/// and the agent thread all cap and center on it. `60rem` (960px) ≈ 120 mono columns at the
+/// app's 0.82rem body — room for code blocks and tool cards without full-viewport sprawl.
+pub(super) const CHAT_MAX_W: &str = "60rem";
 
 // ── Main area ───────────────────────────────────────────────────────────────
 
