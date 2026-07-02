@@ -17,7 +17,12 @@ use rwire::{ChangeSet, SharedServerState};
 mod admin;
 mod agent_nav;
 mod agent_thread;
+mod boot;
+mod chat_turn;
+pub(crate) use chat_turn::wrap_memory;
 mod files;
+mod live;
+pub(crate) use live::{clear_live_turn, live_progress, push_activity};
 mod memory;
 mod notify;
 mod orchestrate;
@@ -31,15 +36,12 @@ mod tasks;
 mod workflow;
 
 use crate::agent;
-use crate::db::{self, agents, chat, endpoints, resolution, workspaces};
-use crate::id;
+use crate::db::{self, agents, chat, resolution, workspaces};
 use crate::mcp::{self, McpClient};
-use crate::state::{
-    ActivityEntry, ActivityKind, App, ChatSummary, LogLine, MessageRole, RunKind, RunRole,
-};
+use crate::state::{App, LogLine, RunKind, RunRole};
 use crate::tools::{
-    CoderToolbox, CompositeToolbox, ConciergeToolbox, Delegate, EmptyToolbox, FilteredToolbox,
-    McpToolbox, Toolbox, WORKSPACE_TOOLS,
+    CoderToolbox, CompositeToolbox, Delegate, EmptyToolbox, FilteredToolbox, McpToolbox, Toolbox,
+    WORKSPACE_TOOLS,
 };
 use crate::workspace;
 
@@ -408,7 +410,8 @@ static WEB_MCP: OnceLock<Arc<McpClient>> = OnceLock::new();
 /// Spawn the web MCP server and cache it. Best-effort, like rust-claw's connect: a
 /// failure logs and leaves the agent tool-less rather than aborting boot.
 fn connect_web_mcp() {
-    let command = env("CLAW_WEB_MCP_CMD").unwrap_or_else(|()| mcp::DEFAULT_WEB_COMMAND.to_owned());
+    let command =
+        boot::env("CLAW_WEB_MCP_CMD").unwrap_or_else(|()| mcp::DEFAULT_WEB_COMMAND.to_owned());
     match McpClient::spawn(mcp::WEB_SERVER_NAME, &command, &[], &web_mcp_env()) {
         Ok(client) => {
             log_line(format!(
@@ -431,7 +434,7 @@ fn connect_web_mcp() {
 /// library path omits — `libasound` on this machine. Empty when the var is unset, so
 /// the child just inherits the parent environment unchanged.
 fn web_mcp_env() -> Vec<(String, String)> {
-    let Ok(extra) = env("CLAW_WEB_MCP_LD_PATH") else {
+    let Ok(extra) = boot::env("CLAW_WEB_MCP_LD_PATH") else {
         return Vec::new();
     };
     let inherited = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
@@ -497,8 +500,8 @@ pub fn spawn(shared: Arc<SharedServerState>, central_db: PathBuf) {
     // render already has the chats + registry. Otherwise a connection that paints
     // before the projection lands shows blank data, and a client-side tab switch —
     // which doesn't touch those fields — never re-renders it (needs a reload).
-    boot(&conn, &shared);
-    log_sandbox_mode();
+    boot::boot(&conn, &shared);
+    boot::log_sandbox_mode();
     connect_web_mcp();
     admin::project_tool_catalog(&shared);
     std::thread::spawn(move || {
@@ -509,178 +512,12 @@ pub fn spawn(shared: Arc<SharedServerState>, central_db: PathBuf) {
     scheduler::spawn_ticker();
 }
 
-/// Resolve `CLAW_SANDBOX` once at startup and announce the command-execution mode. If `isola` is
-/// requested but isn't compiled in for this build/platform, say so and note we fall back to host
-/// execution (rather than failing runs). The exec routing itself lands in a later subtask.
-fn log_sandbox_mode() {
-    use crate::sandbox::SandboxMode;
-    let requested = SandboxMode::resolve(env("CLAW_SANDBOX").ok().as_deref());
-    match requested {
-        SandboxMode::Host => {}
-        SandboxMode::Isola if requested.effective() == SandboxMode::Isola => {
-            log_line("sandbox: isola mode — agent commands run inside the workspace sandbox");
-        }
-        SandboxMode::Isola => log_line(
-            "sandbox: CLAW_SANDBOX=isola requested but isola support isn't compiled in \
-             (build with --features sandbox on Linux); running commands on the host",
-        ),
-    }
-}
-
-/// Prime the projection from the DB and select the most recent thread. On first
-/// run (no threads yet) seed one so the operator lands in a ready chat.
-fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
-    if chat::list_chats(conn).map(|chats| chats.is_empty()) == Ok(true)
-        && let Ok(id) = id::new_id()
-    {
-        let _ = chat::create_chat(conn, &id, "New chat");
-    }
-    seed_provider(conn);
-    // Fresh-DB showcase: a small maker team (agents + workspaces + briefs + welcome chat) so
-    // first boot demonstrates the loop. Before migrate_workspaces, which would otherwise give
-    // the member-only specialist its own home.
-    seed::seed_showcase(conn, &data_dir());
-    migrate_workspaces(conn);
-    link_chats_to_default_agent(conn);
-    // After the web chat is linked, so `web_agent` resolves the concierge to seed.
-    seed_owner_persona(conn);
-    // One persistent concierge conversation (R1): keep the most recently active chat, archive
-    // the rest. Also what makes the rolling-memory marker coherent (one thread, one marker).
-    if let Err(err) = chat::collapse_to_primary(conn) {
-        log_line(format!("bridge: collapse chats failed: {err}"));
-    }
-    // Workers don't survive a restart: a task still `running` at boot is orphaned (its result
-    // will never arrive) and would block its lane forever. Requeue it; the scheduler relaunches
-    // and an already-produced loop pass resumes at its review.
-    match db::tasks::requeue_orphaned_running(conn) {
-        Ok(0) => {}
-        Ok(count) => log_line(format!("bridge: requeued {count} orphaned running task(s)")),
-        Err(err) => log_line(format!("bridge: orphan requeue failed: {err}")),
-    }
-    admin::project_registry(conn, shared);
-    let chats = chat::list_chats(conn).unwrap_or_default();
-    let selected = chats.first().map(|chat| chat.id.clone());
-    let messages = selected
-        .as_deref()
-        .map(|id| chat::load_thread(conn, id).unwrap_or_default())
-        .unwrap_or_default();
-    shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[
-            App::FIELD_CHATS,
-            App::FIELD_OPEN_CHAT,
-            App::FIELD_MESSAGES,
-            App::FIELD_PIPELINE_READY,
-        ]),
-        |app| {
-            app.chats = chats;
-            app.open_chat = selected;
-            app.messages = messages;
-            app.pipeline_ready = true;
-        },
-    );
-    project_chat_memory(conn, shared);
-    project_memory_overview(conn, shared);
-}
-
-/// First-boot bootstrap: when no endpoint exists yet, seed a `default` endpoint +
-/// agent from `.env` so the chat talks to a real model out of the box. Once any
-/// endpoint exists the DB is the source of record and the System Map admin owns it —
-/// env never clobbers UI edits on restart. No env config → echo fallback.
-fn seed_provider(conn: &rusqlite::Connection) {
-    match endpoints::is_empty(conn) {
-        Ok(true) => {}
-        _ => return, // already configured (admin-set) — or a read error; don't touch it
-    }
-    let (Ok(base_url), Ok(model)) = (env("CLAW_ENDPOINT"), env("CLAW_MODEL")) else {
-        return;
-    };
-    let api_key = env("CLAW_API_KEY").ok().filter(|key| !key.is_empty());
-    if let Err(err) = endpoints::upsert(conn, "default", &base_url, api_key.as_deref(), None) {
-        log_line(format!("bridge: seed endpoint failed: {err}"));
-        return;
-    }
-    match agents::ensure_default(conn, Some("default"), Some(&model)) {
-        Ok(_) => println!("Agent: native endpoint {base_url} (model {model})"),
-        Err(err) => log_line(format!("bridge: seed agent failed: {err}")),
-    }
-}
-
-/// Give every agent a workspace it **owns** (its home), idempotent. An agent that predates
-/// the workspace model — or one inherited from a shared rust-claw central.db — gets a
-/// workspace whose id is its legacy `folder`, so its existing directory and `AGENT.md` (now
-/// the workspace's project brief) carry over untouched. `set_owner` also makes it a member.
-/// The per-agent identity prompt starts empty (the run falls back to base + brief until the
-/// operator sets one). Agents that already own a workspace are left alone.
-fn migrate_workspaces(conn: &rusqlite::Connection) {
-    let Ok(agents) = agents::list(conn) else {
-        return;
-    };
-    for agent in agents {
-        // Give an agent an owned home only if it belongs to no workspace at all (a legacy /
-        // unattached agent). Member-only agents — e.g. a showcase specialist — keep none.
-        if workspaces::is_attached(conn, &agent.id).unwrap_or(false) {
-            continue;
-        }
-        let _ = workspaces::create(conn, &agent.folder, &agent.name);
-        let _ = workspaces::set_owner(conn, &agent.folder, &agent.id);
-    }
-}
-
-/// Give the concierge / workspace owner (the web agent) a default identity persona if it has
-/// none, so it's never a blank agent — the diagnosed failure where the owner had no persona,
-/// so it read as faceless and `create_task` auto-routing had nothing to describe it by.
-/// Idempotent: only fills a missing persona, never overwrites an operator-set one.
-fn seed_owner_persona(conn: &rusqlite::Connection) {
-    let Ok(Some(agent_id)) = agents::web_agent(conn) else {
-        return;
-    };
-    if db::agent_prompts::get(conn, &agent_id)
-        .ok()
-        .flatten()
-        .is_some()
-    {
-        return;
-    }
-    let name = agents::get(conn, &agent_id)
-        .ok()
-        .flatten()
-        .map(|agent| agent.name)
-        .unwrap_or_else(|| "claw".to_owned());
-    let _ = db::agent_prompts::set(
-        conn,
-        &agent_id,
-        &db::agent_prompts::default_owner_body(&name),
-    );
-}
-
-/// Read a non-empty, trimmed env var.
-fn env(key: &str) -> Result<String, ()> {
-    std::env::var(key)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .ok_or(())
-}
-
-/// Bind every web chat to the default agent group (idempotent) so a turn can resolve
-/// its endpoint. Covers chats inherited from an earlier echo-only run.
-fn link_chats_to_default_agent(conn: &rusqlite::Connection) {
-    let Ok(Some(agent)) = agents::first(conn) else {
-        return;
-    };
-    if let Ok(chats) = chat::list_chats(conn) {
-        for summary in &chats {
-            let _ = agents::link(conn, &summary.id, &agent.id);
-        }
-    }
-}
-
 fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Command) {
     match command {
         Command::DeleteChat(id) => delete_chat(conn, shared, &id),
         Command::ListArchived => list_archived(conn, shared),
-        Command::Submit { chat, text } => submit(conn, shared, &chat, &text),
-        Command::AgentReply { chat, result } => agent_reply(conn, shared, &chat, result),
+        Command::Submit { chat, text } => chat_turn::submit(conn, shared, &chat, &text),
+        Command::AgentReply { chat, result } => chat_turn::agent_reply(conn, shared, &chat, result),
         Command::UpsertEndpoint {
             name,
             base_url,
@@ -811,7 +648,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             plan_id,
             result,
         } => orchestrate::planned(conn, shared, &workspace, &origin_chat, &plan_id, result),
-        Command::Notified { chat, text } => notified(conn, shared, &chat, &text),
+        Command::Notified { chat, text } => chat_turn::notified(conn, shared, &chat, &text),
         Command::UpdateMemory {
             agent_id,
             workspace,
@@ -939,149 +776,6 @@ fn list_archived(conn: &rusqlite::Connection, shared: &SharedServerState) {
     shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_ARCHIVED]), |app| {
         app.archived = archived;
     });
-}
-
-fn submit(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str, text: &str) {
-    if let Err(err) = chat::append_message(conn, chat_id, MessageRole::User, text) {
-        log_line(format!("bridge: append user message failed: {err}"));
-        return;
-    }
-    let _ = chat::title_if_default(conn, chat_id, &first_line_title(text));
-
-    match resolution::resolve_for_chat(conn, chat_id, |key| std::env::var(key).ok()) {
-        Ok(inference) => dispatch_native(conn, shared, chat_id, inference),
-        Err(_) => reply_echo(conn, shared, chat_id, text),
-    }
-}
-
-/// Native path: show the user's turn + spinner now, then run the (blocking) endpoint
-/// call on a worker thread that posts the result back as `Command::AgentReply`. The
-/// bridge thread stays free to handle other commands meanwhile.
-fn dispatch_native(
-    conn: &rusqlite::Connection,
-    shared: &SharedServerState,
-    chat_id: &str,
-    inference: resolution::ResolvedInference,
-) {
-    // The agent's workspace (if it has one): scaffold the dir + read AGENT.md as the
-    // shared project-brief layer, composing the layered system prompt.
-    let workspace_dir = inference
-        .workspace
-        .as_deref()
-        .map(|id| workspace::dir_for(&data_dir(), id));
-    // The concierge's rolling memory (its **global** scope row — one conversation, one memory):
-    // the summary frames the system prompt, and the marker windows the transcript so only the
-    // turns after the condensed portion are sent raw.
-    let memory = db::agent_memory::get(conn, &inference.agent_id, None).unwrap_or_default();
-    let role = role_prompt(conn, RunKind::Chat);
-
-    // Two views of the transcript: the display thread (chat turns + tool cards) for the
-    // UI, and the model view (tools folded into notes, windowed past the summary) for the request.
-    let display = chat::load_thread(conn, chat_id).unwrap_or_default();
-    let model_turns: Vec<crate::state::ChatMessage> =
-        chat::model_turns_after(conn, chat_id, memory.summarized_through)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|turn| crate::state::ChatMessage {
-                role: turn.role,
-                text: turn.text,
-                time: String::new(),
-            })
-            .collect();
-    // F→U→W→M: the summary layer takes only what the budget leaves once the identity and the
-    // raw tail are placed and the concierge's working headroom is reserved.
-    let unit_chars = model_turns
-        .iter()
-        .map(|turn| turn.text.chars().count() + 16)
-        .sum();
-    let memory_text = memory::fill_for_launch(
-        &inference,
-        RunKind::Chat,
-        &role,
-        workspace_dir.as_deref(),
-        unit_chars,
-        None,
-        memory.text().as_deref(),
-    )
-    .map(|summary| wrap_memory(&summary));
-    let system_prompt = run_system_prompt(
-        &role,
-        workspace_dir.as_deref(),
-        &inference.agent_name,
-        inference.agent_prompt.clone(),
-        memory_text,
-    );
-    // The live status digest (R5): present state is looked up fresh each turn, never
-    // remembered. Appended as the **newest turn** — buried in the system prompt the model
-    // narrated from stale conversation history anyway (live-tested); the tail position is the
-    // one it cannot skip.
-    let mut model_turns = model_turns;
-    if let Some(digest) = tasks::status_digest(conn) {
-        model_turns.push(crate::state::ChatMessage {
-            role: MessageRole::User,
-            text: digest,
-            time: String::new(),
-        });
-    }
-    let messages = agent::build_messages(&system_prompt, &model_turns);
-    let chats = chat::list_chats(conn).unwrap_or_default();
-    let proj_chat = chat_id.to_owned();
-    let title = title_of(&chats, &proj_chat);
-    shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[
-            App::FIELD_CHATS,
-            App::FIELD_MESSAGES,
-            App::FIELD_SENDING,
-            App::FIELD_ERROR,
-            App::FIELD_RUNNING,
-            App::FIELD_ACTIVITY,
-        ]),
-        |app| {
-            app.chats = chats;
-            if app.open_chat.as_deref() == Some(proj_chat.as_str()) {
-                app.messages = display;
-            }
-            app.sending = true;
-            app.error = None;
-            app.running.push(proj_chat.clone());
-            push_activity(app, title, ActivityKind::Started, String::new(), None, None);
-        },
-    );
-
-    // Build the run's toolbox from the agent's tool selection: web MCP tools and/or the
-    // workspace coder tools, each filtered to the enabled set. The chat agent is the
-    // concierge, so it also gets the `ask` delegation tool over every workspace.
-    let selected = build_toolbox(inference.tools.clone(), workspace_dir, false);
-    let concierge = ConciergeToolbox::new(chat_id, delegates(conn));
-    let toolbox: Box<dyn Toolbox> =
-        Box::new(CompositeToolbox::new(vec![Box::new(concierge), selected]));
-    let chat = chat_id.to_owned();
-    std::thread::spawn(move || {
-        let result =
-            agent::run_turn(&inference, messages, toolbox.as_ref()).map_err(|err| err.to_string());
-        send(Command::AgentReply { chat, result });
-        // Warm the model's context-window cache off the bridge thread (cached after the
-        // first call), so the token-budget summarize check has a real budget to compare to.
-        warm_context_cache(&inference);
-    });
-}
-
-/// The concierge's delegation targets: every workspace, with the first line of its `AGENT.md`
-/// brief as the routing description the model picks by.
-fn delegates(conn: &rusqlite::Connection) -> Vec<Delegate> {
-    workspaces::list(conn)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|ws| {
-            let brief = workspace::read_agent_md(&workspace::dir_for(&data_dir(), &ws.id))
-                .unwrap_or_default();
-            Delegate {
-                id: ws.id,
-                name: ws.name,
-                brief,
-            }
-        })
-        .collect()
 }
 
 /// Scaffold a run's workspace dir (best-effort) and compose its layered system prompt:
@@ -1216,21 +910,6 @@ fn project_memory_surfaces(conn: &rusqlite::Connection, shared: &SharedServerSta
     project_memory_overview(conn, shared);
 }
 
-/// Frame a rolling summary as the "working memory" system-prompt layer.
-fn wrap_memory(summary: &str) -> String {
-    format!(
-        "## Working memory\n\nA running summary of earlier context (older messages have been \
-         condensed here):\n\n{summary}"
-    )
-}
-
-/// How many recent transcript turns the concierge sends raw; older ones live in the summary.
-const MEMORY_WINDOW: usize = 12;
-/// Turn-count summarize trigger — the **fallback** when the endpoint reports no token usage.
-const SUMMARIZE_AT: usize = 24;
-/// Token-based summarize trigger: fold once a request's `prompt_tokens` exceeds this fraction
-/// of the model's context window. The primary path when usage + a context size are known.
-const SUMMARIZE_FRACTION: f64 = 0.6;
 /// Assumed context window when the server reports usage but not a context length yet.
 const DEFAULT_CONTEXT_TOKENS: u32 = 8192;
 
@@ -1283,7 +962,7 @@ pub(super) fn warm_context_cache(inference: &resolution::ResolvedInference) {
 fn exec_strategy_for(workspace: &Path) -> crate::tools::ExecStrategy {
     use crate::sandbox::SandboxMode;
     use crate::tools::ExecStrategy;
-    match SandboxMode::resolve(env("CLAW_SANDBOX").ok().as_deref()).effective() {
+    match SandboxMode::resolve(boot::env("CLAW_SANDBOX").ok().as_deref()).effective() {
         SandboxMode::Isola => {
             let sandbox = workspace
                 .file_name()
@@ -1353,395 +1032,9 @@ fn build_toolbox(
     }
 }
 
-/// Echo fallback (no endpoint configured): synchronous stand-in reply.
-fn reply_echo(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str, text: &str) {
-    let reply = echo_reply(text);
-    if let Err(err) = chat::append_message(conn, chat_id, MessageRole::Agent, &reply) {
-        log_line(format!("bridge: append agent message failed: {err}"));
-    }
-    project_reply(conn, shared, chat_id);
-}
-
-/// Persist a worker's endpoint result and project. On error, surface a transient
-/// banner instead of writing a bogus assistant turn into the transcript.
-fn agent_reply(
-    conn: &rusqlite::Connection,
-    shared: &SharedServerState,
-    chat_id: &str,
-    result: Result<agent::TurnResult, String>,
-) {
-    match result {
-        Ok(turn) => {
-            // Persist the tool cards (in order), then the final reply — `load_thread`
-            // reads them back interleaved.
-            for tool in &turn.invocations {
-                if let Err(err) = chat::append_tool(
-                    conn,
-                    chat_id,
-                    &tool.name,
-                    &tool.arguments,
-                    &tool.result,
-                    tool.ok,
-                ) {
-                    log_line(format!("bridge: append tool turn failed: {err}"));
-                }
-            }
-            if let Some(reply) = turn.reply.as_deref().filter(|r| !r.trim().is_empty())
-                && let Err(err) = chat::append_message(conn, chat_id, MessageRole::Agent, reply)
-            {
-                log_line(format!("bridge: append agent message failed: {err}"));
-            }
-            project_reply(conn, shared, chat_id);
-            // Fold older turns into the concierge's rolling memory once context gets large
-            // (by the request's real token count, else a turn-count fallback).
-            maybe_summarize(conn, chat_id, turn.prompt_tokens);
-        }
-        Err(message) => {
-            log_line(format!("bridge: agent turn failed: {message}"));
-            let title = chat_title(conn, chat_id);
-            let chat = chat_id.to_owned();
-            shared.update_shared_changed::<App>(
-                ChangeSet::from_fields(&[
-                    App::FIELD_SENDING,
-                    App::FIELD_ERROR,
-                    App::FIELD_RUNNING,
-                    App::FIELD_ACTIVITY,
-                ]),
-                |app| {
-                    app.sending = false;
-                    app.error = Some(message.clone());
-                    app.running.retain(|id| id != &chat);
-                    push_activity(app, title, ActivityKind::Failed, message, None, None);
-                },
-            );
-        }
-    }
-}
-
-/// The instruction for a summarization turn — fold an excerpt into the running summary.
-const SUMMARIZE_PROMPT: &str = "You maintain a running summary of a long conversation so it \
-can continue without the full transcript. Merge the existing summary with the new excerpt \
-into one concise summary. Preserve concrete facts, decisions, file/task/workspace names, \
-commitments, and any open or unfinished threads; drop pleasantries. Write terse notes, not \
-prose, and output only the summary.";
-
-/// Fold the concierge's older turns into its rolling memory when the thread gets large,
-/// advancing the marker so the raw tail shrinks back to [`MEMORY_WINDOW`]. The trigger is
-/// **token-based** when the endpoint reports `prompt_tokens` (over [`SUMMARIZE_FRACTION`] of
-/// the model's context window), and **falls back** to a turn count ([`SUMMARIZE_AT`]) when it
-/// doesn't. Runs the summarization on a worker thread (one LLM call); best-effort.
-fn maybe_summarize(conn: &rusqlite::Connection, chat_id: &str, prompt_tokens: Option<u32>) {
-    let Ok(inference) = resolution::resolve_for_chat(conn, chat_id, |key| std::env::var(key).ok())
-    else {
-        return;
-    };
-    let memory = db::agent_memory::get(conn, &inference.agent_id, None).unwrap_or_default();
-    if memory.paused {
-        return; // operator froze this agent's memory
-    }
-    let tail =
-        chat::model_turns_after(conn, chat_id, memory.summarized_through).unwrap_or_default();
-    // Need at least a window plus something to fold.
-    if tail.len() <= MEMORY_WINDOW {
-        return;
-    }
-    let over = match prompt_tokens {
-        Some(tokens) => {
-            let budget = cached_context(&inference).unwrap_or(DEFAULT_CONTEXT_TOKENS);
-            f64::from(tokens) > SUMMARIZE_FRACTION * f64::from(budget)
-        }
-        None => tail.len() > SUMMARIZE_AT,
-    };
-    if !over {
-        return;
-    }
-    let fold_count = tail.len() - MEMORY_WINDOW;
-    let batch = &tail[..fold_count];
-    let Some(new_marker) = batch.last().map(|turn| turn.id) else {
-        return;
-    };
-    let excerpt = render_turns(batch);
-    let previous = memory.summary;
-    let agent_id = inference.agent_id.clone();
-    let chat = chat_id.to_owned();
-    std::thread::spawn(move || {
-        let user = crate::state::ChatMessage {
-            role: MessageRole::User,
-            text: format!(
-                "Existing summary (may be empty):\n{previous}\n\n\
-                 --- New conversation excerpt to fold in ---\n{excerpt}"
-            ),
-            time: now_hm(),
-        };
-        let messages = agent::build_messages(SUMMARIZE_PROMPT, std::slice::from_ref(&user));
-        match agent::run_turn(&inference, messages, &EmptyToolbox) {
-            Ok(turn) => {
-                if let Some(summary) = turn
-                    .reply
-                    .map(|reply| reply.trim().to_owned())
-                    .filter(|reply| !reply.is_empty())
-                {
-                    let plural = if fold_count == 1 { "" } else { "s" };
-                    send(Command::UpdateMemory {
-                        agent_id,
-                        workspace: None,
-                        summary,
-                        summarized_through: new_marker,
-                        note: format!("condensed {fold_count} older message{plural} into memory"),
-                        source: Some(chat),
-                    });
-                }
-            }
-            Err(err) => log_line(format!("bridge: summarize failed: {err}")),
-        }
-    });
-}
-
-/// Render model turns as labelled lines for the summarizer's excerpt.
-fn render_turns(turns: &[chat::ModelTurn]) -> String {
-    turns
-        .iter()
-        .map(|turn| {
-            let who = match turn.role {
-                MessageRole::User => "User",
-                MessageRole::Agent => "Assistant",
-            };
-            format!("{who}: {}", turn.text)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Append the concierge's completion notice to its origin chat and project it (refresh the
-/// sidebar + the thread if it's the open one). Unlike `agent_reply` this raises no error
-/// banner and logs no activity — it's an unobtrusive background notice.
-fn notified(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str, text: &str) {
-    if let Err(err) = chat::append_message(conn, chat_id, MessageRole::Agent, text) {
-        log_line(format!("bridge: append notify message failed: {err}"));
-        return;
-    }
-    let chats = chat::list_chats(conn).unwrap_or_default();
-    let messages = chat::load_thread(conn, chat_id).unwrap_or_default();
-    let chat_id = chat_id.to_owned();
-    shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_CHATS, App::FIELD_MESSAGES]),
-        |app| {
-            app.chats = chats;
-            if app.open_chat.as_deref() == Some(chat_id.as_str()) {
-                app.messages = messages;
-            }
-        },
-    );
-}
-
-/// Reload the thread + sidebar and clear `sending`/`error` after a reply landed.
-fn project_reply(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str) {
-    let chats = chat::list_chats(conn).unwrap_or_default();
-    let messages = chat::load_thread(conn, chat_id).unwrap_or_default();
-    let title = title_of(&chats, chat_id);
-    let chat_id = chat_id.to_owned();
-    shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[
-            App::FIELD_CHATS,
-            App::FIELD_MESSAGES,
-            App::FIELD_SENDING,
-            App::FIELD_ERROR,
-            App::FIELD_RUNNING,
-            App::FIELD_ACTIVITY,
-        ]),
-        |app| {
-            app.chats = chats;
-            if app.open_chat.as_deref() == Some(chat_id.as_str()) {
-                app.messages = messages;
-            }
-            app.sending = false;
-            app.error = None;
-            app.running.retain(|id| id != &chat_id);
-            push_activity(
-                app,
-                title,
-                ActivityKind::Finished,
-                String::new(),
-                None,
-                None,
-            );
-        },
-    );
-}
-
-/// Newest-first, capped activity log.
-const ACTIVITY_CAP: usize = 50;
-
-fn push_activity(
-    app: &mut App,
-    title: String,
-    kind: ActivityKind,
-    detail: String,
-    task_id: Option<String>,
-    workspace_id: Option<String>,
-) {
-    app.activity.insert(
-        0,
-        ActivityEntry {
-            time: now_hm(),
-            title,
-            kind,
-            detail,
-            task_id,
-            workspace_id,
-        },
-    );
-    app.activity.truncate(ACTIVITY_CAP);
-}
-
-/// Cap on the live agent-activity ring.
-const LIVE_CAP: usize = 60;
-
-/// Cap on concurrently-streaming tasks' live turns — a handful at most.
-const LIVE_TURNS_CAP: usize = 8;
-
-/// Fold a live agent event into both feeds: the global `App.live_activity` ring (the Activity
-/// board) and the streaming task's ordered `App.live_turns` (the Thread's in-order live entry —
-/// text segments and tool events interleaved as they arrive).
-fn live_progress(
-    shared: &SharedServerState,
-    ctx: crate::state::ProgressCtx,
-    event: agent::AgentEvent,
-) {
-    use crate::state::LiveEvent;
-    use agent::AgentEvent;
-    match event {
-        AgentEvent::ToolStarted { name, arguments } => {
-            let action = describe_tool(&name, &arguments);
-            let time = now_hms();
-            let entry = LiveEvent {
-                time: time.clone(),
-                agent: ctx.agent,
-                workspace_id: ctx.workspace_id,
-                workspace: ctx.workspace,
-                task_id: ctx.task_id.clone(),
-                task: ctx.task,
-                action: action.clone(),
-                in_progress: true,
-                ok: false,
-            };
-            let task_id = ctx.task_id;
-            shared.update_shared_changed::<App>(
-                ChangeSet::from_fields(&[App::FIELD_LIVE_ACTIVITY, App::FIELD_LIVE_TURNS]),
-                move |app| {
-                    app.live_activity.insert(0, entry);
-                    app.live_activity.truncate(LIVE_CAP);
-                    turn_mut(app, &task_id).start_tool(time, action);
-                },
-            );
-        }
-        AgentEvent::ToolFinished { ok } => {
-            let task_id = ctx.task_id;
-            shared.update_shared_changed::<App>(
-                ChangeSet::from_fields(&[App::FIELD_LIVE_ACTIVITY, App::FIELD_LIVE_TURNS]),
-                move |app| {
-                    if let Some(entry) = app
-                        .live_activity
-                        .iter_mut()
-                        .find(|e| e.task_id == task_id && e.in_progress)
-                    {
-                        entry.in_progress = false;
-                        entry.ok = ok;
-                    }
-                    if let Some(turn) = app.live_turns.iter_mut().find(|t| t.task_id == task_id) {
-                        turn.finish_tool(ok);
-                    }
-                },
-            );
-        }
-        AgentEvent::Text(chunk) => {
-            let task_id = ctx.task_id;
-            shared.update_shared_changed::<App>(
-                ChangeSet::from_fields(&[App::FIELD_LIVE_TURNS]),
-                move |app| turn_mut(app, &task_id).push_text(&chunk),
-            );
-        }
-    }
-}
-
-/// The task's live turn, creating (and bounding) it on first use.
-fn turn_mut<'a>(app: &'a mut App, task_id: &str) -> &'a mut crate::state::LiveTurn {
-    if app.live_turns.iter().all(|turn| turn.task_id != task_id) {
-        app.live_turns.push(crate::state::LiveTurn {
-            task_id: task_id.to_owned(),
-            items: Vec::new(),
-        });
-        if app.live_turns.len() > LIVE_TURNS_CAP {
-            app.live_turns.remove(0);
-        }
-    }
-    app.live_turns
-        .iter_mut()
-        .find(|turn| turn.task_id == task_id)
-        .expect("turn ensured above")
-}
-
-/// Clear a task's live turn — its run is now recorded, so the persisted transcript (not the live
-/// typewriter) is the source of truth.
-pub(super) fn clear_live_turn(shared: &SharedServerState, task_id: &str) {
-    let task_id = task_id.to_owned();
-    shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_LIVE_TURNS]),
-        move |app| app.live_turns.retain(|turn| turn.task_id != task_id),
-    );
-}
-
-/// A short neutral phrase for a tool call (the UI adds the ▷/✓/✗ prefix from the flags).
-fn describe_tool(name: &str, arguments: &str) -> String {
-    let value: serde_json::Value =
-        serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null);
-    let path = value.get("path").and_then(serde_json::Value::as_str);
-    match name {
-        "write" => format!("write {}", path.unwrap_or("a file")),
-        "edit" => format!("edit {}", path.unwrap_or("a file")),
-        "read" => format!("read {}", path.unwrap_or("a file")),
-        "bash" => {
-            let cmd = value
-                .get("command")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let snippet: String = cmd.chars().take(48).collect();
-            format!("bash: {snippet}")
-        }
-        "verdict" => "review".to_owned(),
-        other => other.to_owned(),
-    }
-}
-
 /// `2026-06-22T08:00:…Z` → `08:00` — the transcript-grain stamp every projection shows.
 pub(super) fn hh_mm(stamp: &str) -> String {
     stamp.get(11..16).unwrap_or_default().to_owned()
-}
-
-/// `HH:MM:SS` (UTC) — seconds matter for the live feed (events land seconds apart).
-fn now_hms() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!(
-        "{:02}:{:02}:{:02}",
-        (secs / 3600) % 24,
-        (secs / 60) % 60,
-        secs % 60
-    )
-}
-
-fn title_of(chats: &[ChatSummary], chat_id: &str) -> String {
-    chats
-        .iter()
-        .find(|chat| chat.id == chat_id)
-        .map_or_else(|| "chat".to_owned(), |chat| chat.title.clone())
-}
-
-fn chat_title(conn: &rusqlite::Connection, chat_id: &str) -> String {
-    title_of(&chat::list_chats(conn).unwrap_or_default(), chat_id)
 }
 
 /// `HH:MM` (UTC), matching the transcript timestamps.
@@ -1752,45 +1045,4 @@ fn now_hm() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60)
-}
-
-/// The stand-in agent: echoes the message back as markdown so the renderer's
-/// formatting (bold, blockquote, emphasis) is exercised end to end.
-fn echo_reply(text: &str) -> String {
-    let trimmed = text.trim();
-    format!(
-        "**echo** — you said:\n\n> {}\n\n_{} characters_",
-        trimmed,
-        trimmed.chars().count()
-    )
-}
-
-fn first_line_title(text: &str) -> String {
-    let line = text.trim().lines().next().unwrap_or_default().trim();
-    let truncated: String = line.chars().take(40).collect();
-    if truncated.is_empty() {
-        "New chat".to_owned()
-    } else {
-        truncated
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn echo_reply_quotes_and_counts() {
-        let reply = echo_reply("  hi  ");
-        assert!(reply.contains("> hi"));
-        assert!(reply.contains("2 characters"));
-    }
-
-    #[test]
-    fn first_line_title_truncates_and_defaults() {
-        assert_eq!(first_line_title("hello world"), "hello world");
-        assert_eq!(first_line_title("  \n  "), "New chat");
-        let long = "x".repeat(80);
-        assert_eq!(first_line_title(&long).chars().count(), 40);
-    }
 }
