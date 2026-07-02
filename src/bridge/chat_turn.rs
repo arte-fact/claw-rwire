@@ -407,12 +407,11 @@ fn echo_reply(text: &str) -> String {
 }
 
 fn first_line_title(text: &str) -> String {
-    let line = text.trim().lines().next().unwrap_or_default().trim();
-    let truncated: String = line.chars().take(40).collect();
-    if truncated.is_empty() {
+    let title = crate::text::first_line_capped(text, 40);
+    if title.is_empty() {
         "New chat".to_owned()
     } else {
-        truncated
+        title
     }
 }
 

@@ -56,7 +56,7 @@ fn line(entry: &LogLine) -> ElementBuilder {
             el(El::Span).st([St::TextLow]).text(&entry.time),
             el(El::Span)
                 .st([St::TextMuted])
-                .style(Style::new().set("white-space", "pre-wrap"))
+                .st([St::WhitespacePreWrap])
                 .text(&entry.message),
         ])
 }

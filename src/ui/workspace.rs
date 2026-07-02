@@ -122,7 +122,7 @@ fn member_avatars(workspace: &WorkspaceView) -> ElementBuilder {
 
 fn tab_row(wid: &str, active: WsTab) -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().set("flex-wrap", "wrap"))
+        .st([St::FlexWrap])
         .st([St::DisplayFlex, St::GapSm, St::BorderBDefault, St::PbSm])
         .append(TABS.map(|tab| tab_link(tab, &tab.path(wid), tab == active)))
 }
@@ -228,7 +228,7 @@ fn auto_approve_toggle(workspace: &WorkspaceView) -> ElementBuilder {
                 .data("workspace", &workspace.id)
                 .data("on", if on { "1" } else { "0" })
                 .on(Ev::Click, toggle_auto_approve())
-                .style(Style::new().set("font", "inherit"))
+                .st([St::FontInheritAll])
                 .st([
                     St::SelfStart,
                     St::TextXs,
@@ -375,7 +375,7 @@ fn members_field(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
         })
         .collect();
     el(El::Div)
-        .style(Style::new().set("flex-wrap", "wrap"))
+        .st([St::FlexWrap])
         .st([St::DisplayFlex, St::GapXs])
         .append(chips)
 }
@@ -396,7 +396,7 @@ fn member_chip(id: &str, name: &str, on: bool, is_owner: bool) -> ElementBuilder
         .data("agent", id)
         .data("on", if on { "1" } else { "0" })
         .on(Ev::Click, toggle_member())
-        .style(Style::new().set("font", "inherit"))
+        .st([St::FontInheritAll])
         .st([
             St::DisplayFlex,
             St::ItemsCenter,

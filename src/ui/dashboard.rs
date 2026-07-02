@@ -134,7 +134,7 @@ fn card(
         );
     }
     Link::route(&format!("/w/{}", workspace.id))
-        .style(Style::new().set("font", "inherit"))
+        .st([St::FontInheritAll])
         .st([
             St::DisplayFlex,
             St::FlexCol,

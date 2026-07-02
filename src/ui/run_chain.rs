@@ -279,7 +279,7 @@ fn argument_rows(tool: &ToolCardView) -> Vec<ElementBuilder> {
     {
         return vec![
             el(El::Div)
-                .style(Style::new().set("white-space", "pre-wrap"))
+                .st([St::WhitespacePreWrap])
                 .st([St::FontMono, St::TextXs, St::TextMuted, St::BreakWords])
                 .text(&format!("$ {command}")),
         ];
@@ -396,11 +396,7 @@ fn edit_diff_rows(tool: &ToolCardView) -> Option<Vec<ElementBuilder>> {
         };
         rows.push(
             el(El::Div)
-                .style(
-                    Style::new()
-                        .set("white-space", "pre-wrap")
-                        .set("word-break", "break-word"),
-                )
+                .st([St::WhitespacePreWrap, St::BreakWords])
                 .st([St::FontMono, St::TextXs, color])
                 .text(&format!("{prefix} {}", line.text)),
         );

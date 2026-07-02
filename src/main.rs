@@ -13,6 +13,7 @@ mod mcp;
 mod sandbox;
 mod schedule;
 mod state;
+mod text;
 mod tools;
 mod ui;
 mod workspace;

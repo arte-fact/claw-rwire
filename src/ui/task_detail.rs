@@ -405,12 +405,13 @@ fn streaming_text(text: &str, cursor: bool) -> ElementBuilder {
         text.to_owned()
     };
     el(El::Div)
-        .style(
-            Style::new()
-                .set("white-space", "pre-wrap")
-                .set("word-break", "break-word"),
-        )
-        .st([St::TextXs, St::TextHigh, St::PtXs])
+        .st([
+            St::WhitespacePreWrap,
+            St::BreakWords,
+            St::TextXs,
+            St::TextHigh,
+            St::PtXs,
+        ])
         .text(&body)
 }
 

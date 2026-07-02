@@ -4,7 +4,6 @@
 //! in-flight tasks**, so a running task never sees its pipeline change. Renders from
 //! `App.workflow_steps` / `workflow_locked` / `editing_step`.
 
-use rwire::style::Style;
 use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
 
 use crate::bridge::{self, Command};
@@ -297,7 +296,7 @@ fn edit_form(step: &StepView, members: &[(String, String)], wid: &str) -> Elemen
             ),
             el(El::Button)
                 .at(At::Type, Av::Submit)
-                .style(Style::new().set("font", "inherit"))
+                .st([St::FontInheritAll])
                 .st([
                     St::TextXs,
                     St::PxSm,

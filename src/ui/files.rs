@@ -494,12 +494,9 @@ fn editor(app: &App) -> ElementBuilder {
                     St::BorderNone,
                     St::WhitespacePre,
                 ])
-                // `word-wrap`/`field-sizing` have no tokens (auto-grow to content).
-                .style(
-                    Style::new()
-                        .set("word-wrap", "break-word")
-                        .set("field-sizing", "content"),
-                )
+                // `field-sizing` has no token yet (auto-grow to content).
+                .st([St::BreakWords])
+                .style(Style::new().set("field-sizing", "content"))
                 .text(&open.content),
             el(El::Div)
                 .st([

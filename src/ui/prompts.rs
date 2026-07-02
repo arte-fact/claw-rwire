@@ -202,13 +202,13 @@ fn text_block(content: &str) -> ElementBuilder {
             .text("— none —");
     }
     el(El::Div)
-        .style(
-            Style::new()
-                .set("white-space", "pre-wrap")
-                .set("word-break", "break-word")
-                .set("font", "inherit"),
-        )
-        .st([St::TextXs, St::TextHigh])
+        .st([
+            St::WhitespacePreWrap,
+            St::BreakWords,
+            St::FontInheritAll,
+            St::TextXs,
+            St::TextHigh,
+        ])
         .text(content)
 }
 

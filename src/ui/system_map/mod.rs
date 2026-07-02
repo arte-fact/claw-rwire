@@ -45,7 +45,7 @@ fn error_banner(app: &App) -> ElementBuilder {
 fn board() -> ElementBuilder {
     el(El::Div)
         .st([St::DisplayFlex, St::GapLg, St::ItemsStart])
-        .style(Style::new().set("flex-wrap", "wrap"))
+        .st([St::FlexWrap])
         .append([
             column("Channels", channels()),
             column("Agents", agents::column()),

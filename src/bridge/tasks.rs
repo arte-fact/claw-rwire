@@ -197,9 +197,7 @@ fn short_time(ts: &str) -> String {
 
 /// First line of a result, capped, for the card's last-run snippet.
 fn snippet(text: &str) -> String {
-    let line = text.trim().lines().next().unwrap_or("").trim();
-    let capped: String = line.chars().take(120).collect();
-    capped
+    crate::text::first_line_capped(text, 120)
 }
 
 /// Project a workspace's lane into `App.tasks` (unconditionally — the caller is acting on

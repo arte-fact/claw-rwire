@@ -84,11 +84,10 @@ pub fn starter_agent_md(agent_name: &str) -> String {
     )
 }
 
-/// Read `AGENT.md` from the workspace, trimmed. `None` if it's missing, unreadable, or
-/// only whitespace — the run then falls back to the base prompt alone.
-#[must_use]
-pub fn read_agent_md(workspace: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(workspace.join("AGENT.md")).ok()?;
+/// A workspace-root markdown file, trimmed — `None` if missing, unreadable, or blank, so
+/// callers fall back cleanly.
+fn read_trimmed(workspace: &Path, name: &str) -> Option<String> {
+    let content = std::fs::read_to_string(workspace.join(name)).ok()?;
     let trimmed = content.trim();
     if trimmed.is_empty() {
         None
@@ -97,18 +96,18 @@ pub fn read_agent_md(workspace: &Path) -> Option<String> {
     }
 }
 
-/// Read `STANDARDS.md` from the workspace, trimmed — the validator standards memo (R5):
-/// curated review rules, deliberately **not** a work log (validators stay memory-free).
-/// `None` if missing or blank.
+/// Read `AGENT.md` from the workspace — the shared project brief; absent, the run falls
+/// back to the base prompt alone.
+#[must_use]
+pub fn read_agent_md(workspace: &Path) -> Option<String> {
+    read_trimmed(workspace, "AGENT.md")
+}
+
+/// Read `STANDARDS.md` from the workspace — the validator standards memo (R5): curated
+/// review rules, deliberately **not** a work log (validators stay memory-free).
 #[must_use]
 pub fn read_standards(workspace: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(workspace.join("STANDARDS.md")).ok()?;
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
-    }
+    read_trimmed(workspace, "STANDARDS.md")
 }
 
 /// The standards memo framed as a validator system-prompt layer, or `None` when unset.

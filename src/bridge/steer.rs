@@ -83,8 +83,7 @@ pub fn send_message(
 
 /// The message's first line, trimmed to a card-title length.
 fn first_line_title(body: &str) -> String {
-    let line = body.lines().next().unwrap_or("").trim();
-    let title: String = line.chars().take(60).collect();
+    let title = crate::text::first_line_capped(body, 60);
     if title.is_empty() {
         "Operator message".to_owned()
     } else {

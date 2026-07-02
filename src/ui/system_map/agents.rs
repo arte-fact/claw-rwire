@@ -3,7 +3,6 @@
 //! `AgentDraft`) so it can re-render when discovered models arrive without resetting
 //! the operator's input. Picking an endpoint fetches its `/v1/models` into a dropdown.
 
-use rwire::style::Style;
 use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
 
 use super::{action, badge, card, drawer_form, labeled, row_head, submit, text_input};
@@ -99,7 +98,7 @@ fn tool_chips(app: &App, draft: &AgentDraft, group: &str) -> Vec<ElementBuilder>
 /// A wrapping flex row of tool chips.
 fn chip_wrap(chips: Vec<ElementBuilder>) -> ElementBuilder {
     el(El::Div)
-        .style(Style::new().set("flex-wrap", "wrap"))
+        .st([St::FlexWrap])
         .st([St::DisplayFlex, St::GapXs])
         .append(chips)
 }
@@ -115,7 +114,7 @@ fn tool_chip(name: &str, on: bool) -> ElementBuilder {
         .at(At::Type, Av::Button)
         .data("tool", name)
         .on(Ev::Click, tool_toggled())
-        .style(Style::new().set("font", "inherit"))
+        .st([St::FontInheritAll])
         .st([
             St::DisplayFlex,
             St::ItemsCenter,

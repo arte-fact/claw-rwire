@@ -222,7 +222,11 @@ pub fn planned(
 
 /// A short title for a plan task — `Plan: <first line of the request>`, capped.
 fn plan_title(request: &str) -> String {
-    let line = request.trim().lines().next().unwrap_or("request").trim();
-    let capped: String = line.chars().take(60).collect();
+    let capped = crate::text::first_line_capped(request, 60);
+    let capped = if capped.is_empty() {
+        "request".to_owned()
+    } else {
+        capped
+    };
     format!("Plan: {capped}")
 }

@@ -67,7 +67,7 @@ fn live_row(event: &LiveEvent) -> ElementBuilder {
         "/w/{}/tasks/{}",
         event.workspace_id, event.task_id
     ))
-    .style(Style::new().set("font", "inherit"))
+    .st([St::FontInheritAll])
     .st([
         St::DisplayFlex,
         St::ItemsCenter,
@@ -140,7 +140,7 @@ fn row(entry: &ActivityEntry) -> ElementBuilder {
     // Task lifecycle rows deep-link to the task detail; chat rows are plain.
     match (&entry.task_id, &entry.workspace_id) {
         (Some(task), Some(workspace)) => Link::route(&format!("/w/{workspace}/tasks/{task}"))
-            .style(Style::new().set("font", "inherit"))
+            .st([St::FontInheritAll])
             .st(row_st)
             .st([St::NoUnderline])
             .hover([St::BgSurface])
