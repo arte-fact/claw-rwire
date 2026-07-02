@@ -1015,12 +1015,6 @@ fn dispatch_native(
         memory.text().as_deref(),
     )
     .map(|summary| wrap_memory(&summary));
-    // The live status digest (R5): present state is looked up fresh each turn, never
-    // remembered — appended after memory so the concierge narrates what's ACTUALLY in flight.
-    let memory_text = match (memory_text, tasks::status_digest(conn)) {
-        (Some(memory), Some(digest)) => Some(format!("{memory}\n\n{digest}")),
-        (memory, digest) => memory.or(digest),
-    };
     let system_prompt = run_system_prompt(
         &role,
         workspace_dir.as_deref(),
@@ -1028,6 +1022,18 @@ fn dispatch_native(
         inference.agent_prompt.clone(),
         memory_text,
     );
+    // The live status digest (R5): present state is looked up fresh each turn, never
+    // remembered. Appended as the **newest turn** — buried in the system prompt the model
+    // narrated from stale conversation history anyway (live-tested); the tail position is the
+    // one it cannot skip.
+    let mut model_turns = model_turns;
+    if let Some(digest) = tasks::status_digest(conn) {
+        model_turns.push(crate::state::ChatMessage {
+            role: MessageRole::User,
+            text: digest,
+            time: String::new(),
+        });
+    }
     let messages = agent::build_messages(&system_prompt, &model_turns);
     let chats = chat::list_chats(conn).unwrap_or_default();
     let proj_chat = chat_id.to_owned();

@@ -553,8 +553,8 @@ pub(super) fn status_digest(conn: &rusqlite::Connection) -> Option<String> {
         return None;
     }
     Some(format!(
-        "## Right now\n\nLive board state, looked up fresh for this turn — trust it over \
-         anything remembered:\n{}",
+        "[Live board state, looked up at this very moment — this overrides anything the \
+         conversation history says about what is running or done:]\n{}",
         lines.join("\n")
     ))
 }
@@ -725,7 +725,7 @@ mod tests {
         tasks::set_status(&conn, "sd2", TaskStatus::Awaiting).expect("awaiting");
 
         let digest = status_digest(&conn).expect("digest");
-        assert!(digest.starts_with("## Right now"));
+        assert!(digest.starts_with("[Live board state"));
         assert!(digest.contains("Studio2 — running: \"Build the widget\" (Forge)"));
         assert!(digest.contains("awaiting the user's review: \"Ship it\""));
         assert!(!digest.contains("Research2"), "quiet lanes stay out");
