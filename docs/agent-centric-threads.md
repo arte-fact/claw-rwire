@@ -318,20 +318,38 @@ Fix the freeze and the feel in one stroke. Pure projection over existing data �
 - [x] Review gate stays inline at the tail; the Peek's tool-toggle key collision is gone (the
       thread renders no tool rows at all)
 - [x] `fmt`/`clippy`/`test` green (224 tests, +3) — live smoke pass pending (operator)
+- [x] **Post-R2 stabilization** (browser-verified): agent routes are workspace-scoped —
+      `/w/:wid/agent/:aid` — so the thread URL mirrors the (agent, workspace) scope key and a
+      shared agent (Critic) is a distinct thread per workspace; reading measure moved to `St`
+      tokens (inline styles proved fragile across route swaps); rwire hardened (region
+      null-guards, `data-route` full-nav fallback on a dead socket, synced-hash clear on swap)
 
-### R3 — Memory mechanics (the substance)
+### R3 — Memory mechanics (the substance) — ✅ shipped
 The budget model from the keystone section, landing into pages that already have the right shape.
-- [ ] `agent_memory` re-key: PK (agent_group_id, workspace_id); NULL workspace = the concierge's
-      global row (schema migration)
-- [ ] Producer fold **at task completion** — today only the chat path summarizes; worker memory
-      is permanently empty
-- [ ] Injection matrix: chat / task / planning runs get their *scoped* memory; **validators none**
-- [ ] Last-task recap block prepended at producer launch (spec → outcome → verdict → files)
-- [ ] Budget composition **F→U→W→M** with per-role parameters (headroom, M ceiling, fold
-      triggers) + the degradation ladder (incl. the mid-unit fold for long loops on small models)
-- [ ] Producer page gains the **fold line** ("older tasks condensed into memory") + the memory
-      affordance (inspect / edit — extend the existing Prompts memory panel onto the agent page)
-- [ ] `fmt`/`clippy`/`test` green
+- [x] `agent_memory` re-key: PK (agent_group_id, workspace_id); the concierge's global row is
+      `workspace_id = ''` (empty string, not NULL — a NULL in a composite PK never conflicts, so
+      upserts would duplicate). In-place rebuild migration; legacy rows become the global row.
+- [x] Producer fold **at task completion** (`scheduler::terminal_finish` →
+      `memory::fold_finished_task`): the task recap is merged into each producing agent's
+      (agent, workspace) row by a worker-thread summarizer sized to that agent's own M ceiling.
+      Failures fold too — what broke is what the next task must remember.
+- [x] Injection matrix: chat reads the global row, task/planning read their workspace's row
+      (the Prompts panel mirrors the matrix and edits the row the run kind actually reads);
+      **validator runs compose no memory layer** — loop continuity is the replayed thread alone
+- [x] Last-task recap kept warm at producer launch (spec → outcome → verdict → files touched),
+      matched by the run chain (`tasks::last_finished_for_agent`) so owner-defaulted work counts
+- [x] Budget composition **F→U→W→M** (`bridge/memory.rs`): B = C − R from the cached `/models`
+      context; shares (W/M): concierge+planner 30/40, producer 50/20, validator 60/0; memory
+      fills last, by value — recap whole → recap headline → summary hard-truncated with a
+      marker; **mid-unit fold** compacts a loop's oldest passes to one-line notes once the
+      attempt outgrows ½·B, latest pass always verbatim
+- [x] The producer page's truncation note is now the **fold line** ("older work condensed into
+      memory — n earlier turns past the fold") with the memory card below it — the (agent,
+      workspace) summary, editable in place (Save / Clear / Pause on that scope row); memory
+      mutations re-project the open thread, so a background fold shows up live
+- [x] `fmt`/`clippy`/`test` green (236 tests, +12); browser-verified: fold line + memory card
+      on Forge · Studio, Pause/Resume round-trip scoped to the one row, legacy DB migrated in
+      place on open
 
 ### R4 — Steer: leave a message (v1: queue at turn boundary)
 The moment it becomes agent-*centric*; unchanged from the old Phase 4.
