@@ -35,9 +35,10 @@ use crate::bridge::{self, Command};
 use crate::state::{App, Tab};
 use workspace::WsTab;
 
-/// The app's routes: each path renders its view into the shell's [`outlet`]. `/` and
-/// `/chat/:id` are the global concierge chat; `/w/:wid…` are the per-workspace views
-/// (the `:wid` + active section are opened by [`on_route`]).
+/// The app's routes: each path renders its view into the shell's [`outlet`]. `/` is the
+/// concierge's one persistent conversation (`/chat/:id` is kept only so stale bookmarks
+/// resolve to it); `/w/:wid…` are the per-workspace views (the `:wid` + active section are
+/// opened by [`on_route`]).
 pub fn routes() -> Router {
     Router::new()
         .page("/", |_| view(chat::surface()))
@@ -166,18 +167,18 @@ fn nav_drawer(app: &App) -> ElementBuilder {
             slide,
         ])
         .md([St::PositionStatic, St::TransformNone])
-        // Conversation-first: brand, the primary New-chat action, the thread list, then
-        // Archived at the tail of the conversation group; the secondary surfaces
-        // (System/Activity/Logs) and Log out sit below it.
-        .append([
-            drawer_head(),
-            section_label("Chat"),
-            new_chat_bar(),
-            drawer_threads(),
-            agents_nav(),
-            nav_footer(),
-            drawer_foot(),
-        ])
+        // Agent-first (R1): brand, then the agent list (Concierge pinned on top — its one
+        // persistent conversation replaces the chat-thread list and "New chat"), then the
+        // secondary surfaces (Dashboard/Activity/Logs/…) and Log out below it.
+        .append([drawer_head(), drawer_agents(), nav_footer(), drawer_foot()])
+}
+
+/// The scrollable agent list fills the drawer below the head — a plain flex child (so it
+/// actually grows) wrapping the `agents_nav` renderer.
+fn drawer_agents() -> ElementBuilder {
+    el(El::Div)
+        .st([St::MinH0, St::OverflowAuto, St::Flex1])
+        .append([agents_nav()])
 }
 
 /// A small uppercase group label in the sidebar tree (Chat / Workspaces).
@@ -205,7 +206,10 @@ fn agents_nav(app: &App) -> ElementBuilder {
     let nav = &app.agent_nav;
     let mut rows: Vec<ElementBuilder> = vec![section_label("Concierge")];
     if let Some(concierge) = &nav.concierge {
-        rows.push(agent_row(concierge, open == Some(concierge.id.as_str())));
+        // The concierge row opens its one persistent conversation at `/` (not an /agent
+        // task log). Highlighted whenever no other agent's page is open — the sticky
+        // selection the old thread list used.
+        rows.push(concierge_row(concierge, open.is_none()));
     }
     for group in &nav.groups {
         rows.push(group_header(
@@ -254,6 +258,32 @@ fn group_header(id: &str, name: &str, active: bool, awaiting: usize) -> ElementB
         .append([
             el(El::Span).st([St::Flex1]).text(name),
             awaiting_badge(awaiting),
+        ])
+}
+
+/// The pinned concierge row: same anatomy as an agent row, but it routes to `/` — the one
+/// persistent conversation — and leads with the chat glyph rather than a task-status dot.
+fn concierge_row(row: &crate::state::AgentNavRow, active: bool) -> ElementBuilder {
+    let color = if active { St::TextHigh } else { St::TextMuted };
+    Link::route("/")
+        .on(Ev::Click, close_nav())
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::PyXs,
+            St::PxMd,
+            St::CursorPointer,
+            St::TextSm,
+            St::NoUnderline,
+            color,
+        ])
+        .hover([St::TextHigh])
+        .append([
+            chat::accent_bar(active),
+            chat::icon_slot(icons::icon_sized(icons::Icon::MessageSquare, 16)),
+            el(El::Span).st([St::Flex1]).text(&row.name),
+            awaiting_badge(row.awaiting),
         ])
 }
 
@@ -315,13 +345,6 @@ fn new_workspace_link() -> ElementBuilder {
             chat::icon_slot(icons::icon_sized(icons::Icon::Plus, 16)),
             el(El::Span).text("New workspace"),
         ])
-}
-
-/// The primary action, sitting directly above the conversation list it creates into.
-fn new_chat_bar() -> ElementBuilder {
-    el(El::Div)
-        .st([St::PxMd, St::PbSm])
-        .append([chat::new_chat_button()])
 }
 
 /// Dims the page behind the mobile drawer; tap to close. Never shown on `md+`.
@@ -389,14 +412,6 @@ fn brand_row() -> ElementBuilder {
                 ]),
             status(),
         ])
-}
-
-/// The scrollable conversation list fills the drawer below the head. It's a plain
-/// flex child (so it actually grows) wrapping the `thread_list` renderer.
-fn drawer_threads() -> ElementBuilder {
-    el(El::Div)
-        .st([St::MinH0, St::OverflowAuto, St::Flex1, St::PySm])
-        .append([chat::thread_list()])
 }
 
 /// The drawer footer: a logout affordance pinned to the bottom.
@@ -669,18 +684,16 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     {
         bridge::send(Command::LoadWorkflow { workspace: wid });
     }
-    if let Some(id) = RoutePattern::new("/chat/:id")
+    // `/chat/:id` needs no side-effect: there is one persistent concierge conversation, always
+    // loaded — the route just shows it (stale bookmarks resolve to the one thread).
+    // Opening an agent's thread projects its merged tasks/runs/live timeline; leaving the agent
+    // pages clears the open agent so the nav highlight follows the route.
+    match RoutePattern::new("/agent/:id")
         .matches(path)
         .and_then(|params| params.get("id").map(str::to_owned))
     {
-        bridge::send(Command::OpenChat(id));
-    }
-    // Opening an agent's thread projects its merged tasks/runs/live timeline.
-    if let Some(id) = RoutePattern::new("/agent/:id")
-        .matches(path)
-        .and_then(|params| params.get("id").map(str::to_owned))
-    {
-        bridge::send(Command::OpenAgentThread { agent: id });
+        Some(id) => bridge::send(Command::OpenAgentThread { agent: id }),
+        None => bridge::send(Command::CloseAgentThread),
     }
 }
 

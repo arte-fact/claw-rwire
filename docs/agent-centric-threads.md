@@ -287,15 +287,18 @@ marker). Steering stays last: it lands into a page that already has the right gr
 Each phase is independently shippable and passes the full gate before the next. Tick items as they
 land; keep this list the source of truth for progress.
 
-### R1 — The concierge thread is the chat
+### R1 — The concierge thread is the chat ✅
 Pull the old Phase 5 to the front: one persistent conversation, no "new chat".
-- [ ] The concierge nav row opens the persistent conversation — not `/agent/:id`'s task log
-- [ ] Collapse to **one** concierge thread: `/` renders it; retire "New chat" + the thread list
-      (existing extra chats stay reachable under Archived)
-- [ ] `/chat/:id` resolves to the one thread (redirect to `/`)
-- [ ] Memory coherence falls out: one thread ↔ one `summarized_through` marker (fixes the latent
+- [x] The concierge nav row opens the persistent conversation at `/` (chat glyph, sticky
+      highlight whenever no other agent's page is open)
+- [x] Collapse to **one** concierge thread: `chat::collapse_to_primary` at boot keeps the most
+      recently *active* chat and archives the rest (reachable under Archived — listed + delete;
+      Restore retired, since there is no active list to restore into)
+- [x] `/chat/:id` resolves to the one thread (the route shows it; no per-id side-effect); retired
+      `NewChat`/`OpenChat`/`ArchiveChat`/`UnarchiveChat` commands + the thread-list/new-chat UI
+- [x] Memory coherence falls out: one thread ↔ one `summarized_through` marker (fixes the latent
       multi-chat marker bug)
-- [ ] `fmt`/`clippy`/`test` green
+- [x] `fmt`/`clippy`/`test` green (221 tests)
 
 ### R2 — Worker thread page, redone conversational
 Fix the freeze and the feel in one stroke. Pure projection over existing data — no new storage.

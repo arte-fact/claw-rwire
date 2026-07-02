@@ -2,7 +2,7 @@
 //! rows with `channel_type='web'`; turns are `web_messages` rows (`direction`
 //! `in` = operator, `out` = agent). Timestamps are stamped by SQLite.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::state::{ChatMessage, ChatSummary, MessageRole, ToolCardView, TranscriptItem};
 
@@ -63,26 +63,33 @@ pub fn list_archived_chats(conn: &Connection) -> rusqlite::Result<Vec<ChatSummar
     rows.collect()
 }
 
-/// Hide a thread from the active list by stamping `archived_at`. Idempotent: a
-/// re-archive just refreshes the timestamp.
-pub fn archive_chat(conn: &Connection, id: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE messaging_groups
-            SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-          WHERE id = ?1 AND channel_type = ?2",
-        rusqlite::params![id, WEB],
-    )?;
-    Ok(())
-}
-
-/// Restore an archived thread to the active list by clearing `archived_at`.
-pub fn unarchive_chat(conn: &Connection, id: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE messaging_groups SET archived_at = NULL
-          WHERE id = ?1 AND channel_type = ?2",
-        rusqlite::params![id, WEB],
-    )?;
-    Ok(())
+/// Collapse to **one** persistent concierge conversation (roadmap R1): keep the single most
+/// recently *active* web chat — the one with the newest message, falling back to the newest
+/// created among empty ones — and archive every other active chat. Returns the survivor's id.
+/// Idempotent (one active chat → no-op). This is also what makes the concierge's rolling-memory
+/// marker coherent: one thread ↔ one `summarized_through`.
+pub fn collapse_to_primary(conn: &Connection) -> rusqlite::Result<Option<String>> {
+    let primary: Option<String> = conn
+        .query_row(
+            "SELECT g.id FROM messaging_groups g
+              WHERE g.channel_type = ?1 AND g.archived_at IS NULL
+              ORDER BY (SELECT COALESCE(MAX(m.id), 0) FROM web_messages m
+                         WHERE m.messaging_group_id = g.id) DESC,
+                       g.created_at DESC, g.id DESC
+              LIMIT 1",
+            [WEB],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(id) = &primary {
+        conn.execute(
+            "UPDATE messaging_groups
+                SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              WHERE channel_type = ?1 AND archived_at IS NULL AND id != ?2",
+            rusqlite::params![WEB, id],
+        )?;
+    }
+    Ok(primary)
 }
 
 /// Permanently delete a thread and everything that hangs off it: its transcript
@@ -337,29 +344,40 @@ mod tests {
     }
 
     #[test]
-    fn archive_hides_from_active_and_lists_under_archived_then_restores() {
+    fn collapse_to_primary_keeps_the_most_recently_active_chat() {
         let conn = db::open_in_memory().expect("open");
-        create_chat(&conn, "c1", "Keep").expect("create");
-        create_chat(&conn, "c2", "Stash").expect("create");
+        // c1 is older but holds the live conversation; c2 is newer but empty.
+        create_chat(&conn, "c1", "The conversation").expect("c1");
+        create_chat(&conn, "c2", "New chat").expect("c2");
+        append_message(&conn, "c1", MessageRole::User, "hello").expect("append");
 
-        archive_chat(&conn, "c2").expect("archive");
-
+        let primary = collapse_to_primary(&conn).expect("collapse");
+        assert_eq!(primary.as_deref(), Some("c1"), "activity beats recency");
         let active: Vec<String> = list_chats(&conn)
             .expect("list")
             .into_iter()
             .map(|c| c.id)
             .collect();
         assert_eq!(active, vec!["c1".to_owned()]);
-        let archived: Vec<String> = list_archived_chats(&conn)
-            .expect("archived")
-            .into_iter()
-            .map(|c| c.id)
-            .collect();
-        assert_eq!(archived, vec!["c2".to_owned()]);
+        assert_eq!(
+            list_archived_chats(&conn).expect("archived")[0].id,
+            "c2",
+            "the losers stay reachable under Archived"
+        );
 
-        unarchive_chat(&conn, "c2").expect("restore");
-        assert!(list_archived_chats(&conn).expect("archived").is_empty());
-        assert_eq!(list_chats(&conn).expect("list").len(), 2);
+        // Idempotent: a second collapse changes nothing.
+        assert_eq!(
+            collapse_to_primary(&conn).expect("again").as_deref(),
+            Some("c1")
+        );
+        assert_eq!(list_chats(&conn).expect("list").len(), 1);
+        assert_eq!(list_archived_chats(&conn).expect("archived").len(), 1);
+    }
+
+    #[test]
+    fn collapse_to_primary_on_no_chats_is_none() {
+        let conn = db::open_in_memory().expect("open");
+        assert_eq!(collapse_to_primary(&conn).expect("collapse"), None);
     }
 
     #[test]

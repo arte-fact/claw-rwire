@@ -1,12 +1,11 @@
-//! The chat surface. `surface()` is the main-area view (a scrolling transcript over
-//! a pinned composer); `thread_list()` and `new_chat_button()` live in the left
-//! drawer. Layout fills its panel via plain-div flex items — renderer outputs are
-//! wrapped in inline `__synced_` spans, so they only ever sit *inside* a plain
+//! The concierge's one persistent conversation (roadmap R1). `surface()` is the main-area
+//! view (a scrolling transcript over a pinned composer) rendered at `/` — there is no "new
+//! chat"; the thread never resets. Layout fills its panel via plain-div flex items — renderer
+//! outputs are wrapped in inline `__synced_` spans, so they only ever sit *inside* a plain
 //! flex/scroll container, never act as one.
 
-use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{At, Av, El, ElementBuilder, Ev, HandlerSpec, Pc, St, el, handler, icons, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, Pc, St, el, handler, icons, renderer};
 use rwire_components::{Spinner, SpinnerSize, Text};
 
 use super::thread;
@@ -80,7 +79,7 @@ fn error_banner(app: &App) -> ElementBuilder {
 #[renderer]
 fn transcript(app: &App) -> ElementBuilder {
     let items: Vec<ElementBuilder> = if app.open_chat.is_none() {
-        vec![hint("Pick a conversation or start a new one.")]
+        vec![hint("Starting up…")]
     } else {
         let mut messages: Vec<ElementBuilder> = app
             .messages
@@ -324,148 +323,7 @@ fn send_button() -> ElementBuilder {
         ])
 }
 
-// ── Drawer ───────────────────────────────────────────────────────────────────
-
-pub fn new_chat_button() -> ElementBuilder {
-    // The primary action, styled as an aligned accent row (not a boxed pill) so its
-    // label sits in the same column as the conversation rows it creates into.
-    el(El::Button)
-        .at(At::Type, Av::Button)
-        .data("act", "new-chat")
-        .on(Ev::Click, new_chat())
-        .st([
-            St::FontInheritAll,
-            St::BorderNone,
-            St::BgTransparent,
-            St::WFull,
-            St::TextLeft,
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::PyXs,
-            St::CursorPointer,
-            St::TextSm,
-            St::TextAccent,
-        ])
-        .hover([St::TextHigh])
-        .append([
-            accent_bar(false),
-            icon_slot(icons::icon_sized(icons::Icon::Plus, 16)),
-            el(El::Span).text("New chat"),
-        ])
-}
-
-#[renderer]
-pub fn thread_list(app: &App) -> ElementBuilder {
-    if app.chats.is_empty() {
-        return el(El::Div)
-            .st([St::PMd])
-            .append([Text::body("No chats yet").muted().build()]);
-    }
-    let open = app.open_chat.as_deref();
-    let rows = app.chats.iter().map(|chat| {
-        let busy = app.running.iter().any(|id| id == &chat.id);
-        chat_row(&chat.id, &chat.title, open == Some(&chat.id), busy)
-    });
-    el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::PxMd])
-        .append(rows)
-}
-
-fn chat_row(id: &str, title: &str, active: bool, busy: bool) -> ElementBuilder {
-    let dot = el(El::Span).st([
-        St::WSp2,
-        St::HSp2,
-        St::RoundedFull,
-        if busy { St::BgAccent } else { St::BgMuted },
-    ]);
-    let label = Text::body(title.to_owned())
-        .build()
-        .st([St::Flex1, St::Truncate]);
-    // `Link::route` (client-routed `<a>`): selecting a conversation is navigation —
-    // the client router pushes /chat/:id and the bridge loads the thread.
-    let href = format!("/chat/{id}");
-    let link = Link::route(&href)
-        .st([
-            St::MinW0,
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::Flex1,
-            St::PyXs,
-            St::CursorPointer,
-            St::TextSm,
-            St::NoUnderline,
-            if active { St::TextHigh } else { St::TextMuted },
-        ])
-        .hover([St::TextHigh])
-        .append([accent_bar(active), icon_slot(dot), label]);
-    // The archive control is a *sibling* of the link, not nested inside the anchor:
-    // clicking it archives the thread without also triggering navigation.
-    el(El::Div).st([St::DisplayFlex, St::ItemsCenter]).append([
-        link,
-        row_icon_button(icons::Icon::Archive, "Archive", archive(), id),
-    ])
-}
-
-/// A subtle, inline icon-button for a chat row (archive in the active list, restore in
-/// the archived list). Always visible but low-contrast until hovered — rwire has no
-/// group-hover, so reveal-on-row-hover isn't available. The target chat id rides on a
-/// `data-chat` attribute the handler reads back.
-pub(super) fn row_icon_button(
-    icon: icons::Icon,
-    aria: &str,
-    on_click: HandlerSpec,
-    chat_id: &str,
-) -> ElementBuilder {
-    el(El::Button)
-        .at(At::Type, Av::Button)
-        .at_str(At::AriaLabel, aria)
-        .data("chat", chat_id)
-        .on(Ev::Click, on_click)
-        .st([
-            St::FontInheritAll,
-            St::BorderNone,
-            St::BgTransparent,
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::PxXs,
-            St::PyXs,
-            St::Rounded0,
-            St::TextLow,
-            St::CursorPointer,
-            St::FlexShrink0,
-        ])
-        .hover([St::TextHigh])
-        .append([icons::icon_sized(icon, 14)])
-}
-
 // ── Handlers ──────────────────────────────────────────────────────────────────
-
-#[handler]
-fn new_chat(app: &mut App, ctx: &EventContext) {
-    // Mint the id here so we can navigate to /chat/{id} right away — the bridge
-    // persists it asynchronously. Optimistically show the empty conversation; the
-    // route push (flushed after this update) puts the URL in sync.
-    let Ok(id) = crate::id::new_id() else {
-        return;
-    };
-    app.open_chat = Some(id.clone());
-    app.messages.clear();
-    app.sending = false;
-    ctx.navigate(format!("/chat/{id}"));
-    bridge::send(Command::NewChat { id });
-}
-
-/// Archive the chat named by the clicked row's `data-chat`. No `App` mutation here —
-/// the bridge re-projects the active + archived lists after the DB write.
-#[handler]
-fn archive(app: &mut App, ctx: &EventContext) {
-    let _ = app;
-    if let Some(id) = ctx.data("chat") {
-        bridge::send(Command::ArchiveChat(id.to_owned()));
-    }
-}
 
 #[handler]
 fn send_message(app: &mut App, ctx: &EventContext) {

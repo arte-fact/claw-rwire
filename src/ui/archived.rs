@@ -1,7 +1,9 @@
 //! The Archived conversations screen: a dedicated page (reached from the nav footer)
-//! listing archived threads with Restore / Delete. Delete is irreversible, so it's
-//! gated behind an inline confirm via `App.pending_delete`. The list is `App.archived`,
-//! filled by `Command::ListArchived` when the `/archived` route opens (see `on_route`).
+//! listing archived threads with Delete. With the one persistent concierge conversation
+//! (R1) there is no active list to restore into, so archived threads are historical
+//! records — kept until deleted. Delete is irreversible, so it's gated behind an inline
+//! confirm via `App.pending_delete`. The list is `App.archived`, filled by
+//! `Command::ListArchived` when the `/archived` route opens (see `on_route`).
 
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, HandlerSpec, St, el, handler, icons, renderer};
@@ -19,7 +21,7 @@ pub fn page() -> ElementBuilder {
         .append([
             page_header(
                 "Archived",
-                "Restore a conversation to your list, or delete it permanently.",
+                "Past conversations, kept for the record — delete permanently what you no longer need.",
                 el(El::Div).style(Style::new().display("none")),
             ),
             list(),
@@ -72,13 +74,6 @@ fn row(chat: &ChatSummary, pending_delete: bool) -> ElementBuilder {
         ));
     } else {
         children.push(button(
-            icons::Icon::ArchiveRestore,
-            "Restore",
-            restore(),
-            Some(&chat.id),
-            false,
-        ));
-        children.push(button(
             icons::Icon::Trash,
             "Delete",
             ask_delete(),
@@ -114,16 +109,6 @@ fn button(
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
-
-/// Restore the archived chat named by the clicked row's `data-chat`. The bridge
-/// re-projects both lists; no `App` mutation here.
-#[handler]
-fn restore(app: &mut App, ctx: &EventContext) {
-    let _ = app;
-    if let Some(id) = ctx.data("chat") {
-        bridge::send(Command::UnarchiveChat(id.to_owned()));
-    }
-}
 
 /// Arm the delete confirm for the clicked row (no DB write yet).
 #[handler]

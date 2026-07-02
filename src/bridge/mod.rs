@@ -42,17 +42,7 @@ use crate::tools::{
 use crate::workspace;
 
 pub enum Command {
-    /// Create a conversation with a caller-minted id, so the handler can navigate
-    /// to `/chat/{id}` immediately (before this async create completes).
-    NewChat {
-        id: String,
-    },
-    OpenChat(String),
-    /// Hide a thread from the active list (sets `archived_at`); re-projects both lists.
-    ArchiveChat(String),
-    /// Restore an archived thread to the active list (clears `archived_at`).
-    UnarchiveChat(String),
-    /// Permanently delete a thread and its transcript (gated behind a UI confirm).
+    /// Permanently delete an archived thread and its transcript (gated behind a UI confirm).
     DeleteChat(String),
     /// Fill `App.archived` when the sidebar's "Archived" section is first expanded.
     ListArchived,
@@ -166,6 +156,8 @@ pub enum Command {
     OpenAgentThread {
         agent: String,
     },
+    /// Leaving the agent pages — clear the open agent so the nav highlight follows the route.
+    CloseAgentThread,
     /// Project the active workspace's pipeline steps + edit lock — the Workflow tab opening.
     LoadWorkflow {
         workspace: String,
@@ -536,6 +528,11 @@ fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
     link_chats_to_default_agent(conn);
     // After the web chat is linked, so `web_agent` resolves the concierge to seed.
     seed_owner_persona(conn);
+    // One persistent concierge conversation (R1): keep the most recently active chat, archive
+    // the rest. Also what makes the rolling-memory marker coherent (one thread, one marker).
+    if let Err(err) = chat::collapse_to_primary(conn) {
+        log_line(format!("bridge: collapse chats failed: {err}"));
+    }
     admin::project_registry(conn, shared);
     let chats = chat::list_chats(conn).unwrap_or_default();
     let selected = chats.first().map(|chat| chat.id.clone());
@@ -654,10 +651,6 @@ fn link_chats_to_default_agent(conn: &rusqlite::Connection) {
 
 fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Command) {
     match command {
-        Command::NewChat { id } => new_chat(conn, shared, &id),
-        Command::OpenChat(id) => open_chat(conn, shared, &id),
-        Command::ArchiveChat(id) => archive_chat(conn, shared, &id),
-        Command::UnarchiveChat(id) => unarchive_chat(conn, shared, &id),
         Command::DeleteChat(id) => delete_chat(conn, shared, &id),
         Command::ListArchived => list_archived(conn, shared),
         Command::Submit { chat, text } => submit(conn, shared, &chat, &text),
@@ -699,6 +692,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadDashboard => tasks::project_dashboard(conn, shared),
         Command::LoadTaskDetail { task_id } => tasks::load_detail(conn, shared, &task_id),
         Command::OpenAgentThread { agent } => agent_thread::load(conn, shared, &agent),
+        Command::CloseAgentThread => agent_thread::close(shared),
         Command::LoadWorkflow { workspace } => workflow::load(conn, shared, &workspace),
         Command::AddStep { workspace, kind } => workflow::add(conn, shared, &workspace, &kind),
         Command::UpdateStep {
@@ -864,101 +858,6 @@ fn set_active_workspace(shared: &SharedServerState, id: Option<String>) {
         move |app| {
             app.active_workspace = id;
             app.workspace_delete_armed = false; // a fresh view never opens mid-confirm
-        },
-    );
-}
-
-fn new_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
-    if let Err(err) = chat::create_chat(conn, id, "New chat") {
-        log_line(format!("bridge: create chat failed: {err}"));
-        return;
-    }
-    if let Ok(Some(agent)) = agents::first(conn) {
-        let _ = agents::link(conn, id, &agent.id);
-    }
-    let chats = chat::list_chats(conn).unwrap_or_default();
-    let id = id.to_owned();
-    shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[
-            App::FIELD_CHATS,
-            App::FIELD_OPEN_CHAT,
-            App::FIELD_MESSAGES,
-            App::FIELD_SENDING,
-        ]),
-        |app| {
-            app.chats = chats;
-            app.open_chat = Some(id);
-            app.messages = Vec::new();
-            app.sending = false;
-        },
-    );
-}
-
-fn open_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
-    let messages = chat::load_thread(conn, id).unwrap_or_default();
-    let id = id.to_owned();
-    shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[
-            App::FIELD_OPEN_CHAT,
-            App::FIELD_MESSAGES,
-            App::FIELD_SENDING,
-        ]),
-        |app| {
-            app.open_chat = Some(id);
-            app.messages = messages;
-            app.sending = false;
-        },
-    );
-}
-
-/// Archive a thread, then re-project the active + archived lists. If the archived
-/// thread was the open one, fall back to the newest remaining active chat (or an
-/// empty surface) so the selection never points at a row that's gone from the list.
-fn archive_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
-    if let Err(err) = chat::archive_chat(conn, id) {
-        log_line(format!("bridge: archive chat failed: {err}"));
-        return;
-    }
-    let chats = chat::list_chats(conn).unwrap_or_default();
-    let archived = chat::list_archived_chats(conn).unwrap_or_default();
-    let fallback = chats.first().map(|chat| chat.id.clone());
-    let fallback_messages = fallback
-        .as_deref()
-        .map(|id| chat::load_thread(conn, id).unwrap_or_default())
-        .unwrap_or_default();
-    let id = id.to_owned();
-    shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[
-            App::FIELD_CHATS,
-            App::FIELD_ARCHIVED,
-            App::FIELD_OPEN_CHAT,
-            App::FIELD_MESSAGES,
-        ]),
-        |app| {
-            app.chats = chats;
-            app.archived = archived;
-            if app.open_chat.as_deref() == Some(id.as_str()) {
-                app.open_chat = fallback;
-                app.messages = fallback_messages;
-            }
-        },
-    );
-}
-
-/// Restore an archived thread, then re-project both lists. Selection is untouched —
-/// restoring doesn't remove the open thread.
-fn unarchive_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
-    if let Err(err) = chat::unarchive_chat(conn, id) {
-        log_line(format!("bridge: unarchive chat failed: {err}"));
-        return;
-    }
-    let chats = chat::list_chats(conn).unwrap_or_default();
-    let archived = chat::list_archived_chats(conn).unwrap_or_default();
-    shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_CHATS, App::FIELD_ARCHIVED]),
-        |app| {
-            app.chats = chats;
-            app.archived = archived;
         },
     );
 }

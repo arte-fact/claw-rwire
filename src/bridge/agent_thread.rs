@@ -85,6 +85,18 @@ pub fn load(conn: &Connection, shared: &SharedServerState, agent_id: &str) {
     );
 }
 
+/// Close the agent page — clear the open agent + its projection so the nav highlight (and the
+/// lifecycle refresh guard) follow the route off the agent pages.
+pub fn close(shared: &SharedServerState) {
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_OPEN_AGENT, App::FIELD_AGENT_THREAD]),
+        |app| {
+            app.open_agent = None;
+            app.agent_thread = None;
+        },
+    );
+}
+
 /// Re-project the open agent's thread after a task lifecycle change, so a run finishing / a task
 /// advancing updates the page live. A cheap no-op when no agent thread is on screen (`open_agent`
 /// is `None`); when set, it rebuilds that one agent's bounded timeline in place.
