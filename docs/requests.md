@@ -197,14 +197,14 @@ stays with the harness, and the real safety net is fencing bash-git.
 - [x] `board_status` + the chat digest report requests, not just tasks
 - [x] Live e2e: one ask through plan → tasks → merged `develop`
 
-### G2 — diff surfaces
-- [ ] `git show`/`diff` plumbing parsed into the existing `DiffLine` rendering
-- [ ] Peek run entry: per-pass **Diff** disclosure (stat + patch, capped)
-- [ ] Request page `/w/:wid/requests/:rid`: ask verbatim → plan → task timeline with
+### G2 — diff surfaces — ✅ shipped 2026-07-03
+- [x] `git show`/`diff` plumbing parsed into the existing `DiffLine` rendering
+- [x] Peek run entry: per-pass **Diff** disclosure (stat + patch, capped)
+- [x] Request page `/w/:wid/requests/:rid`: ask verbatim → plan → task timeline with
       per-task diff stats → global diff → status
-- [ ] Board: request badge on cards + a Requests rail (progress · diffstat)
-- [ ] Validator prompts include the pass diff — claims checked against changes
-- [ ] Live verify on a real produce⇄review loop
+- [x] Board: request badge on cards + a Requests rail (progress · diffstat)
+- [x] Validator prompts include the pass diff — claims checked against changes
+- [x] Live verify on a real produce⇄review loop
 
 ### G3 — controls, macro validation, push
 - [ ] Request-level validation when the last task lands: review of `develop...branch`
