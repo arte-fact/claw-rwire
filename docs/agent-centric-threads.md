@@ -458,8 +458,8 @@ Asked what it thought of its harness, the live concierge rated it "B+" and named
 Two shipped the same evening as read-only concierge tools — `board_status` (pull the live
 digest on demand, mid-turn) and `read_file` (inspect a workspace file without delegating).
 Two remain open, both real design work:
-- [ ] **Rollback** — "revert that file to before the last build step": needs per-step
-      workspace snapshots (or git-backed workspaces) + a restore affordance on the run chain
+- [ ] **Rollback** — folded into the Request design (git-backed workspaces, branch per
+      request, harness commit per pass): see `docs/requests.md`
 - [ ] **Cross-workspace artifacts** — Scout's research vanishes into Forge's prompt; a
       shared, addressable artifact both workspaces can read (and the thread can link) would
       make handoffs durable
