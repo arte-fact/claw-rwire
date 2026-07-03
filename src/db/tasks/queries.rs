@@ -90,44 +90,67 @@ pub fn running_in(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Opt
     .optional()
 }
 
-/// The workspace's currently running task **other than** `exclude_id`, if any. Used to hold the
-/// one-running-task-per-workspace invariant when a task is resumed from a human gate: while it sat
-/// parked the scheduler may have started another task, so the resume path must check the lane
-/// before launching a second worker into the shared workspace tree.
+/// The **lane's** currently running task **other than** `exclude_id`, if any. Used to hold
+/// the one-running-task-per-lane invariant when a task is resumed from a human gate: while
+/// it sat parked the scheduler may have started another task in its lane, so the resume path
+/// must check before launching a second worker into the lane's shared tree. Lanes in other
+/// requests (their own worktrees, G4) don't block it.
 pub fn other_running_in(
     conn: &Connection,
     workspace_id: &str,
     exclude_id: &str,
+    lane: Option<&str>,
 ) -> rusqlite::Result<Option<Task>> {
     conn.query_row(
-        &format!("{SELECT} WHERE workspace_id = ?1 AND status = 'running' AND id != ?2 LIMIT 1"),
-        params![workspace_id, exclude_id],
+        &format!(
+            "{SELECT} WHERE workspace_id = ?1 AND status = 'running' AND id != ?2
+               AND ((?3 IS NULL AND request_id IS NULL) OR request_id = ?3) LIMIT 1"
+        ),
+        params![workspace_id, exclude_id, lane],
         from_row,
     )
     .optional()
 }
 
-/// The next pending task ready to run in a workspace: highest priority, then oldest, and
-/// with no still-unfinished blocker. `None` when the lane is empty or everything pending
-/// is still waiting on a blocker.
-pub fn next_ready(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Option<Task>> {
+/// The lane's currently running task, if any — a lane (a request's worktree, or the free
+/// lane `None` on the canonical tree) runs one task at a time; lanes run concurrently (G4).
+pub fn running_in_lane(
+    conn: &Connection,
+    workspace_id: &str,
+    lane: Option<&str>,
+) -> rusqlite::Result<Option<Task>> {
+    conn.query_row(
+        &format!(
+            "{SELECT} WHERE workspace_id = ?1 AND status = 'running'
+               AND ((?2 IS NULL AND request_id IS NULL) OR request_id = ?2) LIMIT 1"
+        ),
+        params![workspace_id, lane],
+        from_row,
+    )
+    .optional()
+}
+
+/// The next pending task ready to run in a **lane** — the free lane (`None`: request-less
+/// board tasks, on the canonical tree) or one active request (its tasks, in its worktree) —
+/// highest priority, then oldest, with no still-unfinished blocker. Lane scoping is the
+/// caller's job (G4): the scheduler only scans lanes of the oldest `MAX_ACTIVE` requests,
+/// so queued requests' tasks are simply never asked for.
+pub fn next_ready(
+    conn: &Connection,
+    workspace_id: &str,
+    lane: Option<&str>,
+) -> rusqlite::Result<Option<Task>> {
     conn.query_row(
         &format!(
             "{SELECT} WHERE workspace_id = ?1 AND status = 'pending' AND is_plan = 0
                AND (next_run IS NULL OR next_run <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-               -- Lane scoping (G1): a request-bound task only runs while its request is the
-               -- workspace's ACTIVE one (the oldest executing); queued requests wait FIFO.
-               -- Free-standing board tasks (request_id NULL) interleave as before.
-               AND (request_id IS NULL OR request_id = (
-                     SELECT id FROM requests
-                      WHERE workspace_id = ?1 AND status IN ('executing','validating')
-                      ORDER BY created_at LIMIT 1))
+               AND ((?2 IS NULL AND request_id IS NULL) OR request_id = ?2)
                AND NOT EXISTS (
                  SELECT 1 FROM task_blockers b JOIN tasks bt ON bt.id = b.blocked_by
                   WHERE b.task_id = tasks.id AND bt.status != 'done')
              ORDER BY priority DESC, created_at ASC LIMIT 1"
         ),
-        params![workspace_id],
+        params![workspace_id, lane],
         from_row,
     )
     .optional()

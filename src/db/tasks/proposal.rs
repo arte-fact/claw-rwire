@@ -227,7 +227,7 @@ mod tests {
         assert!(get(&conn, "plan1").expect("get").is_empty());
 
         // "UI" is blocked until "Core" is done → only "Core" is ready to run.
-        let ready = crate::db::tasks::next_ready(&conn, "ws")
+        let ready = crate::db::tasks::next_ready(&conn, "ws", None)
             .expect("ready")
             .expect("some");
         assert_eq!(ready.title, "Core");

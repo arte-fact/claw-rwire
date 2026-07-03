@@ -131,7 +131,10 @@ pub(super) fn proposed_tasks(
 fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::state::TaskDetail> {
     let names = agent_names(conn);
     tasks::get(conn, task_id).ok().flatten().map(|task| {
-        let root = crate::workspace::dir_for(&super::data_dir(), &task.workspace_id);
+        // Root the reads at the task's lane (G4): a repo born inside a request's tree — and
+        // its commits — exists only there until delivery moves everything into the canonical
+        // workspace (where the fallback then finds it).
+        let root = super::requests::task_root(conn, &super::data_dir(), &task);
         let runs = crate::db::task_runs::list_for_task(conn, task_id)
             .unwrap_or_default()
             .into_iter()
@@ -139,7 +142,7 @@ fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::sta
                 // The pass's Diff disclosure (G2): `git show` over the run's stored commits,
                 // plus the touched files as restore handles (G3).
                 let diff = super::requests::pass_diff(&root, run.commits.as_deref());
-                let files = restorable_files(&root, &task.workspace_id, run.commits.as_deref());
+                let files = restorable_files(&root, &task, run.commits.as_deref());
                 let mut view = run_view(&names, run);
                 view.diff = diff;
                 view.diff_files = files;
@@ -204,7 +207,7 @@ pub fn refresh_detail_if_open(
 /// The files a run's pass commits touched, each addressable for a pre-pass restore (G3).
 fn restorable_files(
     root: &std::path::Path,
-    workspace_id: &str,
+    task: &tasks::Task,
     commits_json: Option<&str>,
 ) -> Vec<crate::state::RestorableFile> {
     let mut out = Vec::new();
@@ -214,7 +217,8 @@ fn restorable_files(
         };
         for path in crate::gitops::show_files(&dir, &sha).unwrap_or_default() {
             out.push(crate::state::RestorableFile {
-                workspace: workspace_id.to_owned(),
+                workspace: task.workspace_id.clone(),
+                task: task.id.clone(),
                 repo: repo.clone(),
                 sha: sha.clone(),
                 path,
@@ -505,7 +509,9 @@ pub fn restart(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str
     let Ok(Some(task)) = tasks::get(conn, id) else {
         return;
     };
-    let root = crate::workspace::dir_for(&super::data_dir(), &task.workspace_id);
+    // Reset where the task ran (G4): its request's tree while the request is open, the
+    // canonical workspace for free tasks.
+    let root = super::requests::task_root(conn, &super::data_dir(), &task);
     let reset_errors = crate::gitops::reset_task_tree(conn, &root, id);
     if !reset_errors.is_empty() {
         surface(
@@ -594,22 +600,25 @@ pub(crate) fn status_digest(conn: &rusqlite::Connection) -> Option<String> {
             parts.push(format!("queued: {queued}"));
         }
         // Open requests (G1): the ask-level view — the user tracks requests, not task
-        // confetti. Only the active (oldest executing) request holds the lane; later
-        // executing ones wait FIFO behind it.
-        let active = crate::db::requests::active_for_workspace(conn, &ws.id)
-            .ok()
-            .flatten();
+        // confetti. The oldest MAX_ACTIVE executing/validating requests each hold a lane
+        // (G4, parallel worktrees); later executing ones wait FIFO behind them.
+        let active_ids: Vec<String> =
+            crate::db::requests::active_requests(conn, &ws.id, crate::db::requests::MAX_ACTIVE)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|request| request.id)
+                .collect();
         for request in crate::db::requests::open_for_workspace(conn, &ws.id).unwrap_or_default() {
             let progress = match request.status {
                 crate::db::requests::RequestStatus::Executing
-                    if active.as_ref().is_some_and(|a| a.id == request.id) =>
+                    if active_ids.contains(&request.id) =>
                 {
                     let total = crate::db::tasks::count_for_request(conn, &request.id).unwrap_or(0);
                     let open = crate::db::tasks::open_for_request(conn, &request.id).unwrap_or(0);
                     format!("executing, {}/{total} task(s) done", (total - open).max(0))
                 }
                 crate::db::requests::RequestStatus::Executing => {
-                    "queued behind the active request".to_owned()
+                    "queued behind the active request(s)".to_owned()
                 }
                 _ => "planning — awaiting the plan".to_owned(),
             };

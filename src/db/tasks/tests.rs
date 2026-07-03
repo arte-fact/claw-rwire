@@ -148,9 +148,12 @@ fn next_ready_skips_running_and_terminal() {
     create(&conn, &task("t1")).expect("t1");
     set_status(&conn, "t1", TaskStatus::Running).expect("run");
     // Only task is running → nothing ready.
-    assert!(next_ready(&conn, "ws").expect("scan").is_none());
+    assert!(next_ready(&conn, "ws", None).expect("scan").is_none());
     create(&conn, &task("t2")).expect("t2");
-    assert_eq!(next_ready(&conn, "ws").expect("scan").unwrap().id, "t2");
+    assert_eq!(
+        next_ready(&conn, "ws", None).expect("scan").unwrap().id,
+        "t2"
+    );
 }
 
 #[test]
@@ -164,10 +167,16 @@ fn next_ready_skips_a_task_with_an_unfinished_blocker() {
     )
     .expect("block");
     // t1 is older (would sort first) but is blocked by the still-pending t2 → t2 runs.
-    assert_eq!(next_ready(&conn, "ws").expect("scan").unwrap().id, "t2");
+    assert_eq!(
+        next_ready(&conn, "ws", None).expect("scan").unwrap().id,
+        "t2"
+    );
     finish(&conn, "t2", TaskStatus::Done, Some("ok")).expect("finish");
     // Blocker done → t1 becomes ready.
-    assert_eq!(next_ready(&conn, "ws").expect("scan").unwrap().id, "t1");
+    assert_eq!(
+        next_ready(&conn, "ws", None).expect("scan").unwrap().id,
+        "t1"
+    );
 }
 
 #[test]
@@ -183,10 +192,10 @@ fn next_ready_gates_a_recurrent_task_on_its_next_run() {
     .expect("create");
     // A future next_run hides it from the ready scan…
     reschedule(&conn, "t1", "2999-01-01T00:00:00.000Z", Some("ran")).expect("future");
-    assert!(next_ready(&conn, "ws").expect("scan").is_none());
+    assert!(next_ready(&conn, "ws", None).expect("scan").is_none());
     // …a past next_run makes it ready again (its slot has arrived).
     reschedule(&conn, "t1", "2000-01-01T00:00:00.000Z", Some("ran")).expect("past");
-    let ready = next_ready(&conn, "ws").expect("scan").expect("ready");
+    let ready = next_ready(&conn, "ws", None).expect("scan").expect("ready");
     assert_eq!(ready.id, "t1");
     assert_eq!(
         ready.status,
@@ -297,10 +306,14 @@ fn other_running_in_excludes_self_and_finds_peers() {
     create(&conn, &task("b")).expect("b");
     set_status(&conn, "a", TaskStatus::Running).expect("run a");
     // From a's own perspective no *other* task is running…
-    assert!(other_running_in(&conn, "ws", "a").expect("scan").is_none());
+    assert!(
+        other_running_in(&conn, "ws", "a", None)
+            .expect("scan")
+            .is_none()
+    );
     // …but from b's perspective, a holds the lane.
     assert_eq!(
-        other_running_in(&conn, "ws", "b")
+        other_running_in(&conn, "ws", "b", None)
             .expect("scan")
             .unwrap()
             .id,

@@ -10,7 +10,6 @@ use crate::db::{
 };
 use crate::gitops;
 use crate::state::{App, RequestCardView, RequestDetail, RequestRepoEntry, RequestTaskEntry};
-use crate::workspace;
 
 use super::super::data_dir;
 
@@ -56,7 +55,10 @@ pub(crate) fn load_detail(conn: &Connection, shared: &SharedServerState, request
 
 fn build_detail(conn: &Connection, request_id: &str) -> Option<RequestDetail> {
     let request = db::requests::get(conn, request_id).ok().flatten()?;
-    let root = workspace::dir_for(&data_dir(), &request.workspace_id);
+    // Worktrees share refs and objects, so the canonical workspace answers for composed
+    // repos either way — but a repo *born inside* the request's tree exists only there
+    // until delivery, so an open request reads through its tree (G4).
+    let root = super::request_root(&data_dir(), &request);
     let tasks = db::tasks::list_for_request(conn, request_id)
         .unwrap_or_default()
         .into_iter()
@@ -104,24 +106,23 @@ fn build_detail(conn: &Connection, request_id: &str) -> Option<RequestDetail> {
 
 /// The board rail's cards: every open request of the workspace, oldest first.
 pub(crate) fn rail_views(conn: &Connection, workspace_id: &str) -> Vec<RequestCardView> {
-    let active = db::requests::active_for_workspace(conn, workspace_id)
-        .ok()
-        .flatten();
-    let root = workspace::dir_for(&data_dir(), workspace_id);
+    let active_ids: Vec<String> =
+        db::requests::active_requests(conn, workspace_id, db::requests::MAX_ACTIVE)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|request| request.id)
+            .collect();
     db::requests::open_for_workspace(conn, workspace_id)
         .unwrap_or_default()
         .into_iter()
-        .map(|request| card_view(conn, &root, &request, active.as_ref()))
+        .map(|request| card_view(conn, &request, &active_ids))
         .collect()
 }
 
-fn card_view(
-    conn: &Connection,
-    root: &std::path::Path,
-    request: &Request,
-    active: Option<&Request>,
-) -> RequestCardView {
-    let is_active = active.is_some_and(|a| a.id == request.id);
+fn card_view(conn: &Connection, request: &Request, active_ids: &[String]) -> RequestCardView {
+    let root = super::request_root(&data_dir(), request);
+    let root = root.as_path();
+    let is_active = active_ids.contains(&request.id);
     let status = match request.status {
         RequestStatus::Executing if is_active => "executing".to_owned(),
         RequestStatus::Executing => "queued".to_owned(),

@@ -10,12 +10,17 @@ mod sweep;
 mod task_tree;
 #[cfg(test)]
 mod tests;
+mod worktrees;
 
 pub use requests::{
-    RequestRef, abandon_branch, deliver_repo, has_remote, push_refs, restore_file, revert_merge,
+    RequestRef, abandon_branch, branch_exists, deliver_repo, has_remote, push_refs, restore_file,
+    revert_merge,
 };
 pub use sweep::{commit_pass, ensure_meta_repo, repos};
 pub use task_tree::{reset_task_tree, snapshot_task_bases};
+pub use worktrees::{
+    adopt_tree_repo, drop_branch, ensure_request_tree, remove_request_tree, tree_root,
+};
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -192,15 +192,20 @@ pub(super) fn dispatch_when(lane_busy: bool) -> Dispatch {
     }
 }
 
-/// (Re)launch the task's current step if the lane is free, else leave it `pending` for the
-/// scheduler to start once the lane frees — preserving one-running-task-per-workspace across the
-/// review-gate resume path. The normal mid-pipeline advance sees only this task on the lane, so it
-/// launches immediately as before.
+/// (Re)launch the task's current step if its lane is free, else leave it `pending` for the
+/// scheduler to start once the lane frees — preserving one-running-task-per-lane (G4: the
+/// task's request's lane, or the free lane) across the review-gate resume path. The normal
+/// mid-pipeline advance sees only this task on the lane, so it launches immediately as before.
 pub(super) fn relaunch(conn: &rusqlite::Connection, task: &Task) {
-    let lane_busy = tasks::other_running_in(conn, &task.workspace_id, &task.id)
-        .ok()
-        .flatten()
-        .is_some();
+    let lane_busy = tasks::other_running_in(
+        conn,
+        &task.workspace_id,
+        &task.id,
+        task.request_id.as_deref(),
+    )
+    .ok()
+    .flatten()
+    .is_some();
     match dispatch_when(lane_busy) {
         Dispatch::LaunchNow => {
             if let Err(err) = tasks::set_status(conn, &task.id, TaskStatus::Running) {

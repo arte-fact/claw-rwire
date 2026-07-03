@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use super::requests::{RequestRef, ensure_on_request_branch};
+use super::requests::{DEVELOP, RequestRef, ensure_on_request_branch};
 use super::{GitError, commit, commit_all, git, head, is_dirty, is_repo, repo_dir};
 
 /// The repo rel of the workspace meta-repo (the workspace root itself).
@@ -19,8 +19,10 @@ const META_IGNORE_LINE: &str = "projects/";
 const PROJECT_IGNORE: &str = "target/\nnode_modules/\ndist/\nbuild/\n__pycache__/\n.venv/\n.env\n";
 
 /// Ensure the workspace root is the meta-repo: `git init` + initial commit capturing the
-/// existing workspace material (lazy-init for workspaces that predate G0). Always re-asserts
-/// the `projects/` ignore line — without it a sweep would record project gitlinks.
+/// existing workspace material (lazy-init for workspaces that predate G0), then settle on
+/// `develop` — like project repos, so free-lane passes and delivery merges share one
+/// integration line (G4; metas that predate this settle at first tree composition). Always
+/// re-asserts the `projects/` ignore line — without it a sweep would record project gitlinks.
 pub fn ensure_meta_repo(root: &Path) -> Result<(), GitError> {
     std::fs::create_dir_all(root)?;
     ensure_ignore_line(root)?;
@@ -29,6 +31,7 @@ pub fn ensure_meta_repo(root: &Path) -> Result<(), GitError> {
     }
     git(root, &["init", "--initial-branch", "main"])?;
     commit_all(root, None, "claw: initialize workspace meta-repo")?;
+    git(root, &["checkout", "-b", DEVELOP])?;
     Ok(())
 }
 

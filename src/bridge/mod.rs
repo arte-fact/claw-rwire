@@ -181,9 +181,11 @@ pub enum Command {
     RequestPush {
         id: String,
     },
-    /// Restore one file to its state before a pass commit (a run's diff view, G3).
+    /// Restore one file to its state before a pass commit (a run's diff view, G3). The task
+    /// routes the restore into its lane's tree (G4).
     RestoreFile {
         workspace: String,
+        task: String,
         repo: String,
         sha: String,
         path: String,
@@ -600,10 +602,11 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::RequestPush { id } => requests::control::push(conn, shared, &id),
         Command::RestoreFile {
             workspace,
+            task,
             repo,
             sha,
             path,
-        } => requests::control::restore_file(conn, shared, &workspace, &repo, &sha, &path),
+        } => requests::control::restore_file(conn, shared, &workspace, &task, &repo, &sha, &path),
         Command::OpenAgentThread { agent, workspace } => {
             agent_thread::load(conn, shared, &agent, &workspace)
         }

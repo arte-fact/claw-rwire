@@ -38,12 +38,16 @@ pub fn ensure_develop(dir: &Path) -> Result<(), GitError> {
 }
 
 /// Put the repo on the request's branch, cutting it on the request's first touch. Returns
-/// the branch point when cut (`None` when the repo was already on it). This runs at commit
-/// time with the pass's work still in the tree — `checkout -b` carries it over; in the
-/// normal flow HEAD sits on `develop` (G0 lands passes there), so the cut is develop's tip.
+/// the branch point — the base a delivery diff anchors on; the caller's `record_repo` is
+/// first-write-wins, so later passes re-reporting it is harmless. This runs at commit time
+/// with the pass's work still in the tree — `checkout -b` carries it over; in the legacy
+/// flow HEAD sits on `develop`, so the cut is develop's tip. A repo **already on** the
+/// branch (a composed G4 worktree — the branch was cut at composition, before any commit
+/// sweep ran) reports the fork point from `develop` instead.
 pub fn ensure_on_request_branch(dir: &Path, branch: &str) -> Result<Option<String>, GitError> {
     if current_branch(dir)? == branch {
-        return Ok(None);
+        ensure_develop(dir)?;
+        return Ok(Some(git(dir, &["merge-base", DEVELOP, "HEAD"])?));
     }
     ensure_develop(dir)?;
     if branch_exists(dir, branch) {
@@ -60,13 +64,18 @@ pub fn ensure_on_request_branch(dir: &Path, branch: &str) -> Result<Option<Strin
 
 /// Deliver one repo: `--no-ff` merge of the request branch into `develop`, leaving the repo
 /// on `develop` (the next request cuts fresh from it). Refuses a dirty tree — delivery only
-/// fires once every task landed, so dirt means something is wrong.
+/// fires once every task landed, so dirt means something is wrong (or a free-lane pass is
+/// mid-write — the caller's retry ping covers it). A failed merge — parallel branches can
+/// conflict (G4) — is aborted so `develop` is never left mid-merge.
 pub fn deliver_repo(dir: &Path, branch: &str, message: &str) -> Result<String, GitError> {
     if is_dirty(dir)? {
         return Err(GitError::DirtyTree);
     }
     git(dir, &["checkout", DEVELOP])?;
-    git_as(dir, None, &["merge", "--no-ff", "-m", message, branch])?;
+    if let Err(err) = git_as(dir, None, &["merge", "--no-ff", "-m", message, branch]) {
+        let _ = git(dir, &["merge", "--abort"]);
+        return Err(err);
+    }
     head(dir)
 }
 

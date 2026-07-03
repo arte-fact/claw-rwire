@@ -63,7 +63,9 @@ fn launch_validation(conn: &Connection, request: &Request) {
             Ok(inference) => inference,
             Err(err) => return log_line(format!("requests: resolve reviewer failed: {err}")),
         };
-    let workspace_dir = workspace::dir_for(&data_dir(), &request.workspace_id);
+    // Root the review at the request's tree (G4): the reviewer must read the branch's
+    // files, not canonical `develop` — which no longer carries the work.
+    let workspace_dir = super::request_root(&data_dir(), request);
     let role = super::super::role_prompt(conn, crate::state::RunKind::Validator);
     let system_prompt = super::super::run_system_prompt(
         &role,
@@ -251,13 +253,21 @@ pub(crate) fn abandon(conn: &Connection, shared: &SharedServerState, request_id:
         }
     }
     let root = workspace::dir_for(&data_dir(), &request.workspace_id);
-    let mut errors: Vec<String> = Vec::new();
-    for repo in db::requests::repos_for(conn, request_id).unwrap_or_default() {
-        let Ok(dir) = gitops::repo_dir(&root, &repo.repo) else {
-            continue;
-        };
-        if let Err(err) = gitops::abandon_branch(&dir, &repo.branch) {
-            errors.push(format!("{}: {err}", repo_name(&repo.repo)));
+    // The tree goes first (G4): a branch checked out in a worktree can't be deleted.
+    let tree = gitops::tree_root(&data_dir(), &request.workspace_id, request_id);
+    let mut errors = gitops::remove_request_tree(&root, &tree);
+    // Then `-D` the branch everywhere it exists — touched repos and composed-but-untouched
+    // ones alike; the dropped commits are the point (develop never saw them).
+    if let Some(branch) = &request.branch {
+        for repo in gitops::repos(&root) {
+            let Ok(dir) = gitops::repo_dir(&root, &repo) else {
+                continue;
+            };
+            if gitops::branch_exists(&dir, branch)
+                && let Err(err) = gitops::abandon_branch(&dir, branch)
+            {
+                errors.push(format!("{}: {err}", repo_name(&repo)));
+            }
         }
     }
     let _ = db::requests::set_status(conn, request_id, RequestStatus::Abandoned);
@@ -368,16 +378,21 @@ pub(crate) fn push(conn: &Connection, shared: &SharedServerState, request_id: &s
 }
 
 /// Per-file restore from a run's diff (G3): put one path back to its pre-pass state. The
-/// restored content sits in the working tree; the next pass commit records it.
+/// restored content sits in the working tree — the task's lane's tree (G4), so an open
+/// request takes the restore on its branch and the next pass commit records it.
 pub(crate) fn restore_file(
     conn: &Connection,
     shared: &SharedServerState,
     workspace_id: &str,
+    task_id: &str,
     repo: &str,
     sha: &str,
     path: &str,
 ) {
-    let root = workspace::dir_for(&data_dir(), workspace_id);
+    let root = db::tasks::get(conn, task_id).ok().flatten().map_or_else(
+        || workspace::dir_for(&data_dir(), workspace_id),
+        |task| super::task_root(conn, &data_dir(), &task),
+    );
     let outcome = gitops::repo_dir(&root, repo)
         .map_err(|err| err.to_string())
         .and_then(|dir| gitops::restore_file(&dir, sha, path).map_err(|err| err.to_string()));
@@ -385,7 +400,6 @@ pub(crate) fn restore_file(
         Ok(()) => log_line(format!("requests: restored {path} to before {sha:.12}")),
         Err(err) => log_line(format!("requests: restore {path}: {err}")),
     }
-    let _ = conn;
     let _ = shared;
 }
 

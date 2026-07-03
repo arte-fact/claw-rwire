@@ -175,7 +175,7 @@ mod tests {
         let conn = seeded();
         super::stop(&conn, "t1").expect("stop");
         assert!(
-            next_ready(&conn, "ws").expect("scan").is_none(),
+            next_ready(&conn, "ws", None).expect("scan").is_none(),
             "the ready-scan only picks pending tasks"
         );
     }
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(task.auto_retries, 1);
         assert_eq!(task.next_run.as_deref(), Some("2999-01-01T00:00:00.000Z"));
         // A future next_run keeps it out of the ready-scan until the backoff elapses.
-        assert!(next_ready(&conn, "ws").expect("scan").is_none());
+        assert!(next_ready(&conn, "ws", None).expect("scan").is_none());
     }
 
     #[test]
@@ -265,7 +265,10 @@ mod tests {
         super::super::create_plan(&conn, "plan1", "ws", "Plan", "s", None).expect("plan");
         set_status(&conn, "plan1", TaskStatus::Pending).expect("pending");
         // `t1` (seeded, pending) is the only runnable task; the plan is never picked.
-        assert_eq!(next_ready(&conn, "ws").expect("scan").unwrap().id, "t1");
+        assert_eq!(
+            next_ready(&conn, "ws", None).expect("scan").unwrap().id,
+            "t1"
+        );
     }
 
     #[test]

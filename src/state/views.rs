@@ -817,10 +817,12 @@ pub struct RequestRepoEntry {
     pub merge: String,
 }
 
-/// One file a pass changed, addressable for restore (G3): `checkout <sha>^ -- path`.
+/// One file a pass changed, addressable for restore (G3): `checkout <sha>^ -- path`. The
+/// task routes the restore to the right tree (its request's worktree while open, G4).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RestorableFile {
     pub workspace: String,
+    pub task: String,
     pub repo: String,
     pub sha: String,
     pub path: String,

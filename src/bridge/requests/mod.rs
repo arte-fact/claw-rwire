@@ -65,11 +65,16 @@ pub(crate) fn maybe_deliver(conn: &Connection, task: &Task) {
     }
 }
 
-/// Delivery v0: merge the request branch into `develop` in every repo it touched, stamp the
-/// merges, flip to `delivered`, and drop the receipt into the origin chat. Any merge failure
-/// leaves the request `executing` with the trouble surfaced — nothing half-delivers silently.
+/// Delivery: merge the request branch into `develop` in every repo it touched — from the
+/// **canonical** workspace (worktrees share refs and objects, so the branch is right there),
+/// adopting repos born inside the request's tree first — stamp the merges, tear the tree
+/// down, flip to `delivered`, and drop the receipt into the origin chat. Any merge failure
+/// (a conflict with a parallel request, a dirty canonical tree) leaves the request open with
+/// the trouble surfaced — nothing half-delivers silently, and `develop` is never left
+/// mid-merge (the merge aborts).
 pub(super) fn deliver(conn: &Connection, request: &Request) {
     let root = workspace::dir_for(&data_dir(), &request.workspace_id);
+    let tree = gitops::tree_root(&data_dir(), &request.workspace_id, &request.id);
     let repos = db::requests::repos_for(conn, &request.id).unwrap_or_default();
     let message = format!("Deliver: {}\n\nRequest: {}", request.title, request.id);
     let mut errors: Vec<String> = Vec::new();
@@ -85,6 +90,15 @@ pub(super) fn deliver(conn: &Connection, request: &Request) {
                 continue;
             }
         };
+        // A repo born inside the request's tree exists only there — move it into place.
+        if !gitops::is_repo(&dir)
+            && let Ok(born) = gitops::repo_dir(&tree, &repo.repo)
+            && gitops::is_repo(&born)
+            && let Err(err) = gitops::adopt_tree_repo(&born, &dir)
+        {
+            errors.push(format!("{}: adopt: {err}", repo_name(&repo.repo)));
+            continue;
+        }
         match gitops::deliver_repo(&dir, &repo.branch, &message) {
             Ok(merge) => {
                 let _ = db::requests::set_repo_merge(conn, &request.id, &repo.repo, &merge);
@@ -109,13 +123,38 @@ pub(super) fn deliver(conn: &Connection, request: &Request) {
             conn,
             request,
             &format!(
-                "⚠️ Delivery of **{}** hit trouble ({}) — the request stays open; fix the \
-                 tree and finish/restart a task to retry.",
+                "⚠️ Delivery of **{}** hit trouble ({}) — the request stays open; resolve \
+                 (a conflicting parallel delivery needs a rebase — restart a task, or \
+                 Abandon) and press Deliver to retry.",
                 request.title,
                 errors.join("; ")
             ),
         );
         return;
+    }
+    // Everything merged — the tree has served its purpose (G4). Tear it down and drop the
+    // branch in repos the request composed but never touched (`-d`: trivially merged);
+    // touched repos keep theirs — the passes stay browsable behind the merge.
+    let touched: std::collections::HashSet<&str> =
+        repos.iter().map(|repo| repo.repo.as_str()).collect();
+    for err in gitops::remove_request_tree(&root, &tree) {
+        log_line(format!("requests: teardown {}: {err}", request.id));
+    }
+    if let Some(branch) = &request.branch {
+        for repo in gitops::repos(&root) {
+            if touched.contains(repo.as_str()) {
+                continue;
+            }
+            if let Ok(dir) = gitops::repo_dir(&root, &repo)
+                && gitops::branch_exists(&dir, branch)
+                && let Err(err) = gitops::drop_branch(&dir, branch, false)
+            {
+                log_line(format!(
+                    "requests: drop {branch} in {}: {err}",
+                    repo_name(&repo)
+                ));
+            }
+        }
     }
     if let Err(err) = db::requests::set_status(conn, &request.id, RequestStatus::Delivered) {
         return log_line(format!("requests: mark delivered {}: {err}", request.id));
@@ -162,6 +201,68 @@ pub(crate) fn parse_commits(json: Option<&str>) -> Vec<(String, String)> {
 fn request_of(conn: &Connection, task: &Task) -> Option<Request> {
     let request_id = task.request_id.as_deref()?;
     db::requests::get(conn, request_id).ok().flatten()
+}
+
+/// The directory a request's working-tree surfaces use: its composed worktree when present,
+/// else the canonical workspace (planning, composition fallback, terminal states). Never
+/// composes — see [`ensure_lane_root`] for the launch path.
+pub(crate) fn request_root(data_dir: &std::path::Path, request: &Request) -> std::path::PathBuf {
+    let tree = gitops::tree_root(data_dir, &request.workspace_id, &request.id);
+    if gitops::is_repo(&tree) {
+        tree
+    } else {
+        workspace::dir_for(data_dir, &request.workspace_id)
+    }
+}
+
+/// The directory a task's runs, sweeps, and resets use: its request's tree when composed,
+/// else the canonical workspace (free-lane tasks, plan tasks, fallback).
+pub(crate) fn task_root(
+    conn: &Connection,
+    data_dir: &std::path::Path,
+    task: &Task,
+) -> std::path::PathBuf {
+    match request_of(conn, task) {
+        Some(request) => request_root(data_dir, &request),
+        None => workspace::dir_for(data_dir, &task.workspace_id),
+    }
+}
+
+/// Resolve a launching task's lane root, composing its request's tree on first touch (G4):
+/// every workspace repo gets a linked worktree on the request branch, cut from `develop`.
+/// Composition trouble falls back to the canonical tree — the G3 single-lane behaviour —
+/// with the errors logged; work is never blocked on git.
+pub(crate) fn ensure_lane_root(
+    conn: &Connection,
+    data_dir: &std::path::Path,
+    task: &Task,
+) -> std::path::PathBuf {
+    let canonical = workspace::dir_for(data_dir, &task.workspace_id);
+    let Some(request) = request_of(conn, task) else {
+        return canonical;
+    };
+    if !matches!(
+        request.status,
+        RequestStatus::Executing | RequestStatus::Validating
+    ) {
+        return canonical;
+    }
+    let Some(branch) = &request.branch else {
+        return canonical;
+    };
+    let tree = gitops::tree_root(data_dir, &request.workspace_id, &request.id);
+    for err in gitops::ensure_request_tree(&canonical, &tree, branch) {
+        log_line(format!("gitops: compose {}: {err}", request.id));
+    }
+    if gitops::is_repo(&tree) {
+        tree
+    } else {
+        log_line(format!(
+            "gitops: tree for {} unusable — falling back to the canonical workspace",
+            request.id
+        ));
+        canonical
+    }
 }
 
 /// A cheap, always-works line into the request's origin chat (not an LLM turn).

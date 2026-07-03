@@ -236,11 +236,16 @@ fn request_branch_is_cut_once_and_passes_land_on_it() {
     assert_eq!(current_branch(&root).expect("branch"), "req/req1-thing");
     assert!(log_message(&root, "HEAD").contains("Request: req-1"));
 
-    // Second pass: same branch, no new cut.
+    // Second pass: same branch, no new cut — the branch point is re-reported (the DB's
+    // first-write-wins keeps the original) rather than re-cut.
     write(&root, "docs/step2.md", "two");
     let (commits, errors) = commit_pass(&root, Some("forge"), "s2: t", "t1", "r2", request);
     assert_eq!(errors, Vec::<String>::new());
-    assert!(commits[0].request_base.is_none(), "already on the branch");
+    assert_eq!(
+        commits[0].request_base.as_deref(),
+        Some(develop_tip.as_str()),
+        "later passes re-report the same branch point"
+    );
     // develop never moved — the request's work is isolated on its branch.
     let develop_now = git(&root, &["rev-parse", "develop"]).expect("develop");
     assert_eq!(develop_now, develop_tip);
@@ -373,4 +378,163 @@ fn restore_file_returns_one_path_to_its_pre_pass_state() {
     write(&root, "docs/newborn.md", "x");
     let (commits, _) = commit_pass(&root, None, "b: newborn", "t2", "r2", None);
     assert!(restore_file(&root, &commits[0].commit, "docs/newborn.md").is_err());
+}
+
+/// A canonical workspace (meta + one project, both settled on develop) and a composed
+/// request tree for `branch` — the G4 fixture.
+fn composed(name: &str, branch: &str) -> (PathBuf, PathBuf) {
+    let root = scratch(name);
+    write(&root, "AGENT.md", "# brief");
+    ensure_meta_repo(&root).expect("meta");
+    ensure_project_repo(&root.join("projects/app")).expect("project");
+    let tree = scratch(&format!("{name}-trees")).join("tree");
+    let errors = ensure_request_tree(&root, &tree, branch);
+    assert_eq!(errors, Vec::<String>::new());
+    (root, tree)
+}
+
+#[test]
+fn request_tree_composes_linked_worktrees_on_the_branch() {
+    let (root, tree) = composed("wt-compose", "req/aa-compose");
+    // The tree: a linked worktree per repo, all on the request branch.
+    assert!(is_repo(&tree) && worktrees::is_linked_worktree(&tree));
+    assert!(worktrees::is_linked_worktree(&tree.join("projects/app")));
+    assert_eq!(current_branch(&tree).expect("b"), "req/aa-compose");
+    assert_eq!(
+        current_branch(&tree.join("projects/app")).expect("b"),
+        "req/aa-compose"
+    );
+    // The canonical workspace never leaves develop — that's the point.
+    assert_eq!(current_branch(&root).expect("b"), "develop");
+    assert_eq!(
+        current_branch(&root.join("projects/app")).expect("b"),
+        "develop"
+    );
+    // Idempotent: recomposing is a no-op, not an error.
+    assert_eq!(
+        ensure_request_tree(&root, &tree, "req/aa-compose"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn sweep_in_a_tree_lands_on_the_branch_and_leaves_canonical_untouched() {
+    let (root, tree) = composed("wt-sweep", "req/bb-sweep");
+    let develop_tip = head(&root.join("projects/app")).expect("tip");
+    write(&tree, "projects/app/main.rs", "fn main() {}");
+    let request = Some(RequestRef {
+        id: "req-bb",
+        branch: "req/bb-sweep",
+    });
+    let (commits, errors) = commit_pass(&tree, Some("forge"), "build: x", "t1", "r1", request);
+    assert_eq!(errors, Vec::<String>::new());
+    let pass = commits
+        .iter()
+        .find(|c| c.repo == "projects/app")
+        .expect("project pass");
+    assert_eq!(
+        pass.request_base.as_deref(),
+        Some(develop_tip.as_str()),
+        "the branch point is develop's tip at composition"
+    );
+    // The commit is on the branch, visible from the canonical repo (shared refs)…
+    let canonical_app = root.join("projects/app");
+    assert!(log_message(&canonical_app, "req/bb-sweep").contains("Request: req-bb"));
+    // …while canonical develop never moved and its tree stays clean.
+    assert_eq!(head(&canonical_app).expect("head"), develop_tip);
+    assert!(!canonical_app.join("main.rs").exists());
+}
+
+#[test]
+fn delivery_merges_from_canonical_and_teardown_keeps_the_branch() {
+    let (root, tree) = composed("wt-deliver", "req/cc-deliver");
+    write(&tree, "projects/app/lib.rs", "pub fn x() {}");
+    let request = Some(RequestRef {
+        id: "req-cc",
+        branch: "req/cc-deliver",
+    });
+    let (_, errors) = commit_pass(&tree, Some("forge"), "build: y", "t1", "r1", request);
+    assert_eq!(errors, Vec::<String>::new());
+    // Merging a branch checked out in a worktree is fine — only checkout is exclusive.
+    let canonical_app = root.join("projects/app");
+    deliver_repo(
+        &canonical_app,
+        "req/cc-deliver",
+        "Deliver: y\n\nRequest: req-cc",
+    )
+    .expect("deliver");
+    assert!(
+        canonical_app.join("lib.rs").exists(),
+        "develop has the work"
+    );
+    // Teardown: worktrees removed and pruned, the delivered branch stays browsable.
+    assert_eq!(remove_request_tree(&root, &tree), Vec::<String>::new());
+    assert!(!tree.exists());
+    let listed = git(&canonical_app, &["worktree", "list"]).expect("list");
+    assert_eq!(listed.lines().count(), 1, "only the canonical tree remains");
+    assert!(branch_exists(&canonical_app, "req/cc-deliver"));
+    // An untouched repo's branch adds nothing — `-d` drops it (trivially merged).
+    assert!(branch_exists(&root, "req/cc-deliver"));
+    drop_branch(&root, "req/cc-deliver", false).expect("drop");
+    assert!(!branch_exists(&root, "req/cc-deliver"));
+}
+
+#[test]
+fn delivery_conflict_aborts_cleanly_and_leaves_develop_pristine() {
+    let root = scratch("wt-conflict");
+    ensure_project_repo(&root.join("projects/app")).expect("project");
+    write(&root, "projects/app/data.txt", "base\n");
+    let app = root.join("projects/app");
+    commit_all(&app, None, "seed data").expect("seed");
+    // Two trees composed from the same develop tip, both editing the same line.
+    let tree_a = scratch("wt-conflict-trees").join("a");
+    let tree_b = scratch("wt-conflict-trees-b").join("b");
+    assert_eq!(
+        ensure_request_tree(&root, &tree_a, "req/aa-one"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        ensure_request_tree(&root, &tree_b, "req/bb-two"),
+        Vec::<String>::new()
+    );
+    write(&tree_a, "projects/app/data.txt", "from a\n");
+    write(&tree_b, "projects/app/data.txt", "from b\n");
+    for (tree, id, branch) in [(&tree_a, "ra", "req/aa-one"), (&tree_b, "rb", "req/bb-two")] {
+        let request = Some(RequestRef { id, branch });
+        let (_, errors) = commit_pass(tree, None, "edit", "t", "r", request);
+        assert_eq!(errors, Vec::<String>::new());
+    }
+    let merge_a = deliver_repo(&app, "req/aa-one", "Deliver: a").expect("a merges");
+    let err = deliver_repo(&app, "req/bb-two", "Deliver: b").expect_err("b conflicts");
+    assert!(err.to_string().contains("merge"), "a merge failure: {err}");
+    // The abort left develop exactly where request a's delivery put it — no mid-merge state.
+    assert!(!is_dirty(&app).expect("status"));
+    assert!(git(&app, &["rev-parse", "--verify", "MERGE_HEAD"]).is_err());
+    assert_eq!(head(&app).expect("head"), merge_a);
+}
+
+#[test]
+fn repo_born_in_a_tree_is_adopted_at_delivery() {
+    let (root, tree) = composed("wt-born", "req/dd-born");
+    // The agent creates a brand-new project inside the request's tree: the sweep births a
+    // full sovereign repo there (not a worktree — the canonical workspace has no such repo).
+    write(&tree, "projects/newborn/README.md", "hello");
+    let request = Some(RequestRef {
+        id: "req-dd",
+        branch: "req/dd-born",
+    });
+    let (commits, errors) = commit_pass(&tree, Some("forge"), "birth: n", "t1", "r1", request);
+    assert_eq!(errors, Vec::<String>::new());
+    assert!(commits.iter().any(|c| c.repo == "projects/newborn"));
+    let born = tree.join("projects/newborn");
+    assert!(is_repo(&born) && !worktrees::is_linked_worktree(&born));
+    // A composed worktree must never be "adopted" — only born repos move.
+    let canonical_new = root.join("projects/newborn");
+    assert!(adopt_tree_repo(&tree.join("projects/app"), &root.join("projects/app")).is_ok());
+    assert!(adopt_tree_repo(&tree, &canonical_new).is_err());
+    // Adoption moves the repo into place; delivery then merges it like any other.
+    adopt_tree_repo(&born, &canonical_new).expect("adopt");
+    deliver_repo(&canonical_new, "req/dd-born", "Deliver: n").expect("deliver");
+    assert_eq!(current_branch(&canonical_new).expect("b"), "develop");
+    assert!(canonical_new.join("README.md").exists());
 }

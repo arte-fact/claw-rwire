@@ -48,22 +48,45 @@ pub fn spawn_ticker() {
     });
 }
 
-/// One scan: for every workspace with no running task, launch its next ready task.
+/// One scan: for every **idle lane** of every workspace, launch that lane's next ready task.
+/// A workspace's lanes (G4) are the free lane (request-less tasks, on the canonical tree)
+/// plus one per active request (its tasks, in its own worktree) — so requests execute in
+/// parallel while each lane stays sequential.
 pub fn tick(conn: &rusqlite::Connection, shared: &SharedServerState) {
     let Ok(workspaces) = workspaces::list(conn) else {
         return;
     };
     for ws in workspaces {
-        if tasks::running_in(conn, &ws.id).ok().flatten().is_some() {
-            continue;
-        }
-        if let Ok(Some(task)) = tasks::next_ready(conn, &ws.id) {
-            start(conn, shared, task);
+        for lane in lanes(conn, &ws.id) {
+            if tasks::running_in_lane(conn, &ws.id, lane.as_deref())
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                continue;
+            }
+            if let Ok(Some(task)) = tasks::next_ready(conn, &ws.id, lane.as_deref()) {
+                start(conn, shared, task);
+            }
         }
     }
     // Keep the dashboard's all-lanes view + the review badge live regardless of route.
     super::tasks::project_dashboard(conn, shared);
     super::review::project_awaiting(conn, shared);
+}
+
+/// The workspace's dispatchable lanes: the free lane first, then the oldest
+/// [`db::requests::MAX_ACTIVE`] executing/validating requests (FIFO). Requests beyond the
+/// cap simply have no lane — their tasks are never asked for until a slot frees.
+fn lanes(conn: &rusqlite::Connection, workspace_id: &str) -> Vec<Option<String>> {
+    let mut lanes = vec![None];
+    lanes.extend(
+        db::requests::active_requests(conn, workspace_id, db::requests::MAX_ACTIVE)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|request| Some(request.id)),
+    );
+    lanes
 }
 
 /// Claim a task for its lane (flip to `running`), reflect it, then dispatch the worker. A
@@ -80,11 +103,13 @@ fn start(conn: &rusqlite::Connection, shared: &SharedServerState, task: Task) {
     launch_current(conn, &task);
 }
 
-/// Git-ify the workspace (lazy meta-repo + project births) and record each repo's pre-task
-/// HEAD at the task's first launch (G0) — the bases a restart resets to. Failures are logged,
-/// never blocking the launch: a git-less environment degrades to the pre-G0 behaviour.
+/// Git-ify the workspace (lazy meta-repo + project births), compose the task's lane tree
+/// when it's request-bound (its request's worktree composition, G4), and record each repo's
+/// pre-task HEAD at the task's first launch (G0) — the bases a restart resets to. Failures
+/// are logged, never blocking the launch: a git-less environment degrades to the pre-G0
+/// behaviour.
 fn snapshot_bases(conn: &rusqlite::Connection, task: &Task) {
-    let root = workspace::dir_for(&data_dir(), &task.workspace_id);
+    let root = super::requests::ensure_lane_root(conn, &data_dir(), task);
     for err in crate::gitops::snapshot_task_bases(conn, &root, &task.id) {
         log_line(format!("gitops: snapshot {}: {err}", task.id));
     }
@@ -129,7 +154,9 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
         let inference =
             resolution::resolve_for_agent(conn, &agent_id, &task.workspace_id, env_lookup)
                 .map_err(|err| err.to_string())?;
-        let workspace_dir = workspace::dir_for(&data_dir(), &task.workspace_id);
+        // The lane's tree (G4): a request-bound task lives, reads, and writes in its
+        // request's worktree; free tasks stay on the canonical workspace.
+        let workspace_dir = super::requests::task_root(conn, &data_dir(), task);
         let preamble = step
             .prompt
             .clone()
@@ -217,7 +244,8 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
         let inference =
             resolution::resolve_for_agent(conn, &agent_id, &task.workspace_id, env_lookup)
                 .map_err(|err| err.to_string())?;
-        let workspace_dir = workspace::dir_for(&data_dir(), &task.workspace_id);
+        // Reviews happen where the work happened: the task's lane tree (G4).
+        let workspace_dir = super::requests::task_root(conn, &data_dir(), task);
         let preamble = step
             .validator_prompt
             .clone()
@@ -848,7 +876,9 @@ pub fn finished(
     // leaves the tree dirty so the revise loop's context matches the disk.
     let mut pass_commits: Vec<serde_json::Value> = Vec::new();
     if commits_pass(role, ok) {
-        let root = workspace::dir_for(&data_dir(), &task.workspace_id);
+        // The sweep scans the task's lane tree (G4): the request's worktree for
+        // request-bound work, the canonical workspace for free tasks.
+        let root = super::requests::task_root(conn, &data_dir(), &task);
         // A request-bound pass lands on the request's branch (G1) — cut from develop at
         // each repo's first touch — and carries the Request: trailer.
         let request = task

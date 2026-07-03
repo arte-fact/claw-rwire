@@ -95,6 +95,7 @@ pub(crate) fn diff_row(
         for file in files {
             let payload = serde_json::json!({
                 "workspace": file.workspace,
+                "task": file.task,
                 "repo": file.repo,
                 "sha": file.sha,
                 "path": file.path,
@@ -426,6 +427,7 @@ fn restore_file(app: &mut App, ctx: &EventContext) {
     };
     crate::bridge::send(crate::bridge::Command::RestoreFile {
         workspace: field("workspace"),
+        task: field("task"),
         repo: field("repo"),
         sha: field("sha"),
         path: field("path"),

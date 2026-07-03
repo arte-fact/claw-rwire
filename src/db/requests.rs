@@ -1,8 +1,9 @@
 //! Requests (G1 of `docs/requests.md`): the first-class unit above tasks — one user ask,
 //! from delegation to delivery. A Request owns its plan and tasks (`tasks.request_id`), maps
 //! onto one branch name across every repo it touches (`request_repos` carries the per-repo
-//! branch point and merge commit), and the scheduler lane only picks tasks of the **active**
-//! (oldest executing) request — queued requests activate FIFO as earlier ones deliver.
+//! branch point and merge commit), and each **active** request — the oldest [`MAX_ACTIVE`]
+//! executing/validating ones — holds its own scheduler lane and worktree (G4); requests
+//! beyond the cap queue FIFO and activate as earlier ones deliver.
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -146,22 +147,26 @@ pub fn set_branch(conn: &Connection, id: &str, branch: &str) -> rusqlite::Result
     Ok(())
 }
 
-/// The workspace's **active** request — the oldest executing *or validating* one. The lane
-/// only picks its tasks, and a validating request still holds the lane: the working tree
-/// sits on its branch until it delivers or is abandoned, so a successor must wait.
-pub fn active_for_workspace(
+/// How many requests may execute concurrently per workspace (G4) — each active request gets
+/// its own worktree lane; the free lane (the canonical tree) is separate. Requests beyond
+/// the cap queue FIFO. Deliberately small: every lane costs a full working copy on disk and
+/// a concurrent build's CPU.
+pub const MAX_ACTIVE: usize = 2;
+
+/// The workspace's **active** requests — the oldest `limit` executing *or validating* ones,
+/// FIFO. Each holds a lane (its worktree) until delivered/abandoned; a validating request
+/// still holds its slot — its tree sits on the branch awaiting the macro review.
+pub fn active_requests(
     conn: &Connection,
     workspace_id: &str,
-) -> rusqlite::Result<Option<Request>> {
-    conn.query_row(
-        &format!(
-            "{SELECT} WHERE workspace_id = ?1 AND status IN ('executing','validating')
-              ORDER BY created_at LIMIT 1"
-        ),
-        params![workspace_id],
-        from_row,
-    )
-    .optional()
+    limit: usize,
+) -> rusqlite::Result<Vec<Request>> {
+    let mut stmt = conn.prepare(&format!(
+        "{SELECT} WHERE workspace_id = ?1 AND status IN ('executing','validating')
+          ORDER BY created_at LIMIT ?2"
+    ))?;
+    let rows = stmt.query_map(params![workspace_id, limit as i64], from_row)?;
+    rows.collect()
 }
 
 /// Every open (planning / executing) request of a workspace, oldest first — the digest's view.
@@ -254,40 +259,45 @@ mod tests {
     }
 
     #[test]
-    fn lane_scoping_only_runs_the_active_requests_tasks() {
+    fn lanes_scope_tasks_to_their_request_and_the_free_lane() {
         let conn = seeded();
         create(&conn, "r1", "ws", None, "first", "first").expect("r1");
         create(&conn, "r2", "ws", None, "second", "second").expect("r2");
         set_status(&conn, "r1", RequestStatus::Executing).expect("s");
         set_status(&conn, "r2", RequestStatus::Executing).expect("s");
-        task(&conn, "t-r2", Some("r2")); // oldest task, but its request is queued
+        task(&conn, "t-r2", Some("r2"));
         task(&conn, "t-r1", Some("r1"));
         task(&conn, "t-free", None);
 
-        // Only the active request's task and the free-standing one are eligible.
-        let first = crate::db::tasks::next_ready(&conn, "ws")
-            .expect("scan")
-            .expect("some");
-        assert_ne!(first.id, "t-r2", "a queued request's task must wait");
-        crate::db::tasks::finish(&conn, "t-r1", crate::db::tasks::TaskStatus::Done, None)
-            .expect("done");
-        crate::db::tasks::finish(&conn, "t-free", crate::db::tasks::TaskStatus::Done, None)
-            .expect("done");
+        // Each lane sees only its own tasks — two active requests dispatch concurrently
+        // (G4), and the free lane never picks up request-bound work (or vice versa).
+        let pick = |lane: Option<&str>| {
+            crate::db::tasks::next_ready(&conn, "ws", lane)
+                .expect("scan")
+                .map(|task| task.id)
+        };
+        assert_eq!(pick(Some("r1")).as_deref(), Some("t-r1"));
+        assert_eq!(pick(Some("r2")).as_deref(), Some("t-r2"));
+        assert_eq!(pick(None).as_deref(), Some("t-free"));
+
+        // A running task holds only its own lane.
+        crate::db::tasks::set_status(&conn, "t-r1", crate::db::tasks::TaskStatus::Running)
+            .expect("claim");
         assert!(
-            crate::db::tasks::next_ready(&conn, "ws")
+            crate::db::tasks::running_in_lane(&conn, "ws", Some("r1"))
+                .expect("scan")
+                .is_some()
+        );
+        assert!(
+            crate::db::tasks::running_in_lane(&conn, "ws", Some("r2"))
                 .expect("scan")
                 .is_none(),
-            "r2's task stays invisible while r1 is still the active request"
+            "r2's lane stays free while r1's task runs"
         );
-
-        // Delivering r1 activates r2 FIFO — its task becomes eligible.
-        set_status(&conn, "r1", RequestStatus::Delivered).expect("s");
-        assert_eq!(
-            crate::db::tasks::next_ready(&conn, "ws")
+        assert!(
+            crate::db::tasks::running_in_lane(&conn, "ws", None)
                 .expect("scan")
-                .expect("some")
-                .id,
-            "t-r2"
+                .is_none()
         );
     }
 
@@ -315,33 +325,38 @@ mod tests {
     }
 
     #[test]
-    fn active_request_is_the_oldest_executing_fifo() {
+    fn active_requests_are_the_oldest_executing_fifo_capped() {
         let conn = seeded();
         for id in ["r1", "r2", "r3"] {
             create(&conn, id, "ws", None, id, id).expect("create");
         }
-        // Nothing executing yet — no active request (planning doesn't hold the lane).
-        assert!(active_for_workspace(&conn, "ws").expect("active").is_none());
+        // Nothing executing yet — no active request (planning doesn't hold a lane).
+        assert!(
+            active_requests(&conn, "ws", MAX_ACTIVE)
+                .expect("a")
+                .is_empty()
+        );
 
+        set_status(&conn, "r1", RequestStatus::Executing).expect("s");
         set_status(&conn, "r2", RequestStatus::Executing).expect("s");
         set_status(&conn, "r3", RequestStatus::Executing).expect("s");
-        assert_eq!(
-            active_for_workspace(&conn, "ws")
-                .expect("active")
-                .expect("some")
-                .id,
-            "r2",
-            "oldest executing wins"
-        );
-        // Delivery frees the lane for the next queued request.
-        set_status(&conn, "r2", RequestStatus::Delivered).expect("s");
-        assert_eq!(
-            active_for_workspace(&conn, "ws")
-                .expect("active")
-                .expect("some")
-                .id,
-            "r3"
-        );
+        let ids: Vec<String> = active_requests(&conn, "ws", 2)
+            .expect("a")
+            .into_iter()
+            .map(|req| req.id)
+            .collect();
+        assert_eq!(ids, ["r1", "r2"], "oldest two hold the lanes; r3 queues");
+
+        // Delivery frees a lane for the next queued request FIFO; a validating request
+        // still holds its slot (its tree awaits the macro review).
+        set_status(&conn, "r1", RequestStatus::Delivered).expect("s");
+        set_status(&conn, "r2", RequestStatus::Validating).expect("s");
+        let ids: Vec<String> = active_requests(&conn, "ws", 2)
+            .expect("a")
+            .into_iter()
+            .map(|req| req.id)
+            .collect();
+        assert_eq!(ids, ["r2", "r3"]);
     }
 
     #[test]
