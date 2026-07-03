@@ -112,7 +112,7 @@ fn commit_pass_commits_every_dirty_repo_with_author_and_trailers() {
     write(&root, "docs/note.md", "notes");
     write(&root, "projects/app/src/lib.rs", "pub fn f() {}");
 
-    let (commits, errors) = commit_pass(&root, Some("forge"), "build: the app", "t1", "r1");
+    let (commits, errors) = commit_pass(&root, Some("forge"), "build: the app", "t1", "r1", None);
     assert_eq!(errors, Vec::<String>::new());
     // Meta (docs/note.md) + the newborn projects/app committed; the clean repo untouched.
     let repos_hit: Vec<&str> = commits.iter().map(|c| c.repo.as_str()).collect();
@@ -173,7 +173,7 @@ fn restart_reset_returns_the_tree_to_the_pre_task_state() {
     // The task works: a successful pass commits, then a failed pass leaves dirt everywhere.
     write(&root, "docs/keep.md", "clobbered by the task");
     write(&root, "projects/app/src/lib.rs", "pub fn broken() {}");
-    let (commits, errors) = commit_pass(&root, Some("forge"), "step: t", "t1", "r1");
+    let (commits, errors) = commit_pass(&root, Some("forge"), "step: t", "t1", "r1", None);
     assert_eq!(errors, Vec::<String>::new());
     assert_eq!(commits.len(), 2);
     write(&root, "docs/untracked-leftover.md", "from the failed pass");
@@ -210,4 +210,68 @@ fn harness_git_never_runs_repo_hooks() {
         "the planted hook must never execute under harness git"
     );
     assert!(!is_dirty(&root).expect("status"), "the commit landed");
+}
+
+#[test]
+fn request_branch_is_cut_once_and_passes_land_on_it() {
+    // G1: the first request-bound pass cuts req/… from develop's tip (reporting the branch
+    // point); later passes land on the same branch with the Request: trailer.
+    let root = scratch("req-branch");
+    ensure_meta_repo(&root).expect("meta");
+    let develop_tip = head(&root).expect("head");
+    write(&root, "docs/step1.md", "one");
+
+    let request = Some(RequestRef {
+        id: "req-1",
+        branch: "req/req1-thing",
+    });
+    let (commits, errors) = commit_pass(&root, Some("forge"), "s1: t", "t1", "r1", request);
+    assert_eq!(errors, Vec::<String>::new());
+    assert_eq!(
+        commits[0].request_base.as_deref(),
+        Some(develop_tip.as_str()),
+        "first touch reports the branch point"
+    );
+    assert_eq!(current_branch(&root).expect("branch"), "req/req1-thing");
+    assert!(log_message(&root, "HEAD").contains("Request: req-1"));
+
+    // Second pass: same branch, no new cut.
+    write(&root, "docs/step2.md", "two");
+    let (commits, errors) = commit_pass(&root, Some("forge"), "s2: t", "t1", "r2", request);
+    assert_eq!(errors, Vec::<String>::new());
+    assert!(commits[0].request_base.is_none(), "already on the branch");
+    // develop never moved — the request's work is isolated on its branch.
+    let develop_now = git(&root, &["rev-parse", "develop"]).expect("develop");
+    assert_eq!(develop_now, develop_tip);
+}
+
+#[test]
+fn delivery_merges_no_ff_into_develop_and_totals_the_diff() {
+    let root = scratch("deliver");
+    ensure_meta_repo(&root).expect("meta");
+    write(&root, "docs/feature.md", "line one\nline two\n");
+    let request = Some(RequestRef {
+        id: "req-2",
+        branch: "req/req2-feat",
+    });
+    let (commits, errors) = commit_pass(&root, Some("forge"), "build: f", "t1", "r1", request);
+    assert_eq!(errors, Vec::<String>::new());
+    let base = commits[0].request_base.clone().expect("cut");
+
+    let merge =
+        deliver_repo(&root, "req/req2-feat", "Deliver: feat\n\nRequest: req-2").expect("deliver");
+    assert_eq!(current_branch(&root).expect("branch"), "develop");
+    // A real --no-ff merge commit: two parents, carrying the Request trailer.
+    let parents = git(&root, &["rev-list", "--parents", "-1", &merge]).expect("parents");
+    assert_eq!(parents.split_whitespace().count(), 3, "{parents}");
+    assert!(log_message(&root, &merge).contains("Request: req-2"));
+    // The delivered diff totals the request's change.
+    let (files, adds, dels) = diff_numstat(&root, &format!("{base}..{merge}")).expect("numstat");
+    assert_eq!((files, adds, dels), (1, 2, 0));
+    // Delivering over a dirty tree is refused.
+    write(&root, "docs/dirt.md", "x");
+    assert!(matches!(
+        deliver_repo(&root, "req/req2-feat", "again"),
+        Err(GitError::DirtyTree)
+    ));
 }

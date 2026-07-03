@@ -100,6 +100,11 @@ pub fn materialize(
             max_retries: None,
         };
         create_planned(conn, &new, plan_id)?;
+        // A plan born from an ask carries its Request (G1) — every materialised child
+        // inherits it, so the lane can scope to the request and delivery can find them.
+        if let Some(request_id) = &plan.request_id {
+            super::set_request(conn, &new_id, request_id)?;
+        }
         by_title.push((item.title.clone(), new_id.clone()));
         created.push((new_id, item.blockers.clone()));
     }

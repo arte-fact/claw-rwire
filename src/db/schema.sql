@@ -236,6 +236,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   is_plan         INTEGER NOT NULL DEFAULT 0,          -- a reviewable "Plan" gate task (R3), not pipeline work
   plan_id         TEXT,                                -- a task materialised from a plan: the plan it came from (R3)
   proposal        TEXT,                                -- a plan task's proposed breakdown as JSON, before approval (R3 Option A)
+  request_id      TEXT,                                -- the Request this task belongs to (G1); NULL = a free-standing board task
   archived_at     TEXT,                                -- a terminal task hidden from the board to declutter it
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
@@ -374,4 +375,33 @@ CREATE TABLE IF NOT EXISTS task_repos (
   base_commit TEXT NOT NULL,
   created_at  TEXT NOT NULL,
   PRIMARY KEY (task_id, repo)
+);
+
+-- Requests (G1 of docs/requests.md): the first-class unit above tasks — one user ask,
+-- materialized from plan to delivery. `branch` is the request's branch name (the same in
+-- every repo it touches, set at plan approval); per-repo base/merge commits live in
+-- request_repos. Additive (claw-rwire-only).
+CREATE TABLE IF NOT EXISTS requests (
+  id             TEXT PRIMARY KEY,
+  workspace_id   TEXT NOT NULL REFERENCES workspaces(id),
+  origin_chat_id TEXT,
+  title          TEXT NOT NULL,           -- short, from the ask's first line
+  ask            TEXT NOT NULL,           -- the user's words, verbatim (the validation contract)
+  status         TEXT NOT NULL DEFAULT 'planning',  -- planning|executing|delivered|rejected|abandoned
+  branch         TEXT,                    -- req/<short-id>-<slug>
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_requests_lane ON requests(workspace_id, status, created_at);
+
+-- The 1..n (repo, branch) set per request: '' = the workspace meta-repo, else
+-- 'projects/<name>'. `base_commit` is the branch point (develop at first touch; for a
+-- fresh clone, upstream HEAD); `merge_commit` is set at delivery.
+CREATE TABLE IF NOT EXISTS request_repos (
+  request_id   TEXT NOT NULL REFERENCES requests(id),
+  repo         TEXT NOT NULL,
+  branch       TEXT NOT NULL,
+  base_commit  TEXT NOT NULL,
+  merge_commit TEXT,
+  PRIMARY KEY (request_id, repo)
 );

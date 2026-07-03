@@ -548,6 +548,28 @@ pub(crate) fn status_digest(conn: &rusqlite::Connection) -> Option<String> {
         if queued > 0 {
             parts.push(format!("queued: {queued}"));
         }
+        // Open requests (G1): the ask-level view — the user tracks requests, not task
+        // confetti. Only the active (oldest executing) request holds the lane; later
+        // executing ones wait FIFO behind it.
+        let active = crate::db::requests::active_for_workspace(conn, &ws.id)
+            .ok()
+            .flatten();
+        for request in crate::db::requests::open_for_workspace(conn, &ws.id).unwrap_or_default() {
+            let progress = match request.status {
+                crate::db::requests::RequestStatus::Executing
+                    if active.as_ref().is_some_and(|a| a.id == request.id) =>
+                {
+                    let total = crate::db::tasks::count_for_request(conn, &request.id).unwrap_or(0);
+                    let open = crate::db::tasks::open_for_request(conn, &request.id).unwrap_or(0);
+                    format!("executing, {}/{total} task(s) done", (total - open).max(0))
+                }
+                crate::db::requests::RequestStatus::Executing => {
+                    "queued behind the active request".to_owned()
+                }
+                _ => "planning — awaiting the plan".to_owned(),
+            };
+            parts.push(format!("request \"{}\" ({progress})", request.title));
+        }
         if !parts.is_empty() {
             lines.push(format!("- {} — {}", ws.name, parts.join("; ")));
         }

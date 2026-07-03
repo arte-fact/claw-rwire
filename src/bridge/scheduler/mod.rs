@@ -820,18 +820,39 @@ pub fn finished(
     // dirty so the revise loop's context matches the disk.
     if commits_pass(role, ok) {
         let root = workspace::dir_for(&data_dir(), &task.workspace_id);
+        // A request-bound pass lands on the request's branch (G1) — cut from develop at
+        // each repo's first touch — and carries the Request: trailer.
+        let request = task
+            .request_id
+            .as_deref()
+            .and_then(|request_id| db::requests::get(conn, request_id).ok().flatten())
+            .filter(|req| req.status == db::requests::RequestStatus::Executing);
+        let request_ref = request.as_ref().and_then(|req| {
+            req.branch
+                .as_deref()
+                .map(|branch| crate::gitops::RequestRef {
+                    id: &req.id,
+                    branch,
+                })
+        });
         let (commits, errors) = crate::gitops::commit_pass(
             &root,
             agent.as_deref(),
             &pass_subject(step.as_ref(), &task),
             &task.id,
             run_id.as_deref().unwrap_or("unrecorded"),
+            request_ref,
         );
         for pass in commits {
             // A repo born mid-task has no launch-time base — its pre-pass seed commit
             // becomes the base a restart resets to (first write wins for known repos).
             if let Some(base) = pass.base_before {
                 let _ = db::task_repos::record_base(conn, &task.id, &pass.repo, &base);
+            }
+            // The request's first touch of this repo: record the branch point (the base
+            // its delivery diff and pre-merge rollbacks anchor on).
+            if let (Some(base), Some(req)) = (&pass.request_base, &request_ref) {
+                let _ = db::requests::record_repo(conn, req.id, &pass.repo, req.branch, base);
             }
             let repo = if pass.repo.is_empty() {
                 "workspace"

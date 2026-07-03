@@ -5,11 +5,13 @@
 //! the async runtime), and commits are authored `claw <agent-id@claw>` so history shows
 //! which agent made each pass.
 
+mod requests;
 mod sweep;
 mod task_tree;
 #[cfg(test)]
 mod tests;
 
+pub use requests::{RequestRef, deliver_repo};
 pub use sweep::{commit_pass, ensure_meta_repo, repos};
 pub use task_tree::{reset_task_tree, snapshot_task_bases};
 
@@ -26,6 +28,8 @@ pub enum GitError {
     Command { args: String, stderr: String },
     #[error("repo path escapes the workspace")]
     Jail,
+    #[error("the working tree is dirty — refusing to merge")]
+    DirtyTree,
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -130,6 +134,22 @@ pub fn untracked(dir: &Path) -> Result<String, GitError> {
     git(dir, &["ls-files", "--others", "--exclude-standard"])
 }
 
+/// Totals of `git diff --numstat <range>`: (files, insertions, deletions) — the delivery
+/// receipt's "+A/−D across F files". Binary files count as a file with 0/0 lines.
+pub fn diff_numstat(dir: &Path, range: &str) -> Result<(u64, u64, u64), GitError> {
+    let out = git(dir, &["--no-pager", "diff", "--numstat", range])?;
+    let (mut files, mut adds, mut dels) = (0, 0, 0);
+    for line in out.lines() {
+        let mut cols = line.split('\t');
+        let added = cols.next().unwrap_or("0");
+        let deleted = cols.next().unwrap_or("0");
+        files += 1;
+        adds += added.parse::<u64>().unwrap_or(0);
+        dels += deleted.parse::<u64>().unwrap_or(0);
+    }
+    Ok((files, adds, dels))
+}
+
 /// Whether the working tree differs from HEAD (`status --porcelain` non-empty; untracked
 /// files count, ignored ones don't).
 pub fn is_dirty(dir: &Path) -> Result<bool, GitError> {
@@ -143,26 +163,27 @@ pub fn commit_all(dir: &Path, agent: Option<&str>, message: &str) -> Result<Stri
     commit(dir, agent, message)
 }
 
-/// Commit what's staged, authored `claw <agent@claw>` (identity passed per-invocation so no
-/// global config is touched, and signing is off so a host gpg setup can't fail the harness).
+/// Commit what's staged, authored `claw <agent@claw>`.
 pub fn commit(dir: &Path, agent: Option<&str>, message: &str) -> Result<String, GitError> {
-    let email = format!("{}@claw", email_local_part(agent));
-    git(
-        dir,
-        &[
-            "-c",
-            "user.name=claw",
-            "-c",
-            &format!("user.email={email}"),
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "--allow-empty",
-            "-m",
-            message,
-        ],
-    )?;
+    git_as(dir, agent, &["commit", "--allow-empty", "-m", message])?;
     head(dir)
+}
+
+/// Run git with the harness commit identity (`claw <agent@claw>`, signing off) — for
+/// anything that creates commits (commit, delivery merge). Identity rides per-invocation
+/// `-c` flags so no repo or global config is ever touched.
+fn git_as(dir: &Path, agent: Option<&str>, args: &[&str]) -> Result<String, GitError> {
+    let email_cfg = format!("user.email={}@claw", email_local_part(agent));
+    let mut full: Vec<&str> = vec![
+        "-c",
+        "user.name=claw",
+        "-c",
+        &email_cfg,
+        "-c",
+        "commit.gpgsign=false",
+    ];
+    full.extend_from_slice(args);
+    git(dir, &full)
 }
 
 /// Reset the working tree to `commit` and drop untracked files (`clean -fd` respects

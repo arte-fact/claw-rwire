@@ -115,6 +115,12 @@ pub fn next_ready(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Opt
         &format!(
             "{SELECT} WHERE workspace_id = ?1 AND status = 'pending' AND is_plan = 0
                AND (next_run IS NULL OR next_run <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+               -- Lane scoping (G1): a request-bound task only runs while its request is the
+               -- workspace's ACTIVE one (the oldest executing); queued requests wait FIFO.
+               -- Free-standing board tasks (request_id NULL) interleave as before.
+               AND (request_id IS NULL OR request_id = (
+                     SELECT id FROM requests WHERE workspace_id = ?1 AND status = 'executing'
+                      ORDER BY created_at LIMIT 1))
                AND NOT EXISTS (
                  SELECT 1 FROM task_blockers b JOIN tasks bt ON bt.id = b.blocked_by
                   WHERE b.task_id = tasks.id AND bt.status != 'done')

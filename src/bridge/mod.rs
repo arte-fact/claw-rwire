@@ -28,6 +28,7 @@ mod notify;
 mod orchestrate;
 mod prompts;
 mod replay;
+mod requests;
 mod review;
 mod scheduler;
 mod seed;

@@ -32,6 +32,27 @@ pub fn ask(conn: &rusqlite::Connection, workspace: &str, request: &str, origin_c
     ) {
         return log_line(format!("orchestrate: create plan failed: {err}"));
     }
+    // The Request (G1): the ask, verbatim, becomes the first-class unit the plan and its
+    // materialised tasks hang off. A failure here degrades to the pre-G1 request-less flow.
+    match crate::id::new_id() {
+        Ok(request_id) => {
+            let created = db::requests::create(
+                conn,
+                &request_id,
+                workspace,
+                Some(origin_chat),
+                &request_title(request),
+                request,
+            );
+            match created {
+                Ok(()) => {
+                    let _ = crate::db::tasks::set_request(conn, &plan_id, &request_id);
+                }
+                Err(err) => log_line(format!("orchestrate: create request failed: {err}")),
+            }
+        }
+        Err(err) => log_line(format!("orchestrate: mint request id failed: {err}")),
+    }
     let auto_approve = workspaces::get(conn, workspace)
         .ok()
         .flatten()
@@ -190,6 +211,10 @@ pub fn planned(
                     db::tasks::TaskStatus::Done,
                     Some("auto-approved"),
                 );
+                // Auto-approval opens the Request exactly like a human approve (G1).
+                if let Ok(Some(plan)) = db::tasks::get(conn, plan_id) {
+                    super::requests::on_plan_approved(conn, &plan);
+                }
                 log_line(format!(
                     "orchestrate: auto-approved plan {plan_id} → {count} task(s)"
                 ));
@@ -218,6 +243,17 @@ pub fn planned(
         rwire::ChangeSet::from_fields(&[App::FIELD_ACTIVITY]),
         move |app| push_activity(app, title, kind, detail, None, None),
     );
+}
+
+/// A Request's short title — the ask's first line, capped (no `Plan:` prefix; the request
+/// names the *ask*, not the gate).
+fn request_title(request: &str) -> String {
+    let capped = crate::text::first_line_capped(request, 60);
+    if capped.is_empty() {
+        "request".to_owned()
+    } else {
+        capped
+    }
 }
 
 /// A short title for a plan task — `Plan: <first line of the request>`, capped.

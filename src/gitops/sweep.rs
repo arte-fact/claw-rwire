@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use super::requests::{RequestRef, ensure_on_request_branch};
 use super::{GitError, commit, commit_all, git, head, is_dirty, is_repo, repo_dir};
 
 /// The repo rel of the workspace meta-repo (the workspace root itself).
@@ -119,23 +120,32 @@ pub struct PassCommit {
     /// the repo first appears mid-task. `None` only for a repo with no prior commit at all
     /// (an agent-made bare `git init`), where there is no pre-pass state to reset to.
     pub base_before: Option<String>,
+    /// The branch point when this pass cut the request's branch in this repo (its first
+    /// touch, G1) — the caller records it as the `request_repos` base. `None` otherwise.
+    pub request_base: Option<String>,
 }
 
 /// The harness commit step: after a successful producer/stage pass, commit every dirty repo
-/// (meta + projects) with the structured message + `Task:`/`Run:` trailers, birthing repos
-/// for project dirs that appeared during the pass. Failed passes never reach this — the
-/// revise loop's context must match the (deliberately dirty) disk. Returns the commits made
-/// and any per-repo errors.
+/// (meta + projects) with the structured message + `Request:`/`Task:`/`Run:` trailers,
+/// birthing repos for project dirs that appeared during the pass. A request-bound pass lands
+/// on the request's branch, cut from `develop` at the repo's first touch — a branch failure
+/// is collected but never loses work (the commit falls back to wherever HEAD is). Failed
+/// passes never reach this — the revise loop's context must match the (deliberately dirty)
+/// disk. Returns the commits made and any per-repo errors.
 pub fn commit_pass(
     root: &Path,
     agent: Option<&str>,
     subject: &str,
     task_id: &str,
     run_id: &str,
+    request: Option<RequestRef<'_>>,
 ) -> (Vec<PassCommit>, Vec<String>) {
     let mut errors = ensure_workspace_repos(root);
     let mut commits = Vec::new();
-    let message = format!("{subject}\n\nTask: {task_id}\nRun: {run_id}");
+    let request_trailer = request
+        .map(|req| format!("Request: {}\n", req.id))
+        .unwrap_or_default();
+    let message = format!("{subject}\n\n{request_trailer}Task: {task_id}\nRun: {run_id}");
     for repo in repos(root) {
         let dir = match repo_dir(root, &repo) {
             Ok(dir) => dir,
@@ -147,12 +157,23 @@ pub fn commit_pass(
         match is_dirty(&dir) {
             Ok(false) => continue,
             Ok(true) => {
+                let request_base = match request {
+                    Some(req) => match ensure_on_request_branch(&dir, req.branch) {
+                        Ok(base) => base,
+                        Err(err) => {
+                            errors.push(format!("{repo}: request branch: {err}"));
+                            None
+                        }
+                    },
+                    None => None,
+                };
                 let base_before = head(&dir).ok();
                 match commit_all(&dir, agent, &message) {
                     Ok(commit) => commits.push(PassCommit {
                         repo,
                         commit,
                         base_before,
+                        request_base,
                     }),
                     Err(err) => errors.push(format!("{repo}: {err}")),
                 }

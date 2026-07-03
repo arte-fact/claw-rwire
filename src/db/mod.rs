@@ -7,6 +7,7 @@ pub mod agents;
 pub mod chat;
 pub mod endpoints;
 pub mod pipeline;
+pub mod requests;
 pub mod resolution;
 pub mod settings;
 pub mod task_repos;
@@ -78,6 +79,7 @@ fn apply_schema(conn: &Connection) -> Result<(), DbError> {
 /// created (`CREATE TABLE IF NOT EXISTS` can't alter an existing table). Each step is
 /// idempotent, so this runs safely on every open. rust-claw never reads these tables.
 fn migrate(conn: &Connection) -> Result<(), DbError> {
+    add_task_request_column(conn).map_err(DbError::Schema)?;
     add_workspace_owner_column(conn).map_err(DbError::Schema)?;
     widen_agent_workspaces_to_m_n(conn).map_err(DbError::Schema)?;
     add_agent_memory_paused_column(conn).map_err(DbError::Schema)?;
@@ -91,6 +93,16 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_task_proposal_column(conn).map_err(DbError::Schema)?;
     add_task_archived_column(conn).map_err(DbError::Schema)?;
     Ok(())
+}
+
+/// Add `tasks.request_id` (the Request a task belongs to, G1) to a DB that predates it. A
+/// fresh DB already has it from the schema, so the ALTER fails "duplicate column" — ignored.
+fn add_task_request_column(conn: &Connection) -> rusqlite::Result<()> {
+    match conn.execute("ALTER TABLE tasks ADD COLUMN request_id TEXT", []) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 /// Add `tasks.archived_at` (a terminal task hidden from the board) to a DB that predates it. A

@@ -266,6 +266,9 @@ pub(super) fn terminal_finish(
     }
     super::super::tasks::project_if_active(conn, shared, &task.workspace_id);
     super::super::tasks::refresh_detail_if_open(conn, shared, &task.id);
+    // A request task landing may complete the whole request — delivery v0 (G1) merges the
+    // request branch to develop per repo and drops the receipt into the origin chat.
+    super::super::requests::maybe_deliver(conn, task);
     if let Some(chat) = &task.origin_chat {
         super::super::notify::completion(chat, &task.title, status.as_str(), output);
     }
@@ -462,6 +465,8 @@ pub(super) fn plan_verdict(
                     }
                 }
                 let _ = tasks::finish(conn, &task.id, TaskStatus::Done, Some("approved"));
+                // Approving the plan opens the Request (G1): mint its branch, go executing.
+                super::super::requests::on_plan_approved(conn, task);
                 activity(
                     shared,
                     task,
@@ -471,9 +476,11 @@ pub(super) fn plan_verdict(
             }
         }
         "reject" => {
-            // Nothing was created — just discard the proposal and close the gate.
+            // Nothing was created — just discard the proposal and close the gate. The
+            // request closes with it: no branch was ever cut.
             let _ = tasks::proposal::clear(conn, &task.id);
             let _ = tasks::finish(conn, &task.id, TaskStatus::Rejected, Some(feedback));
+            super::super::requests::on_plan_rejected(conn, task);
             activity(
                 shared,
                 task,

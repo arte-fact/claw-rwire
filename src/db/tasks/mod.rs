@@ -125,12 +125,14 @@ pub struct Task {
     pub archived_at: Option<String>,
     /// ISO-8601 UTC creation stamp — the agent thread orders its "task opened" turn by it.
     pub created_at: String,
+    /// The Request this task belongs to (G1) — `None` for a free-standing board task.
+    pub request_id: Option<String>,
 }
 
 const SELECT: &str = "SELECT id, workspace_id, agent_group_id, title, spec, kind, schedule, \
                       status, result, priority, origin_chat_id, next_run, step_position, \
                       iteration, run_epoch, auto_retries, max_retries, attempt, is_plan, plan_id, \
-                      archived_at, created_at \
+                      archived_at, created_at, request_id \
                       FROM tasks";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
@@ -157,6 +159,7 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         plan_id: row.get(19)?,
         archived_at: row.get(20)?,
         created_at: row.get(21)?,
+        request_id: row.get(22)?,
     })
 }
 
@@ -275,6 +278,37 @@ pub fn set_result(conn: &Connection, id: &str, result: &str) -> rusqlite::Result
         params![id, result],
     )?;
     Ok(())
+}
+
+/// Attach a task to a Request (G1) — set on the plan at ask time and on each materialised
+/// child, so the lane can scope to the active request and delivery can find its task set.
+pub fn set_request(conn: &Connection, id: &str, request_id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE tasks SET request_id = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?1",
+        params![id, request_id],
+    )?;
+    Ok(())
+}
+
+/// How many of a request's tasks are **not** `done` yet (any status — pending, running,
+/// awaiting, failed, cancelled…). Zero means every task landed: the delivery condition.
+pub fn open_for_request(conn: &Connection, request_id: &str) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE request_id = ?1 AND status != 'done'",
+        params![request_id],
+        |row| row.get(0),
+    )
+}
+
+/// How many work tasks a request materialised (the plan gate excluded) — the receipt's
+/// "N task(s)" and the digest's progress denominator.
+pub fn count_for_request(conn: &Connection, request_id: &str) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE request_id = ?1 AND is_plan = 0",
+        params![request_id],
+        |row| row.get(0),
+    )
 }
 
 /// Cancel a task (a terminal status; it stays on the board as a record). Bumps `run_epoch` so a

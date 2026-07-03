@@ -521,6 +521,7 @@ mod tests {
             plan_id: None,
             archived_at: None,
             created_at: String::new(),
+            request_id: None,
         }
     }
 
