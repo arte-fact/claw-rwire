@@ -23,6 +23,9 @@ use super::{ToolDef, ToolOutcome, Toolbox};
 pub const ASK: &str = "ask";
 pub const BOARD_STATUS: &str = "board_status";
 pub const READ_FILE: &str = "read_file";
+pub const REPO_STATUS: &str = "repo_status";
+pub const REPO_LOG: &str = "repo_log";
+pub const REPO_DIFF: &str = "repo_diff";
 
 /// Cap what a read lands in the conversation — the model needs the gist, not a megabyte.
 const READ_CAP_CHARS: usize = 8_000;
@@ -69,6 +72,43 @@ impl ConciergeToolbox {
             None => ToolOutcome::text(
                 "All lanes are quiet — nothing running, awaiting review, or queued.",
             ),
+        }
+    }
+
+    /// Resolve the `workspace` argument to its directory, refusing unknown ids — shared by
+    /// every workspace-scoped read tool.
+    fn workspace_root(&self, args: &Value) -> Result<PathBuf, String> {
+        let workspace = args
+            .get("workspace")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if !self.workspaces.iter().any(|w| w.id == workspace) {
+            return Err(format!("error: no workspace {workspace:?}"));
+        }
+        Ok(workspace::dir_for(&self.data_dir, workspace))
+    }
+
+    /// The read-only git surface, workspace-parameterized (the chat has no task anchor —
+    /// diffs default to uncommitted-vs-HEAD). Bodies shared with the task-side `RepoToolbox`.
+    fn repo_tool(&self, name: &str, arguments: &str) -> ToolOutcome {
+        let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+        let result = self.workspace_root(&args).and_then(|root| {
+            let repo = args
+                .get("repo")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            match name {
+                REPO_STATUS => Ok(super::repo::status_text(&root)),
+                REPO_LOG => super::repo::log_for(&root, repo, args.get("count")),
+                REPO_DIFF => super::repo::diff_for(&root, repo),
+                _ => Err(format!("error: no tool named {name}")),
+            }
+        });
+        match result {
+            Ok(text) => ToolOutcome::text(text),
+            Err(err) => ToolOutcome::error(err),
         }
     }
 
@@ -154,6 +194,53 @@ impl Toolbox for ConciergeToolbox {
                 "required": ["workspace", "path"]
             }),
         });
+        let repo_schema = json!({
+            "type": "string",
+            "description": "Which repo in that workspace: omit for the workspace meta-repo \
+                            (AGENT.md, docs/, skills/), or projects/<name> (bare <name> works).",
+        });
+        defs.push(ToolDef {
+            name: REPO_STATUS.to_owned(),
+            description: "Git status of a workspace's repos (meta-repo + each project): \
+                          branch, latest commit, uncommitted changes. Every successful task \
+                          pass is committed automatically — use this to see work land."
+                .to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "workspace": workspace_schema.clone() },
+                "required": ["workspace"]
+            }),
+        });
+        defs.push(ToolDef {
+            name: REPO_LOG.to_owned(),
+            description: "Recent commits of one repo in a workspace, newest first — each \
+                          task pass is one commit with Task:/Run: trailers."
+                .to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_schema.clone(),
+                    "repo": repo_schema.clone(),
+                    "count": { "type": "integer", "description": "How many commits (default 10, max 30)." }
+                },
+                "required": ["workspace"]
+            }),
+        });
+        defs.push(ToolDef {
+            name: REPO_DIFF.to_owned(),
+            description: "Uncommitted changes in one repo of a workspace (stat + new files \
+                          + capped patch) — what the current task has touched but not yet \
+                          landed."
+                .to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_schema.clone(),
+                    "repo": repo_schema,
+                },
+                "required": ["workspace"]
+            }),
+        });
         defs.push(ToolDef {
             name: ASK.to_owned(),
             description: format!(
@@ -181,6 +268,7 @@ impl Toolbox for ConciergeToolbox {
         match name {
             BOARD_STATUS => return self.board_status(),
             READ_FILE => return self.read_file(arguments),
+            REPO_STATUS | REPO_LOG | REPO_DIFF => return self.repo_tool(name, arguments),
             ASK => {}
             other => return ToolOutcome::error(format!("error: no tool named {other}")),
         }
@@ -255,12 +343,39 @@ mod tests {
     }
 
     #[test]
-    fn defs_expose_status_read_and_ask() {
+    fn defs_expose_status_read_repo_and_ask() {
         let defs = toolbox().defs();
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, vec![BOARD_STATUS, READ_FILE, ASK]);
-        let enum_values = &defs[2].parameters["properties"]["workspace"]["enum"];
+        assert_eq!(
+            names,
+            vec![
+                BOARD_STATUS,
+                READ_FILE,
+                REPO_STATUS,
+                REPO_LOG,
+                REPO_DIFF,
+                ASK
+            ]
+        );
+        let enum_values = &defs[5].parameters["properties"]["workspace"]["enum"];
         assert!(enum_values.to_string().contains("site"));
+    }
+
+    #[test]
+    fn repo_tools_are_workspace_scoped_and_degrade_without_git() {
+        let dir = std::env::temp_dir().join(format!("claw-concierge-repo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("workspaces").join("site")).expect("mkdir");
+        let tools = toolbox_at(dir);
+
+        // A git-less workspace reads as "not yet", not an error.
+        let status = tools.call(REPO_STATUS, r#"{"workspace":"site"}"#);
+        assert!(status.ok, "{}", status.result);
+        assert!(status.result.contains("no git repos"), "{}", status.result);
+
+        // Unknown workspaces are refused like read_file.
+        let ghost = tools.call(REPO_LOG, r#"{"workspace":"ghost"}"#);
+        assert!(!ghost.ok && ghost.result.contains("no workspace"));
     }
 
     #[test]

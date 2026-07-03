@@ -141,7 +141,12 @@ impl Toolbox for CoderToolbox {
         };
         match name {
             BASH => match str_arg(&args, "command") {
-                Ok(command) => ToolOutcome::text(exec::bash_in(&self.exec, command)),
+                // Git writes are fenced (the harness owns commits/branches/pushes); the
+                // model sees why and which read-only paths remain open.
+                Ok(command) => match super::git_screen::screen(command) {
+                    Some(denied) => ToolOutcome::error(denied),
+                    None => ToolOutcome::text(exec::bash_in(&self.exec, command)),
+                },
                 Err(err) => ToolOutcome::error(err),
             },
             READ => outcome(self.read(&args)),

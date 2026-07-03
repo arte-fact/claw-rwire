@@ -64,6 +64,15 @@ fn run(workspace: &Path, command: &str, timeout: Duration) -> String {
         .arg("-c")
         .arg(command)
         .current_dir(workspace)
+        // Credential hygiene: agent git must never prompt or borrow the host user's
+        // identity — no global config (aliases, credential helpers), no ssh-agent, no
+        // interactive auth. Public clones/fetches still work; pushes can't ride ambient
+        // credentials even if a write slips past the git screen via a subshell.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+        .env_remove("SSH_AUTH_SOCK")
         .stdin(Stdio::null())
         .stdout(out_file)
         .stderr(err_file)
@@ -256,6 +265,17 @@ mod tests {
     fn exec_strategy_host_runs_on_the_host() {
         let strategy = ExecStrategy::Host { root: ws() };
         assert_eq!(bash_in(&strategy, "echo hello"), "exit 0\nhello");
+    }
+
+    #[test]
+    fn bash_env_is_git_hermetic() {
+        // No prompts, no global config (credential helpers/aliases), no ssh-agent — a git
+        // write that slips past the screen via a subshell still finds no ambient identity.
+        let out = bash(
+            &ws(),
+            "echo p=$GIT_TERMINAL_PROMPT g=$GIT_CONFIG_GLOBAL s=${SSH_AUTH_SOCK:-unset}",
+        );
+        assert_eq!(out, "exit 0\np=0 g=/dev/null s=unset");
     }
 
     #[test]

@@ -167,6 +167,23 @@ history shows *which agent* made each pass.
       asserted by test
 - [x] Live smoke: run a real task; `git log` shows one commit per pass with trailers
 
+### G0.5 — hardening + the agents' read-only git surface — ✅ shipped 2026-07-03
+Born from "does git deserve dedicated agent tools?" — read surface yes, write monopoly
+stays with the harness, and the real safety net is fencing bash-git.
+- [x] Harness git is hermetic: every `gitops` invocation runs `core.hooksPath=/dev/null`
+      (an agent-writable `.git/hooks` could otherwise execute code in the server process
+      on the commit sweep) and cuts off global/system git config — asserted by test
+- [x] `repo_status` / `repo_log` / `repo_diff` tools (read-only, capped): producers and
+      validators get them task-anchored — `since:"task-start"` diffs against the
+      `task_repos` base, state bash-git can't reach; the concierge gets
+      workspace-parameterized variants next to `board_status`/`read_file`
+- [x] Bash git fence: read-only subcommand safelist (status/log/diff/show/…/fetch/clone),
+      writes denied with a pointer to the harness contract; config-injection and
+      exec-transport vectors (`-c`, `--git-dir`, `--upload-pack`, `ext::`) blocked
+- [x] Agent bash is credential-hermetic: no git prompts, no global config (credential
+      helpers), no ssh-agent — public clone/fetch works, pushes find no ambient identity
+- [ ] `clone` as a dedicated jailed tool — deferred until a real workflow needs it
+
 ### G1 — the Request entity
 - [ ] `requests` + `request_repos` tables; `tasks.request_id` migration
 - [ ] `ask` → Request row (`planning`) → plan task under it; plan approve/reject drives the

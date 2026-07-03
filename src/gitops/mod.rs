@@ -10,7 +10,7 @@ mod task_tree;
 #[cfg(test)]
 mod tests;
 
-pub use sweep::{commit_pass, ensure_meta_repo};
+pub use sweep::{commit_pass, ensure_meta_repo, repos};
 pub use task_tree::{reset_task_tree, snapshot_task_bases};
 
 use std::path::{Path, PathBuf};
@@ -37,13 +37,22 @@ pub fn repo_dir(root: &Path, repo: &str) -> Result<PathBuf, GitError> {
 }
 
 /// Run `git -C dir <args>`, returning trimmed stdout. Never prompts (a missing credential
-/// fails fast instead of hanging a worker).
+/// fails fast instead of hanging a worker), and runs hermetically:
+///
+/// - `core.hooksPath=/dev/null` on every invocation — `.git/hooks` sits *inside* the
+///   workspace jail, so an agent (or a hostile cloned repo) can write a hook; without this,
+///   the harness's own commit sweep would execute that code on the bridge thread.
+/// - The host user's global/system git config is cut off (aliases, credential helpers, a
+///   redirected hooksPath) — identity is passed per-commit, so nothing ambient is needed.
 fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(dir)
+        .args(["-c", "core.hooksPath=/dev/null"])
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .output()
         .map_err(GitError::Spawn)?;
     if !output.status.success() {
@@ -66,11 +75,59 @@ pub fn head(dir: &Path) -> Result<String, GitError> {
     git(dir, &["rev-parse", "HEAD"])
 }
 
-/// The checked-out branch name (`HEAD` when detached). Test-only until the request entity
-/// (G1) starts cutting branches.
-#[cfg(test)]
+/// The checked-out branch name (`HEAD` when detached).
 pub fn current_branch(dir: &Path) -> Result<String, GitError> {
     git(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
+}
+
+/// `status --porcelain` verbatim — one line per changed/untracked path, empty when clean.
+/// `-uall` expands untracked directories to their files (`?? docs/` hides what's inside).
+pub fn status_porcelain(dir: &Path) -> Result<String, GitError> {
+    git(dir, &["status", "--porcelain", "-uall"])
+}
+
+/// Recent commits, one line each (`<short> <date> <author> <subject>`), newest first.
+pub fn log_oneline(dir: &Path, count: usize) -> Result<String, GitError> {
+    git(
+        dir,
+        &[
+            "--no-pager",
+            "log",
+            "--date=short",
+            "--format=%h %ad %an %s",
+            "-n",
+            &count.to_string(),
+        ],
+    )
+}
+
+/// `git diff` of the working tree against `base` (against HEAD when `None`), optionally
+/// scoped to one `path` — always passed after `--`, so a path can never be read as a flag.
+/// `stat` selects the summary form. Callers validate `base` (hex only) before passing it.
+pub fn diff(
+    dir: &Path,
+    base: Option<&str>,
+    path: Option<&str>,
+    stat: bool,
+) -> Result<String, GitError> {
+    let mut args: Vec<&str> = vec!["--no-pager", "diff"];
+    if stat {
+        args.push("--stat");
+    }
+    if let Some(base) = base {
+        args.push(base);
+    }
+    if let Some(path) = path {
+        args.push("--");
+        args.push(path);
+    }
+    git(dir, &args)
+}
+
+/// Untracked (not ignored) paths — `git diff` can't show brand-new files, so surfaces that
+/// present a diff list these alongside it.
+pub fn untracked(dir: &Path) -> Result<String, GitError> {
+    git(dir, &["ls-files", "--others", "--exclude-standard"])
 }
 
 /// Whether the working tree differs from HEAD (`status --porcelain` non-empty; untracked

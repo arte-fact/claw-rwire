@@ -6,13 +6,16 @@
 mod coder;
 mod concierge;
 mod exec;
+mod git_screen;
 mod planning;
+mod repo;
 mod validator;
 
 pub use coder::CoderToolbox;
 pub use concierge::{ConciergeToolbox, Delegate};
 pub use exec::ExecStrategy;
 pub use planning::PlanningToolbox;
+pub use repo::RepoToolbox;
 pub use validator::{VERDICT, ValidatorToolbox, parse_verdict, parse_verdict_prose};
 
 /// The workspace tool names, in display order — the static half of the selectable catalog.

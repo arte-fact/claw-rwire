@@ -190,3 +190,24 @@ fn restart_reset_returns_the_tree_to_the_pre_task_state() {
     assert!(!is_dirty(&root).expect("meta status"));
     assert!(!is_dirty(&root.join("projects/app")).expect("app status"));
 }
+
+#[test]
+fn harness_git_never_runs_repo_hooks() {
+    // `.git/hooks` is inside the workspace jail, so an agent can plant one; the harness
+    // commit sweep must neither execute it nor let it veto the commit.
+    use std::os::unix::fs::PermissionsExt;
+    let root = scratch("hooks");
+    ensure_meta_repo(&root).expect("init");
+    let hook = root.join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(hook.parent().expect("hooks dir")).expect("mkdir");
+    std::fs::write(&hook, "#!/bin/sh\ntouch hook-ran\nexit 1\n").expect("hook");
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    write(&root, "docs/x.md", "x");
+    commit_all(&root, None, "pass despite hostile hook").expect("commit succeeds");
+    assert!(
+        !root.join("hook-ran").exists(),
+        "the planted hook must never execute under harness git"
+    );
+    assert!(!is_dirty(&root).expect("status"), "the commit landed");
+}

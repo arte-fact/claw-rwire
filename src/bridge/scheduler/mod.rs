@@ -14,7 +14,7 @@ use crate::db::resolution::{self, ResolvedInference};
 use crate::db::tasks::{self, Task, TaskStatus};
 use crate::db::{self, task_runs, workspaces};
 use crate::state::{ActivityKind, App, ProgressCtx, RunRole};
-use crate::tools::{CompositeToolbox, Toolbox, ValidatorToolbox};
+use crate::tools::{CompositeToolbox, RepoToolbox, Toolbox, ValidatorToolbox};
 use crate::workspace;
 
 use super::{Command, build_toolbox, data_dir, log_line, memory, run_system_prompt, send};
@@ -189,7 +189,17 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
                 format!("Message from the operator (steer): {body}"),
             ));
         }
-        let toolbox = build_toolbox(inference.tools.clone(), Some(workspace_dir), true);
+        let base = build_toolbox(inference.tools.clone(), Some(workspace_dir.clone()), true);
+        // Read-only git surface, unconditionally (it can't mutate): repo_status/log/diff,
+        // anchored to this task so since:"task-start" resolves via its recorded bases.
+        let toolbox: Box<dyn Toolbox> = Box::new(CompositeToolbox::new(vec![
+            base,
+            Box::new(RepoToolbox::for_task(
+                workspace_dir,
+                data_dir(),
+                task.id.clone(),
+            )),
+        ]));
         Ok((inference, messages, toolbox, snapshot))
     })();
     spawn_run(run_meta(conn, task), role, epoch, prepared);
@@ -243,12 +253,19 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
                 "find".to_owned(),
                 "bash".to_owned(),
             ]),
-            Some(workspace_dir),
+            Some(workspace_dir.clone()),
             false,
         );
+        // Reviewers get the read-only git surface too — a claim like "all tests pass" is
+        // checked against what actually changed (repo_diff since task-start), not prose.
         let toolbox: Box<dyn Toolbox> = Box::new(CompositeToolbox::new(vec![
             Box::new(ValidatorToolbox),
             checks,
+            Box::new(RepoToolbox::for_task(
+                workspace_dir,
+                data_dir(),
+                task.id.clone(),
+            )),
         ]));
         Ok((inference, messages, toolbox, None))
     })();
