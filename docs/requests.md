@@ -206,17 +206,17 @@ stays with the harness, and the real safety net is fencing bash-git.
 - [x] Validator prompts include the pass diff — claims checked against changes
 - [x] Live verify on a real produce⇄review loop
 
-### G3 — controls, macro validation, push
-- [ ] Request-level validation when the last task lands: review of `develop...branch`
+### G3 — controls, macro validation, push — ✅ shipped 2026-07-03
+- [x] Request-level validation when the last task lands: review of `develop...branch`
       against the **ask verbatim** (agent reviewer; human gate honors workspace
       auto-approve)
-- [ ] Deliver / Abandon / Roll-back affordances on the request page (pre-merge: reset to
+- [x] Deliver / Abandon / Roll-back affordances on the request page (pre-merge: reset to
       before task N or drop the branch)
-- [ ] Post-delivery rollback: `git revert -m1 <merge>` from the request record
-- [ ] File-level restore (`checkout <run>^ -- path`) from a run's diff view
-- [ ] Delivery **push** on remote-bearing repos: request branch + `develop` (explicit,
+- [x] Post-delivery rollback: `git revert -m1 <merge>` from the request record
+- [x] File-level restore (`checkout <run>^ -- path`) from a run's diff view
+- [x] Delivery **push** on remote-bearing repos: request branch + `develop` (explicit,
       gated; PR creation deferred)
-- [ ] Live e2e including a rollback and a push to a scratch remote
+- [x] Live e2e including a rollback and a push to a scratch remote
 
 ### G4 — parallel requests (worktrees) — later
 - [ ] Design spike: worker paths, tool jails, build/port collisions between concurrent trees
