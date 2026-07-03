@@ -538,3 +538,13 @@ fn repo_born_in_a_tree_is_adopted_at_delivery() {
     assert_eq!(current_branch(&canonical_new).expect("b"), "develop");
     assert!(canonical_new.join("README.md").exists());
 }
+
+#[test]
+fn tree_root_is_absolute_even_for_a_relative_data_dir() {
+    // `git -C <repo> worktree add <dest>` resolves a relative dest against the *repo* —
+    // with the usual relative CLAW_DATA_DIR the tree would compose inside the canonical
+    // workspace (the live G4 smoke's failure).
+    let tree = tree_root(Path::new("./data"), "ws", "request12345");
+    assert!(tree.is_absolute(), "{}", tree.display());
+    assert!(tree.ends_with("data/trees/ws/request1"));
+}

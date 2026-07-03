@@ -11,11 +11,15 @@ use super::sweep::{ensure_workspace_repos, repos};
 use super::{GitError, current_branch, git, is_dirty, is_repo, repo_dir};
 
 /// Where a request's tree lives: **outside** the workspace root — no repo scan, file jail,
-/// or sibling lane can see it — at `<data>/trees/<workspace-id>/<request-short8>`.
+/// or sibling lane can see it — at `<data>/trees/<workspace-id>/<request-short8>`. Always
+/// absolute: `git -C <repo> worktree add <dest>` resolves a relative dest against the
+/// *repo*, which — with the usual relative `CLAW_DATA_DIR` — would compose the tree inside
+/// the canonical workspace (the live G4 smoke's failure).
 #[must_use]
 pub fn tree_root(data_dir: &Path, workspace_id: &str, request_id: &str) -> PathBuf {
     let short: String = request_id.chars().take(8).collect();
-    data_dir.join("trees").join(workspace_id).join(short)
+    let tree = data_dir.join("trees").join(workspace_id).join(short);
+    std::path::absolute(&tree).unwrap_or(tree)
 }
 
 /// Whether `dir` is a linked worktree (its `.git` is a pointer file) rather than a full

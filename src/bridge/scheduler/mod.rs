@@ -91,28 +91,26 @@ fn lanes(conn: &rusqlite::Connection, workspace_id: &str) -> Vec<Option<String>>
 
 /// Claim a task for its lane (flip to `running`), reflect it, then dispatch the worker. A
 /// task that can't be dispatched at all (no assignable agent, unresolved endpoint) is
-/// finished `failed` immediately rather than left stuck `running`.
+/// finished `failed` immediately rather than left stuck `running`. The lane root resolves
+/// **before** the claim (G4): a request lane whose tree can't compose — and that may not
+/// fall back to the canonical tree — simply isn't claimed this tick.
 fn start(conn: &rusqlite::Connection, shared: &SharedServerState, task: Task) {
+    let Some(root) = super::requests::ensure_lane_root(conn, &data_dir(), &task) else {
+        return; // logged by the resolver; the scheduler retries next tick
+    };
     if let Err(err) = tasks::set_status(conn, &task.id, TaskStatus::Running) {
         return log_line(format!("scheduler: claim {} failed: {err}", task.id));
     }
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
     super::tasks::refresh_detail_if_open(conn, shared, &task.id);
     activity(shared, &task, ActivityKind::Started, String::new());
-    snapshot_bases(conn, &task);
-    launch_current(conn, &task);
-}
-
-/// Git-ify the workspace (lazy meta-repo + project births), compose the task's lane tree
-/// when it's request-bound (its request's worktree composition, G4), and record each repo's
-/// pre-task HEAD at the task's first launch (G0) — the bases a restart resets to. Failures
-/// are logged, never blocking the launch: a git-less environment degrades to the pre-G0
-/// behaviour.
-fn snapshot_bases(conn: &rusqlite::Connection, task: &Task) {
-    let root = super::requests::ensure_lane_root(conn, &data_dir(), task);
+    // Record each repo's pre-task HEAD at the task's first launch (G0) — the bases a
+    // restart resets to. Failures are logged, never blocking the launch: a git-less
+    // environment degrades to the pre-G0 behaviour.
     for err in crate::gitops::snapshot_task_bases(conn, &root, &task.id) {
         log_line(format!("gitops: snapshot {}: {err}", task.id));
     }
+    launch_current(conn, &task);
 }
 
 /// Launch the task's **current step's** producer/stage run on a worker thread (self-posting

@@ -230,38 +230,53 @@ pub(crate) fn task_root(
 
 /// Resolve a launching task's lane root, composing its request's tree on first touch (G4):
 /// every workspace repo gets a linked worktree on the request branch, cut from `develop`.
-/// Composition trouble falls back to the canonical tree — the G3 single-lane behaviour —
-/// with the errors logged; work is never blocked on git.
+/// When composition fails, only the **oldest** active request may fall back to the
+/// canonical tree (the G3 single-lane behaviour) — a younger lane must return `None` and
+/// wait for the next tick instead: two request lanes sharing the canonical tree would race
+/// each other's checkouts.
 pub(crate) fn ensure_lane_root(
     conn: &Connection,
     data_dir: &std::path::Path,
     task: &Task,
-) -> std::path::PathBuf {
+) -> Option<std::path::PathBuf> {
     let canonical = workspace::dir_for(data_dir, &task.workspace_id);
     let Some(request) = request_of(conn, task) else {
-        return canonical;
+        return Some(canonical);
     };
     if !matches!(
         request.status,
         RequestStatus::Executing | RequestStatus::Validating
     ) {
-        return canonical;
+        return Some(canonical);
     }
     let Some(branch) = &request.branch else {
-        return canonical;
+        return Some(canonical);
     };
     let tree = gitops::tree_root(data_dir, &request.workspace_id, &request.id);
     for err in gitops::ensure_request_tree(&canonical, &tree, branch) {
         log_line(format!("gitops: compose {}: {err}", request.id));
     }
     if gitops::is_repo(&tree) {
-        tree
-    } else {
+        return Some(tree);
+    }
+    let oldest = db::requests::active_requests(conn, &request.workspace_id, 1)
+        .unwrap_or_default()
+        .into_iter()
+        .next()
+        .is_some_and(|active| active.id == request.id);
+    if oldest {
         log_line(format!(
             "gitops: tree for {} unusable — falling back to the canonical workspace",
             request.id
         ));
-        canonical
+        Some(canonical)
+    } else {
+        log_line(format!(
+            "gitops: tree for {} unusable and its lane isn't the oldest — holding the \
+             launch (retried next tick)",
+            request.id
+        ));
+        None
     }
 }
 
