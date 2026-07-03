@@ -184,18 +184,18 @@ stays with the harness, and the real safety net is fencing bash-git.
       helpers), no ssh-agent — public clone/fetch works, pushes find no ambient identity
 - [ ] `clone` as a dedicated jailed tool — deferred until a real workflow needs it
 
-### G1 — the Request entity
-- [ ] `requests` + `request_repos` tables; `tasks.request_id` migration
-- [ ] `ask` → Request row (`planning`) → plan task under it; plan approve/reject drives the
+### G1 — the Request entity — ✅ shipped 2026-07-03
+- [x] `requests` + `request_repos` tables; `tasks.request_id` migration
+- [x] `ask` → Request row (`planning`) → plan task under it; plan approve/reject drives the
       request lifecycle (approve = executing; reject = rejected, no branch ever cut)
-- [ ] Plan request-changes replans **within the same Request**
-- [ ] First touch of a repo by a request: ensure `develop`, cut `req/<short-id>-<slug>` from
+- [x] Plan request-changes replans **within the same Request**
+- [x] First touch of a repo by a request: ensure `develop`, cut `req/<short-id>-<slug>` from
       it, record `request_repos` row (clone edge: base = clone HEAD)
-- [ ] Scheduler lane scoped to the **active request**; FIFO activation of queued requests
-- [ ] Delivery v0: last task done → `--no-ff` merge to `develop` per repo (validation
+- [x] Scheduler lane scoped to the **active request**; FIFO activation of queued requests
+- [x] Delivery v0: last task done → `--no-ff` merge to `develop` per repo (validation
       stubbed as pass) → origin-chat receipt ("Delivered … N tasks, +A/−D across F files")
-- [ ] `board_status` + the chat digest report requests, not just tasks
-- [ ] Live e2e: one ask through plan → tasks → merged `develop`
+- [x] `board_status` + the chat digest report requests, not just tasks
+- [x] Live e2e: one ask through plan → tasks → merged `develop`
 
 ### G2 — diff surfaces
 - [ ] `git show`/`diff` plumbing parsed into the existing `DiffLine` rendering
