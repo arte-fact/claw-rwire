@@ -388,8 +388,9 @@ CREATE TABLE IF NOT EXISTS requests (
   origin_chat_id TEXT,
   title          TEXT NOT NULL,           -- short, from the ask's first line
   ask            TEXT NOT NULL,           -- the user's words, verbatim (the validation contract)
-  status         TEXT NOT NULL DEFAULT 'planning',  -- planning|executing|delivered|rejected|abandoned
+  status         TEXT NOT NULL DEFAULT 'planning',  -- planning|executing|validating|delivered|rejected|abandoned|rolled-back
   branch         TEXT,                    -- req/<short-id>-<slug>
+  validation     TEXT,                    -- the macro-review verdict + feedback (G3)
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL
 );

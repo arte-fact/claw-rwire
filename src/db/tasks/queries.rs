@@ -119,7 +119,8 @@ pub fn next_ready(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Opt
                -- workspace's ACTIVE one (the oldest executing); queued requests wait FIFO.
                -- Free-standing board tasks (request_id NULL) interleave as before.
                AND (request_id IS NULL OR request_id = (
-                     SELECT id FROM requests WHERE workspace_id = ?1 AND status = 'executing'
+                     SELECT id FROM requests
+                      WHERE workspace_id = ?1 AND status IN ('executing','validating')
                       ORDER BY created_at LIMIT 1))
                AND NOT EXISTS (
                  SELECT 1 FROM task_blockers b JOIN tasks bt ON bt.id = b.blocked_by

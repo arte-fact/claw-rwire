@@ -69,10 +69,15 @@ pub(crate) fn memory_row(memory: &str, key: &str, toggled: &[String]) -> Element
 
 /// A pass's git diff as a disclosure row (G2): a muted "diff · <first stat line>" header
 /// that opens to the patch, `+`/`-` lines coloured with the shared DiffLine vocabulary.
-pub(crate) fn diff_row(diff: &str, key: &str, toggled: &[String]) -> ElementBuilder {
+pub(crate) fn diff_row(
+    diff: &str,
+    files: &[crate::state::RestorableFile],
+    key: &str,
+    toggled: &[String],
+) -> ElementBuilder {
     let open = toggled.iter().any(|t| t == key);
     let body = open.then(|| {
-        let rows: Vec<ElementBuilder> = crate::diff::patch_lines(diff)
+        let mut rows: Vec<ElementBuilder> = crate::diff::patch_lines(diff)
             .into_iter()
             .map(|line| {
                 let color = match line.kind {
@@ -85,6 +90,26 @@ pub(crate) fn diff_row(diff: &str, key: &str, toggled: &[String]) -> ElementBuil
                     .text(&line.text)
             })
             .collect();
+        // Per-file restore (G3): put a path back to its pre-pass state — the working tree
+        // takes the restore; the next pass commit records it.
+        for file in files {
+            let payload = serde_json::json!({
+                "workspace": file.workspace,
+                "repo": file.repo,
+                "sha": file.sha,
+                "path": file.path,
+            })
+            .to_string();
+            rows.push(
+                el(El::Div)
+                    .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::TextXs])
+                    .append([
+                        el(El::Span).st([St::TextMuted]).text(&file.path),
+                        crate::ui::widgets::ghost("restore", restore_file())
+                            .data("restore", &payload),
+                    ]),
+            );
+        }
         el(El::Div)
             .st([St::PSm, St::BgApp, St::OverflowXAuto])
             .append(rows)
@@ -382,6 +407,31 @@ fn status_chip(tool: &ToolCardView) -> ElementBuilder {
 }
 
 /// Toggle one tool row open/closed (flip it from its default).
+/// Restore one file to its state before the pass that changed it (G3).
+#[handler]
+fn restore_file(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    let Some(payload) = ctx.data("restore") else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return;
+    };
+    let field = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    crate::bridge::send(crate::bridge::Command::RestoreFile {
+        workspace: field("workspace"),
+        repo: field("repo"),
+        sha: field("sha"),
+        path: field("path"),
+    });
+}
+
 #[handler]
 pub fn toggle_tool(app: &mut App, ctx: &EventContext) {
     if let Some(key) = ctx.data("tool").map(str::to_owned) {
@@ -480,6 +530,7 @@ mod tests {
             time: String::new(),
             memory: String::new(),
             diff: String::new(),
+            diff_files: Vec::new(),
         }
     }
 

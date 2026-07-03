@@ -78,6 +78,14 @@ fn build_detail(conn: &Connection, request_id: &str) -> Option<RequestDetail> {
             merge: repo.merge_commit.as_deref().map(short).unwrap_or_default(),
         })
         .collect();
+    let has_remote = db::requests::repos_for(conn, &request.id)
+        .unwrap_or_default()
+        .iter()
+        .any(|repo| {
+            gitops::repo_dir(&root, &repo.repo)
+                .map(|dir| gitops::has_remote(&dir))
+                .unwrap_or(false)
+        });
     Some(RequestDetail {
         id: request.id,
         workspace_id: request.workspace_id,
@@ -89,6 +97,8 @@ fn build_detail(conn: &Connection, request_id: &str) -> Option<RequestDetail> {
         repos,
         diff_stat,
         diff_patch,
+        validation: request.validation.unwrap_or_default(),
+        has_remote,
     })
 }
 

@@ -3,6 +3,7 @@
 //! touched repo and a receipt into the origin chat. Validation is stubbed as pass in v0
 //! (the macro review against the ask verbatim is G3).
 
+pub(crate) mod control;
 mod view;
 pub(crate) use view::{load_detail, pass_diff, rail_views};
 
@@ -56,7 +57,9 @@ pub(crate) fn maybe_deliver(conn: &Connection, task: &Task) {
         return;
     }
     match db::tasks::open_for_request(conn, &request.id) {
-        Ok(0) => deliver(conn, &request),
+        // The macro gate (G3): the branch is judged against the ask before any merge —
+        // by the reviewer agent (auto-approve workspaces) or by the user from the page.
+        Ok(0) => control::begin_validation(conn, &request),
         Ok(_) => {}
         Err(err) => log_line(format!("requests: count open for {}: {err}", request.id)),
     }
@@ -65,7 +68,7 @@ pub(crate) fn maybe_deliver(conn: &Connection, task: &Task) {
 /// Delivery v0: merge the request branch into `develop` in every repo it touched, stamp the
 /// merges, flip to `delivered`, and drop the receipt into the origin chat. Any merge failure
 /// leaves the request `executing` with the trouble surfaced — nothing half-delivers silently.
-fn deliver(conn: &Connection, request: &Request) {
+pub(super) fn deliver(conn: &Connection, request: &Request) {
     let root = workspace::dir_for(&data_dir(), &request.workspace_id);
     let repos = db::requests::repos_for(conn, &request.id).unwrap_or_default();
     let message = format!("Deliver: {}\n\nRequest: {}", request.title, request.id);
@@ -162,13 +165,13 @@ fn request_of(conn: &Connection, task: &Task) -> Option<Request> {
 }
 
 /// A cheap, always-works line into the request's origin chat (not an LLM turn).
-fn ping(conn: &Connection, request: &Request, body: &str) {
+pub(super) fn ping(conn: &Connection, request: &Request, body: &str) {
     if let Some(chat) = &request.origin_chat {
         let _ = db::chat::append_message(conn, chat, MessageRole::Agent, body);
     }
 }
 
-fn repo_name(rel: &str) -> &str {
+pub(super) fn repo_name(rel: &str) -> &str {
     if rel.is_empty() { "workspace" } else { rel }
 }
 
@@ -214,6 +217,7 @@ mod tests {
             ask: String::new(),
             status: RequestStatus::Planning,
             branch: None,
+            validation: None,
         };
         assert_eq!(
             branch_name(&request),

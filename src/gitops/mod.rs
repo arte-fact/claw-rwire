@@ -11,7 +11,9 @@ mod task_tree;
 #[cfg(test)]
 mod tests;
 
-pub use requests::{RequestRef, deliver_repo};
+pub use requests::{
+    RequestRef, abandon_branch, deliver_repo, has_remote, push_refs, restore_file, revert_merge,
+};
 pub use sweep::{commit_pass, ensure_meta_repo, repos};
 pub use task_tree::{reset_task_tree, snapshot_task_bases};
 
@@ -159,6 +161,19 @@ pub fn show_numstat(dir: &Path, commit: &str) -> Result<(u64, u64, u64), GitErro
         &["--no-pager", "show", "--numstat", "--format=", commit],
     )?;
     Ok(numstat_totals(&out))
+}
+
+/// The paths one pass commit touched — the restore affordance's file list (G3).
+pub fn show_files(dir: &Path, commit: &str) -> Result<Vec<String>, GitError> {
+    let out = git(
+        dir,
+        &["--no-pager", "show", "--numstat", "--format=", commit],
+    )?;
+    Ok(out
+        .lines()
+        .filter_map(|line| line.split('\t').nth(2))
+        .map(str::to_owned)
+        .collect())
 }
 
 /// One pass commit as stat + patch (the Peek's Diff disclosure) — capped by the caller.

@@ -69,3 +69,42 @@ pub fn deliver_repo(dir: &Path, branch: &str, message: &str) -> Result<String, G
     git_as(dir, None, &["merge", "--no-ff", "-m", message, branch])?;
     head(dir)
 }
+
+/// Whether the repo has any remote configured — the Push affordance's visibility.
+#[must_use]
+pub fn has_remote(dir: &Path) -> bool {
+    git(dir, &["remote"])
+        .map(|out| !out.is_empty())
+        .unwrap_or(false)
+}
+
+/// Push the request branch and `develop` to `origin` (G3): the explicit, user-gated act —
+/// the harness never touches a remote on its own. Runs hermetically like all harness git,
+/// so ssh-agent / file remotes work; https credential helpers are deliberately cut off.
+pub fn push_refs(dir: &Path, branch: &str) -> Result<String, GitError> {
+    git(dir, &["push", "origin", DEVELOP, branch])
+}
+
+/// Post-delivery rollback (G3): revert the delivery merge on `develop` — a new commit,
+/// honest history; the branch and its passes stay browsable.
+pub fn revert_merge(dir: &Path, merge_commit: &str) -> Result<String, GitError> {
+    git(dir, &["checkout", DEVELOP])?;
+    git_as(dir, None, &["revert", "-m", "1", "--no-edit", merge_commit])?;
+    head(dir)
+}
+
+/// Pre-merge abandon (G3): return the tree to `develop` and drop the request branch — the
+/// work's commits become unreachable (deliberate: `main`/`develop` never saw them).
+pub fn abandon_branch(dir: &Path, branch: &str) -> Result<(), GitError> {
+    git(dir, &["checkout", DEVELOP])?;
+    git(dir, &["branch", "-D", branch])?;
+    Ok(())
+}
+
+/// File-level restore (G3): put one path back to its state **before** `commit` (the pass
+/// that changed it). Leaves the tree dirty — the next pass commit records the restore.
+/// Fails when the file didn't exist before that pass (nothing to restore to).
+pub fn restore_file(dir: &Path, commit: &str, path: &str) -> Result<(), GitError> {
+    git(dir, &["checkout", &format!("{commit}^"), "--", path])?;
+    Ok(())
+}

@@ -162,6 +162,32 @@ pub enum Command {
     LoadRequestDetail {
         request_id: String,
     },
+    /// The request-level macro review's verdict came back (G3, worker → bridge).
+    RequestValidated {
+        request_id: String,
+        decision: String,
+        note: String,
+    },
+    /// The request page's explicit acts (G3).
+    RequestDeliver {
+        id: String,
+    },
+    RequestAbandon {
+        id: String,
+    },
+    RequestRollback {
+        id: String,
+    },
+    RequestPush {
+        id: String,
+    },
+    /// Restore one file to its state before a pass commit (a run's diff view, G3).
+    RestoreFile {
+        workspace: String,
+        repo: String,
+        sha: String,
+        path: String,
+    },
     /// Open an agent's workspace thread (`/w/:wid/agent/:aid`) — project its merged
     /// tasks/runs/live timeline scoped to that workspace.
     OpenAgentThread {
@@ -563,6 +589,21 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadRequestDetail { request_id } => {
             requests::load_detail(conn, shared, &request_id)
         }
+        Command::RequestValidated {
+            request_id,
+            decision,
+            note,
+        } => requests::control::on_validated(conn, shared, &request_id, &decision, &note),
+        Command::RequestDeliver { id } => requests::control::deliver_now(conn, shared, &id),
+        Command::RequestAbandon { id } => requests::control::abandon(conn, shared, &id),
+        Command::RequestRollback { id } => requests::control::rollback(conn, shared, &id),
+        Command::RequestPush { id } => requests::control::push(conn, shared, &id),
+        Command::RestoreFile {
+            workspace,
+            repo,
+            sha,
+            path,
+        } => requests::control::restore_file(conn, shared, &workspace, &repo, &sha, &path),
         Command::OpenAgentThread { agent, workspace } => {
             agent_thread::load(conn, shared, &agent, &workspace)
         }

@@ -48,6 +48,16 @@ impl RepoToolbox {
         }
     }
 
+    /// A workspace-scoped toolbox with no task anchor (request-level review, G3) — diffs
+    /// default to uncommitted-vs-HEAD; explicit commit ids still work.
+    #[must_use]
+    pub fn for_workspace(workspace: PathBuf) -> Self {
+        Self {
+            workspace,
+            anchor: None,
+        }
+    }
+
     /// The diff base a `since` argument names: `None` = the working tree against HEAD.
     fn resolve_base(&self, repo: &str, since: &str) -> Result<Option<String>, String> {
         match since {

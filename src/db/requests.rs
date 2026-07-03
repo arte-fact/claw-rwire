@@ -15,9 +15,13 @@ const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 pub enum RequestStatus {
     Planning,
     Executing,
+    /// Every task landed; the branch diff awaits its macro review (agent or human, G3).
+    Validating,
     Delivered,
     Rejected,
     Abandoned,
+    /// Delivered, then reverted on `develop` (`git revert -m1 <merge>`, G3).
+    RolledBack,
 }
 
 impl RequestStatus {
@@ -26,9 +30,11 @@ impl RequestStatus {
         match self {
             Self::Planning => "planning",
             Self::Executing => "executing",
+            Self::Validating => "validating",
             Self::Delivered => "delivered",
             Self::Rejected => "rejected",
             Self::Abandoned => "abandoned",
+            Self::RolledBack => "rolled-back",
         }
     }
 
@@ -36,9 +42,11 @@ impl RequestStatus {
     pub fn from_str(value: &str) -> Self {
         match value {
             "executing" => Self::Executing,
+            "validating" => Self::Validating,
             "delivered" => Self::Delivered,
             "rejected" => Self::Rejected,
             "abandoned" => Self::Abandoned,
+            "rolled-back" => Self::RolledBack,
             _ => Self::Planning,
         }
     }
@@ -57,6 +65,8 @@ pub struct Request {
     pub status: RequestStatus,
     /// `req/<short-id>-<slug>`, minted at plan approval — `None` while planning.
     pub branch: Option<String>,
+    /// The macro-validation verdict + feedback (G3), or `None` before validation ran.
+    pub validation: Option<String>,
 }
 
 /// One repo a request touched: the branch point recorded when the branch was cut there,
@@ -69,8 +79,8 @@ pub struct RequestRepo {
     pub merge_commit: Option<String>,
 }
 
-const SELECT: &str = "SELECT id, workspace_id, origin_chat_id, title, ask, status, branch \
-                      FROM requests";
+const SELECT: &str = "SELECT id, workspace_id, origin_chat_id, title, ask, status, branch, \
+                      validation FROM requests";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Request> {
     Ok(Request {
@@ -81,6 +91,7 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Request> {
         ask: row.get(4)?,
         status: RequestStatus::from_str(&row.get::<_, String>(5)?),
         branch: row.get(6)?,
+        validation: row.get(7)?,
     })
 }
 
@@ -117,6 +128,15 @@ pub fn set_status(conn: &Connection, id: &str, status: RequestStatus) -> rusqlit
     Ok(())
 }
 
+/// Record the macro-validation outcome (G3): the verdict + feedback shown on the page.
+pub fn set_validation(conn: &Connection, id: &str, note: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        &format!("UPDATE requests SET validation = ?2, updated_at = {NOW} WHERE id = ?1"),
+        params![id, note],
+    )?;
+    Ok(())
+}
+
 /// Stamp the request's branch name (minted at plan approval).
 pub fn set_branch(conn: &Connection, id: &str, branch: &str) -> rusqlite::Result<()> {
     conn.execute(
@@ -126,15 +146,16 @@ pub fn set_branch(conn: &Connection, id: &str, branch: &str) -> rusqlite::Result
     Ok(())
 }
 
-/// The workspace's **active** request — the oldest `executing` one. The scheduler lane only
-/// picks tasks of this request (plus free-standing tasks); the rest queue FIFO behind it.
+/// The workspace's **active** request — the oldest executing *or validating* one. The lane
+/// only picks its tasks, and a validating request still holds the lane: the working tree
+/// sits on its branch until it delivers or is abandoned, so a successor must wait.
 pub fn active_for_workspace(
     conn: &Connection,
     workspace_id: &str,
 ) -> rusqlite::Result<Option<Request>> {
     conn.query_row(
         &format!(
-            "{SELECT} WHERE workspace_id = ?1 AND status = 'executing'
+            "{SELECT} WHERE workspace_id = ?1 AND status IN ('executing','validating')
               ORDER BY created_at LIMIT 1"
         ),
         params![workspace_id],
@@ -146,7 +167,7 @@ pub fn active_for_workspace(
 /// Every open (planning / executing) request of a workspace, oldest first — the digest's view.
 pub fn open_for_workspace(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Vec<Request>> {
     let mut stmt = conn.prepare(&format!(
-        "{SELECT} WHERE workspace_id = ?1 AND status IN ('planning','executing')
+        "{SELECT} WHERE workspace_id = ?1 AND status IN ('planning','executing','validating')
           ORDER BY created_at"
     ))?;
     let rows = stmt.query_map(params![workspace_id], from_row)?;

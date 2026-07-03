@@ -251,6 +251,7 @@ pub(crate) fn run_entry(
         // What the pass actually changed on disk (G2) — collapsed, next to the forensics.
         body.push(crate::ui::run_chain::diff_row(
             &run.diff,
+            &run.diff_files,
             &format!("{key}.diff"),
             toggled,
         ));

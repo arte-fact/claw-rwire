@@ -81,6 +81,7 @@ fn apply_schema(conn: &Connection) -> Result<(), DbError> {
 fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_task_run_commits_column(conn).map_err(DbError::Schema)?;
     add_task_request_column(conn).map_err(DbError::Schema)?;
+    add_request_validation_column(conn).map_err(DbError::Schema)?;
     add_workspace_owner_column(conn).map_err(DbError::Schema)?;
     widen_agent_workspaces_to_m_n(conn).map_err(DbError::Schema)?;
     add_agent_memory_paused_column(conn).map_err(DbError::Schema)?;
@@ -94,6 +95,16 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_task_proposal_column(conn).map_err(DbError::Schema)?;
     add_task_archived_column(conn).map_err(DbError::Schema)?;
     Ok(())
+}
+
+/// Add `requests.validation` (the macro-review outcome, G3) to a DB that predates it. A
+/// fresh DB already has it from the schema — "duplicate column" is ignored.
+fn add_request_validation_column(conn: &Connection) -> rusqlite::Result<()> {
+    match conn.execute("ALTER TABLE requests ADD COLUMN validation TEXT", []) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 /// Add `task_runs.commits` (the harness's pass commits per run, G2) to a DB that predates

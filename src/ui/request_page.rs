@@ -2,9 +2,10 @@
 //! status + branch, the ask verbatim, the task timeline with per-task diff activity, the
 //! repos it touched (branch point → merge), and the global diff against the branch point.
 
-use rwire::{El, ElementBuilder, Link, St, el, renderer};
-use rwire_components::{Badge, BadgeFill, BadgeIntent, BadgeShape, Text};
+use rwire::{El, ElementBuilder, Link, St, el, handler, renderer};
+use rwire_components::{Badge, BadgeFill, BadgeIntent, BadgeShape, Button, ButtonSize, Text};
 
+use crate::bridge::{self, Command};
 use crate::diff::DiffKind;
 use crate::state::{App, RequestDetail};
 
@@ -19,7 +20,20 @@ fn body(app: &App) -> ElementBuilder {
     let Some(detail) = &app.request_detail else {
         return Text::body("Loading the request…").muted().build();
     };
-    let mut sections = vec![header(detail), ask_block(detail)];
+    let mut sections = vec![header(detail), controls(detail), ask_block(detail)];
+    if !detail.validation.is_empty() {
+        sections.push(section(
+            "Validation",
+            el(El::Div)
+                .st([
+                    St::TextSm,
+                    St::TextDefault,
+                    St::WhitespacePreWrap,
+                    St::BreakWords,
+                ])
+                .text(&detail.validation),
+        ));
+    }
     if !detail.tasks.is_empty() {
         sections.push(section("Tasks", timeline(detail)));
     }
@@ -158,6 +172,78 @@ fn global_diff(detail: &RequestDetail) -> ElementBuilder {
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append(children)
+}
+
+/// The status-appropriate explicit acts (G3). Delivery/rollback stay reversible-by-design
+/// (a merge can be reverted; an abandon drops only an unmerged branch); Push is the one
+/// outward act and never happens un-clicked.
+fn controls(detail: &RequestDetail) -> ElementBuilder {
+    let id = detail.id.as_str();
+    let mut buttons: Vec<ElementBuilder> = Vec::new();
+    match detail.status.as_str() {
+        "validating" => {
+            buttons.push(control(Button::primary("Deliver"), deliver(), id));
+            buttons.push(control(Button::secondary("Abandon"), abandon(), id));
+        }
+        "planning" | "executing" => {
+            buttons.push(control(Button::secondary("Abandon"), abandon(), id));
+        }
+        "delivered" => {
+            buttons.push(control(Button::secondary("Roll back"), rollback(), id));
+            if detail.has_remote {
+                buttons.push(control(Button::primary("Push"), push(), id));
+            }
+        }
+        "rolled-back" if detail.has_remote => {
+            buttons.push(control(Button::primary("Push"), push(), id));
+        }
+        _ => {}
+    }
+    if buttons.is_empty() {
+        return el(El::Div).st([St::DisplayNone]);
+    }
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+        .append(buttons)
+}
+
+fn control(button: Button, on_click: rwire::HandlerSpec, id: &str) -> ElementBuilder {
+    button
+        .size(ButtonSize::Sm)
+        .on_click(on_click)
+        .data("request", id)
+}
+
+#[handler]
+fn deliver(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(id) = ctx.data("request") {
+        bridge::send(Command::RequestDeliver { id: id.to_owned() });
+    }
+}
+
+#[handler]
+fn abandon(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(id) = ctx.data("request") {
+        bridge::send(Command::RequestAbandon { id: id.to_owned() });
+    }
+}
+
+#[handler]
+fn rollback(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(id) = ctx.data("request") {
+        bridge::send(Command::RequestRollback { id: id.to_owned() });
+    }
+}
+
+#[handler]
+fn push(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    if let Some(id) = ctx.data("request") {
+        bridge::send(Command::RequestPush { id: id.to_owned() });
+    }
 }
 
 fn section(title: &str, body: ElementBuilder) -> ElementBuilder {

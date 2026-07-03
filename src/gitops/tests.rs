@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::requests::branch_exists;
 use super::sweep::{META_REPO, ensure_project_repo};
 use super::*;
 use crate::db::{endpoints, open_in_memory, task_repos, tasks, workspaces};
@@ -274,4 +275,102 @@ fn delivery_merges_no_ff_into_develop_and_totals_the_diff() {
         deliver_repo(&root, "req/req2-feat", "again"),
         Err(GitError::DirtyTree)
     ));
+}
+
+#[test]
+fn rollback_reverts_the_delivery_merge_on_develop() {
+    let root = scratch("revert");
+    ensure_meta_repo(&root).expect("meta");
+    write(&root, "docs/f.md", "v1\n");
+    let request = Some(RequestRef {
+        id: "req-3",
+        branch: "req/req3-f",
+    });
+    let (_, errors) = commit_pass(&root, None, "b: f", "t1", "r1", request);
+    assert_eq!(errors, Vec::<String>::new());
+    let merge = deliver_repo(&root, "req/req3-f", "Deliver: f\n\nRequest: req-3").expect("deliver");
+    assert!(root.join("docs/f.md").exists());
+
+    let revert = revert_merge(&root, &merge).expect("revert");
+    assert_eq!(current_branch(&root).expect("branch"), "develop");
+    assert!(
+        !root.join("docs/f.md").exists(),
+        "the delivered change is undone by a new commit"
+    );
+    let message = log_message(&root, &revert);
+    assert!(message.contains("Revert"), "{message}");
+}
+
+#[test]
+fn abandon_drops_the_branch_and_returns_to_develop() {
+    let root = scratch("abandon");
+    ensure_meta_repo(&root).expect("meta");
+    let develop_tip = head(&root).expect("head");
+    write(&root, "docs/half-done.md", "wip\n");
+    let request = Some(RequestRef {
+        id: "req-4",
+        branch: "req/req4-drop",
+    });
+    let (_, errors) = commit_pass(&root, None, "b: wip", "t1", "r1", request);
+    assert_eq!(errors, Vec::<String>::new());
+
+    abandon_branch(&root, "req/req4-drop").expect("abandon");
+    assert_eq!(current_branch(&root).expect("branch"), "develop");
+    assert_eq!(
+        head(&root).expect("head"),
+        develop_tip,
+        "develop never moved"
+    );
+    assert!(!branch_exists(&root, "req/req4-drop"));
+    assert!(!root.join("docs/half-done.md").exists());
+}
+
+#[test]
+fn push_lands_develop_and_the_request_branch_on_a_bare_remote() {
+    let root = scratch("push");
+    let remote = scratch("push-remote");
+    ensure_meta_repo(&root).expect("meta");
+    git(&remote, &["init", "--bare"]).expect("bare");
+    git(
+        &root,
+        &["remote", "add", "origin", remote.to_str().expect("utf8")],
+    )
+    .expect("remote");
+    assert!(has_remote(&root));
+    write(&root, "docs/pushed.md", "out\n");
+    let request = Some(RequestRef {
+        id: "req-5",
+        branch: "req/req5-push",
+    });
+    let (_, errors) = commit_pass(&root, None, "b: out", "t1", "r1", request);
+    assert_eq!(errors, Vec::<String>::new());
+    deliver_repo(&root, "req/req5-push", "Deliver: out\n\nRequest: req-5").expect("deliver");
+
+    push_refs(&root, "req/req5-push").expect("push");
+    let remote_refs = git(&remote, &["branch"]).expect("branches");
+    assert!(remote_refs.contains("develop"), "{remote_refs}");
+    assert!(remote_refs.contains("req/req5-push"), "{remote_refs}");
+}
+
+#[test]
+fn restore_file_returns_one_path_to_its_pre_pass_state() {
+    let root = scratch("restore");
+    ensure_meta_repo(&root).expect("meta");
+    write(&root, "docs/keep.md", "original\n");
+    commit_all(&root, None, "seed").expect("seed");
+    write(&root, "docs/keep.md", "clobbered by a pass\n");
+    let (commits, _) = commit_pass(&root, None, "b: clobber", "t1", "r1", None);
+    let pass_sha = commits[0].commit.clone();
+
+    restore_file(&root, &pass_sha, "docs/keep.md").expect("restore");
+    let content = std::fs::read_to_string(root.join("docs/keep.md")).expect("read");
+    assert_eq!(content, "original\n");
+    assert!(
+        is_dirty(&root).expect("status"),
+        "the restore awaits the next pass commit"
+    );
+    // A file born in that pass has no pre-state — refused, not silently emptied.
+    write(&root, "docs/newborn.md", "x");
+    let (commits, _) = commit_pass(&root, None, "b: newborn", "t2", "r2", None);
+    assert!(restore_file(&root, &commits[0].commit, "docs/newborn.md").is_err());
 }

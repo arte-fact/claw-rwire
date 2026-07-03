@@ -457,6 +457,8 @@ pub struct RunView {
     /// The pass's git diff (stat + capped patch across its commits, G2) — empty when the
     /// pass committed nothing. The Peek renders it behind a Diff disclosure.
     pub diff: String,
+    /// The files this pass touched, each restorable to its pre-pass state (G3).
+    pub diff_files: Vec<RestorableFile>,
     /// The memory layer the run launched with (R3.5 M4 provenance), or empty — the Peek shows
     /// it so "why did it do that?" has an answer.
     pub memory: String,
@@ -792,6 +794,10 @@ pub struct RequestDetail {
     pub diff_stat: String,
     /// The global diff's patch, capped — rendered with the DiffLine vocabulary.
     pub diff_patch: String,
+    /// The macro-validation verdict + feedback (G3), empty before validation ran.
+    pub validation: String,
+    /// Whether any touched repo has a remote — shows the (explicit, gated) Push control.
+    pub has_remote: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -809,4 +815,13 @@ pub struct RequestRepoEntry {
     pub repo: String,
     pub base: String,
     pub merge: String,
+}
+
+/// One file a pass changed, addressable for restore (G3): `checkout <sha>^ -- path`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RestorableFile {
+    pub workspace: String,
+    pub repo: String,
+    pub sha: String,
+    pub path: String,
 }
