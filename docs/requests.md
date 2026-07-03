@@ -151,21 +151,21 @@ history shows *which agent* made each pass.
 
 ## Roadmap (tick as shipped; every phase ends gate-green + live-verified)
 
-### G0 — git-ify the jurisdictions (no UI; standalone value)
-- [ ] `src/gitops.rs`: jailed `git` shell helpers (init, status --porcelain, add+commit with
+### G0 — git-ify the jurisdictions (no UI; standalone value) — ✅ shipped 2026-07-03
+- [x] `src/gitops.rs`: jailed `git` shell helpers (init, status --porcelain, add+commit with
       trailers, rev-parse, reset --hard, branch/checkout) — blocking-helper discipline,
       commits authored `claw <agent-id@claw>`
-- [ ] Workspace scaffold creates the **meta-repo**: `git init` + `.gitignore` (`projects/`
+- [x] Workspace scaffold creates the **meta-repo**: `git init` + `.gitignore` (`projects/`
       excluded wholesale) + initial commit; lazy-init on first touch for existing workspaces
-- [ ] Project birth creates a **sovereign repo**: `git init` + seeded `.gitignore`
+- [x] Project birth creates a **sovereign repo**: `git init` + seeded `.gitignore`
       (`target/`, `node_modules/`, …) + initial commit + `develop` branch
-- [ ] After each successful producer/stage pass: commit every dirty repo (meta + projects)
+- [x] After each successful producer/stage pass: commit every dirty repo (meta + projects)
       with `Task:`/`Run:` trailers (no requests yet — commits land on `develop`/meta HEAD)
-- [ ] Task **restart** resets each repo the task touched to its pre-task commit — the fresh
+- [x] Task **restart** resets each repo the task touched to its pre-task commit — the fresh
       attempt finally gets fresh files (regression test for the dirty-tree inheritance flaw)
-- [ ] Failed passes deliberately leave the tree dirty (revise-loop context matches disk) —
+- [x] Failed passes deliberately leave the tree dirty (revise-loop context matches disk) —
       asserted by test
-- [ ] Live smoke: run a real task; `git log` shows one commit per pass with trailers
+- [x] Live smoke: run a real task; `git log` shows one commit per pass with trailers
 
 ### G1 — the Request entity
 - [ ] `requests` + `request_repos` tables; `tasks.request_id` migration
