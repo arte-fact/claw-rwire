@@ -149,22 +149,62 @@ Git execution: shell out to `git` via the existing blocking-helper discipline (n
 dep); every invocation workspace-jailed; commits authored as `claw <agent-id@claw>` so
 history shows *which agent* made each pass.
 
-## Phases
+## Roadmap (tick as shipped; every phase ends gate-green + live-verified)
 
-- **G0 — git-ify the two jurisdictions** (no UI): meta-repo at scaffold (ignoring
-  `projects/`), project repos init'd at project birth, lazy-init for existing trees;
-  harness commit-per-successful-pass across all dirty repos; restart resets each touched
-  repo to the task's start commit. *Standalone value: forensic diffs exist, the restart
-  flaw is fixed, and `git log` already tells the story.*
-- **G1 — the Request entity**: table + `request_id`; ask → request → plan under it; branch
-  at approval; lane scoped to the active request; auto-merge when the last task lands
-  (validation step stubbed as auto-pass).
-- **G2 — diff surfaces**: per-pass diff in the Peek, request page with global diff,
-  validator prompts carry the pass diff.
-- **G3 — controls + macro validation + push**: the request-level review step (agent or
-  human gate), Deliver/Rollback/Abandon affordances, file-level restore, post-delivery
-  revert; delivery pushes branch + `develop` on remote-bearing repos (PR creation deferred).
-- **G4 — parallel requests** via worktrees (design spike first).
+### G0 — git-ify the jurisdictions (no UI; standalone value)
+- [ ] `src/gitops.rs`: jailed `git` shell helpers (init, status --porcelain, add+commit with
+      trailers, rev-parse, reset --hard, branch/checkout) — blocking-helper discipline,
+      commits authored `claw <agent-id@claw>`
+- [ ] Workspace scaffold creates the **meta-repo**: `git init` + `.gitignore` (`projects/`
+      excluded wholesale) + initial commit; lazy-init on first touch for existing workspaces
+- [ ] Project birth creates a **sovereign repo**: `git init` + seeded `.gitignore`
+      (`target/`, `node_modules/`, …) + initial commit + `develop` branch
+- [ ] After each successful producer/stage pass: commit every dirty repo (meta + projects)
+      with `Task:`/`Run:` trailers (no requests yet — commits land on `develop`/meta HEAD)
+- [ ] Task **restart** resets each repo the task touched to its pre-task commit — the fresh
+      attempt finally gets fresh files (regression test for the dirty-tree inheritance flaw)
+- [ ] Failed passes deliberately leave the tree dirty (revise-loop context matches disk) —
+      asserted by test
+- [ ] Live smoke: run a real task; `git log` shows one commit per pass with trailers
+
+### G1 — the Request entity
+- [ ] `requests` + `request_repos` tables; `tasks.request_id` migration
+- [ ] `ask` → Request row (`planning`) → plan task under it; plan approve/reject drives the
+      request lifecycle (approve = executing; reject = rejected, no branch ever cut)
+- [ ] Plan request-changes replans **within the same Request**
+- [ ] First touch of a repo by a request: ensure `develop`, cut `req/<short-id>-<slug>` from
+      it, record `request_repos` row (clone edge: base = clone HEAD)
+- [ ] Scheduler lane scoped to the **active request**; FIFO activation of queued requests
+- [ ] Delivery v0: last task done → `--no-ff` merge to `develop` per repo (validation
+      stubbed as pass) → origin-chat receipt ("Delivered … N tasks, +A/−D across F files")
+- [ ] `board_status` + the chat digest report requests, not just tasks
+- [ ] Live e2e: one ask through plan → tasks → merged `develop`
+
+### G2 — diff surfaces
+- [ ] `git show`/`diff` plumbing parsed into the existing `DiffLine` rendering
+- [ ] Peek run entry: per-pass **Diff** disclosure (stat + patch, capped)
+- [ ] Request page `/w/:wid/requests/:rid`: ask verbatim → plan → task timeline with
+      per-task diff stats → global diff → status
+- [ ] Board: request badge on cards + a Requests rail (progress · diffstat)
+- [ ] Validator prompts include the pass diff — claims checked against changes
+- [ ] Live verify on a real produce⇄review loop
+
+### G3 — controls, macro validation, push
+- [ ] Request-level validation when the last task lands: review of `develop...branch`
+      against the **ask verbatim** (agent reviewer; human gate honors workspace
+      auto-approve)
+- [ ] Deliver / Abandon / Roll-back affordances on the request page (pre-merge: reset to
+      before task N or drop the branch)
+- [ ] Post-delivery rollback: `git revert -m1 <merge>` from the request record
+- [ ] File-level restore (`checkout <run>^ -- path`) from a run's diff view
+- [ ] Delivery **push** on remote-bearing repos: request branch + `develop` (explicit,
+      gated; PR creation deferred)
+- [ ] Live e2e including a rollback and a push to a scratch remote
+
+### G4 — parallel requests (worktrees) — later
+- [ ] Design spike: worker paths, tool jails, build/port collisions between concurrent trees
+- [ ] `git worktree` per active request; per-request lanes in the scheduler
+
 
 ## Decision record (settled 2026-07-03)
 
