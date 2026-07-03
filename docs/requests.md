@@ -1,6 +1,6 @@
 # Requests: the unit above tasks (git-backed)
 
-> Status: **draft for discussion** — decisions marked ⚖ at the end. Born from the concierge's
+> Status: **decided 2026-07-03** (decision record at the end) — ready for G0. Born from the concierge's
 > own harness review (no rollback, no diff review) + the observation that plan → tasks →
 > validation already *behaves* like one unit without being one.
 
@@ -33,12 +33,12 @@ requested → planning → plan-review → executing → validating → delivere
 |---|---|
 | Workspace | **Meta-repo**: tracks `AGENT.md`, `STANDARDS.md`, `docs/`, `skills/`; ignores `projects/` wholesale (see Jurisdictions) |
 | Project (`projects/<name>`) | Its **own sovereign repo** — init'd at birth or cloned with its upstream intact |
-| Request | Branch `req/<short-id>-<slug>` in **each repo it touches**, cut from that repo's HEAD at first touch |
+| Request | Branch `req/<short-id>-<slug>` in **each repo it touches**, cut from that repo's `develop` at first touch (git flow) |
 | Producer/stage pass (successful) | Commit (harness-made, structured message + trailers: `Request:`, `Task:`, `Run:`) |
 | Task | A contiguous commit range on the branch |
 | Task restart (fresh attempt) | `reset --hard` to the task's start commit — **fixes the dirty-tree inheritance flaw** |
 | Request validation | Review of `main...branch` — the *whole diff against the original ask*, not per-task prose |
-| Delivery | Per-repo policy: `--no-ff` merge to the local default branch, **or** push the branch + open a PR upstream (`push-pr` projects) |
+| Delivery | `--no-ff` merge to `develop` per repo; remote-bearing repos also **push** the request branch + `develop` (PR creation: later phase) |
 | Rollback before delivery | `reset` branch to before task N / drop the branch — main never saw it |
 | Rollback after delivery | `git revert -m1 <merge>` — a new commit, honest history |
 | "Restore just that file" | `git checkout <run-commit>^ -- path` |
@@ -54,10 +54,12 @@ branches, the ability to push upstream), which rules out subtree/submodule absor
 So: two layers that never see each other.
 
 - **Project repos** (`projects/<name>/.git`) own all product code. Request branches,
-  commits, diffs, rollback, and delivery happen here. Remotes (GitHub/GitLab) belong here;
-  `push-pr` delivery maps a request onto the industry-native unit: **request = branch = PR**
-  (pushing is always an explicit, gated action — the harness never touches a remote
-  unprompted).
+  commits, diffs, rollback, and delivery happen here, on the **git flow model**: the
+  harness ensures a `develop` integration branch (created at repo init, or on first
+  request for clones that lack one); request branches cut from `develop` and merge back
+  `--no-ff`; `main` is release-only, and promoting `develop`→`main` stays a separate,
+  explicit act (later phase). Remote-bearing repos push the request branch and `develop`
+  at delivery — **request = branch** upstream too; PR creation comes later.
 - **The workspace meta-repo** owns the workspace's own material (`AGENT.md`,
   `STANDARDS.md`, `docs/`, `skills/`) and gitignores `projects/` entirely. Cheap, and it
   gives the standards memo and agent-written docs the same diff/rollback story.
@@ -69,7 +71,7 @@ CREATE TABLE request_repos (
   request_id   TEXT NOT NULL,
   repo         TEXT NOT NULL,   -- '' = workspace meta-repo, else 'projects/<name>'
   branch       TEXT NOT NULL,
-  base_commit  TEXT NOT NULL,   -- that repo's HEAD at first touch (never assume 'main')
+  base_commit  TEXT NOT NULL,   -- develop@first-touch (for a fresh clone: upstream HEAD)
   merge_commit TEXT,
   PRIMARY KEY (request_id, repo)
 );
@@ -159,22 +161,24 @@ history shows *which agent* made each pass.
   (validation step stubbed as auto-pass).
 - **G2 — diff surfaces**: per-pass diff in the Peek, request page with global diff,
   validator prompts carry the pass diff.
-- **G3 — controls + macro validation**: the request-level review step (agent or human gate),
-  Deliver/Rollback/Abandon affordances, file-level restore, post-delivery revert.
+- **G3 — controls + macro validation + push**: the request-level review step (agent or
+  human gate), Deliver/Rollback/Abandon affordances, file-level restore, post-delivery
+  revert; delivery pushes branch + `develop` on remote-bearing repos (PR creation deferred).
 - **G4 — parallel requests** via worktrees (design spike first).
 
-## ⚖ Decisions to settle
+## Decision record (settled 2026-07-03)
 
-1. **Commit granularity**: per successful producer pass (recommended — finest rollback and
-   diff-per-review; a task is a range) vs per task (cleaner log, coarser rollback).
-2. **Merge policy**: `--no-ff` merge commit (recommended — task commits stay browsable on
-   `main`) vs squash per request (linear `main`, one commit per ask; history of passes
-   lives only in the request record).
-3. **v1 concurrency**: accept one-active-request-per-workspace with a FIFO queue?
-4. **Chat-born edits**: quick asks the concierge answers *without* delegating never touch
-   files today — keep it that way (Requests only exist through `ask`)? (Recommended: yes.)
-5. **Naming**: `Request` (matches the `ask` tool's own vocabulary and the concierge's
-   language) vs `Story` / `Change`.
-6. **Delivery policy per project**: default `local-merge` everywhere, with `push-pr` as
-   opt-in per project once it has a remote? And is opening the PR in scope, or is pushing
-   the branch enough for v1?
+1. **Commit granularity: per successful producer pass.** A task is a commit range; rollback
+   and review keep pass-level resolution.
+2. **Merge policy: `--no-ff`.** The merge commit carries the request trailer; pass commits
+   stay browsable.
+3. **Concurrency v1: one active request per workspace, FIFO queue.** Worktrees are the G4
+   unlock.
+4. **Remotes: push the branch in v1, on the git flow model.** No PR creation yet.
+5. **Git flow: classic `develop` integration branch.** Harness ensures `develop`; requests
+   cut from and merge to it; `main` is release-only (promotion is a later, explicit act).
+6. **Scope: ask-only.** Every file change flows through a Request born from delegation;
+   concierge quick answers never touch files.
+7. **Naming: Request.**
+8. **Clone edge: base at clone HEAD.** A repo cloned mid-request gets its request branch cut
+   immediately; the diff is exactly what the request did to pristine upstream.
