@@ -31,16 +31,56 @@ requested → planning → plan-review → executing → validating → delivere
 
 | Domain concept | Git concept |
 |---|---|
-| Workspace | Repository (`git init` at scaffold; `.gitignore` seeds `target/`, `node_modules/`, …) |
-| Request | Branch `req/<short-id>-<slug>`, cut from `main` at plan approval |
+| Workspace | **Meta-repo**: tracks `AGENT.md`, `STANDARDS.md`, `docs/`, `skills/`; ignores `projects/` wholesale (see Jurisdictions) |
+| Project (`projects/<name>`) | Its **own sovereign repo** — init'd at birth or cloned with its upstream intact |
+| Request | Branch `req/<short-id>-<slug>` in **each repo it touches**, cut from that repo's HEAD at first touch |
 | Producer/stage pass (successful) | Commit (harness-made, structured message + trailers: `Request:`, `Task:`, `Run:`) |
 | Task | A contiguous commit range on the branch |
 | Task restart (fresh attempt) | `reset --hard` to the task's start commit — **fixes the dirty-tree inheritance flaw** |
 | Request validation | Review of `main...branch` — the *whole diff against the original ask*, not per-task prose |
-| Delivery | Merge to `main` (`--no-ff`, request trailer) — the request's ID is queryable in history forever |
+| Delivery | Per-repo policy: `--no-ff` merge to the local default branch, **or** push the branch + open a PR upstream (`push-pr` projects) |
 | Rollback before delivery | `reset` branch to before task N / drop the branch — main never saw it |
 | Rollback after delivery | `git revert -m1 <merge>` — a new commit, honest history |
 | "Restore just that file" | `git checkout <run-commit>^ -- path` |
+
+## Repo jurisdictions (why not one workspace repo)
+
+A workspace mono-repo collides with project reality: a project that gains its own `.git`
+(or arrives via `git clone`) shows up in an enclosing repo as a **gitlink** — a pinned SHA,
+not files — so workspace-level commits would silently stop capturing project changes. And
+the decisive constraint: *cloned repos must stay sovereign* (intact SHAs, their own
+branches, the ability to push upstream), which rules out subtree/submodule absorption.
+
+So: two layers that never see each other.
+
+- **Project repos** (`projects/<name>/.git`) own all product code. Request branches,
+  commits, diffs, rollback, and delivery happen here. Remotes (GitHub/GitLab) belong here;
+  `push-pr` delivery maps a request onto the industry-native unit: **request = branch = PR**
+  (pushing is always an explicit, gated action — the harness never touches a remote
+  unprompted).
+- **The workspace meta-repo** owns the workspace's own material (`AGENT.md`,
+  `STANDARDS.md`, `docs/`, `skills/`) and gitignores `projects/` entirely. Cheap, and it
+  gives the standards memo and agent-written docs the same diff/rollback story.
+
+**A Request is therefore a changeset over 1..n repos:**
+
+```sql
+CREATE TABLE request_repos (
+  request_id   TEXT NOT NULL,
+  repo         TEXT NOT NULL,   -- '' = workspace meta-repo, else 'projects/<name>'
+  branch       TEXT NOT NULL,
+  base_commit  TEXT NOT NULL,   -- that repo's HEAD at first touch (never assume 'main')
+  merge_commit TEXT,
+  PRIMARY KEY (request_id, repo)
+);
+```
+
+The harness commit step generalizes: after a successful pass, find every dirty repo
+(meta-repo + each `projects/*/.git`), lazily cut the request branch on first touch, commit
+in each with the same trailers. One repo remains the common case; the diff view groups by
+repo; rollback resets per repo; delivery merges (or pushes) each. Agents get a
+standards-level "don't commit — the harness commits" rule; an agent commit on the request
+branch degrades nothing (still inside the rollback boundary).
 
 ## What existing pieces become
 
@@ -100,6 +140,7 @@ CREATE TABLE requests (
   updated_at     TEXT NOT NULL
 );
 ALTER TABLE tasks ADD COLUMN request_id TEXT;   -- plan task included
+-- plus request_repos (see Jurisdictions) — the 1..n (repo, branch) set per request
 ```
 
 Git execution: shell out to `git` via the existing blocking-helper discipline (no libgit2
@@ -108,9 +149,10 @@ history shows *which agent* made each pass.
 
 ## Phases
 
-- **G0 — git-ify workspaces** (no UI): scaffold `git init` + `.gitignore`; lazy-init
-  existing workspaces on first commit; harness commit-per-successful-pass; restart resets
-  the tree to the task's start commit. *Standalone value: forensic diffs exist, the restart
+- **G0 — git-ify the two jurisdictions** (no UI): meta-repo at scaffold (ignoring
+  `projects/`), project repos init'd at project birth, lazy-init for existing trees;
+  harness commit-per-successful-pass across all dirty repos; restart resets each touched
+  repo to the task's start commit. *Standalone value: forensic diffs exist, the restart
   flaw is fixed, and `git log` already tells the story.*
 - **G1 — the Request entity**: table + `request_id`; ask → request → plan under it; branch
   at approval; lane scoped to the active request; auto-merge when the last task lands
@@ -133,3 +175,6 @@ history shows *which agent* made each pass.
    files today — keep it that way (Requests only exist through `ask`)? (Recommended: yes.)
 5. **Naming**: `Request` (matches the `ask` tool's own vocabulary and the concierge's
    language) vs `Story` / `Change`.
+6. **Delivery policy per project**: default `local-merge` everywhere, with `push-pr` as
+   opt-in per project once it has a remote? And is opening the PR in scope, or is pushing
+   the branch enough for v1?
