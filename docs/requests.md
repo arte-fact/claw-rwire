@@ -218,9 +218,56 @@ stays with the harness, and the real safety net is fencing bash-git.
       gated; PR creation deferred)
 - [x] Live e2e including a rollback and a push to a scratch remote
 
-### G4 — parallel requests (worktrees) — later
-- [ ] Design spike: worker paths, tool jails, build/port collisions between concurrent trees
-- [ ] `git worktree` per active request; per-request lanes in the scheduler
+### G4 — parallel requests (worktrees) — ✅ shipped 2026-07-03
+
+**Design (the spike, settled 2026-07-03).** One working tree serves one branch — so give
+each active request its own: a **composition of linked worktrees**, one per workspace repo
+(the meta-repo at the tree root, each project at `projects/<name>`), all checked out on the
+request branch. Trees live **outside** the workspace at
+`<data>/trees/<workspace-id>/<request-short8>/` — no repo scan, file jail, or sibling lane
+can see another request's tree. Composed lazily at the request's first task launch (cut
+from `develop`, or re-attached to the existing branch after a restart); torn down at
+delivery/abandon (`worktree remove --force` + prune; on delivery the branch survives in
+touched repos for browsable history and is `-d`-dropped in untouched ones, on abandon it's
+`-D`-dropped everywhere).
+
+- **Worker paths & tool jails**: a request-bound task's whole surface — producer/validator
+  jail, bash cwd, commit sweep, `task_repos` snapshot/reset, macro-validation reviewer,
+  per-file restore — roots at the request tree. The **canonical tree now permanently sits
+  on `develop`**: free-lane tasks (no request) run and commit there, and delivery merges
+  happen there. Worktrees share refs + objects, so every *read-side* surface (request page
+  diffs, `git show` pass diffs, rollback, push) stays canonical-rooted unchanged.
+- **Scheduler lanes**: `next_ready` becomes per-lane. A workspace's lanes = the free lane
+  + one per **active** request (the oldest `MAX_ACTIVE = 2` executing/validating, FIFO);
+  each lane runs one task at a time, lanes run concurrently.
+- **Build/port collisions**: separate trees mean separate (cold) `target/`-style caches —
+  disk and CPU cost, accepted; bounded by `MAX_ACTIVE`. Two lanes binding the same port
+  can still collide — that's a standards-memo concern, not a git-layer one.
+- **New sharp edges handled**: delivery merges can now *conflict* (parallel branches) —
+  `deliver_repo` aborts the failed merge (`merge --abort`) and holds the request
+  `validating` with a ping; a repo **born inside a tree** is a full repo (not a worktree)
+  and is *adopted* — moved into the canonical workspace — at delivery; a delivery/rollback
+  can race a running free-lane task's dirt — the existing dirty-tree refusal + retry ping
+  covers it (a working-tree-less `merge-tree` plumbing merge is the noted follow-up).
+
+- [x] Design spike: worker paths, tool jails, build/port collisions between concurrent trees
+- [x] `gitops::worktrees`: compose/remove request trees (linked worktree per repo, branch
+      cut from `develop` at composition), adopt repos born inside a tree, settle the
+      canonical tree on `develop` — real-git tests incl. the conflict-abort regression
+- [x] Scheduler lanes: free lane + one per active request (`MAX_ACTIVE`), each running one
+      task at a time; resume-from-gate honors the per-lane invariant
+- [x] Every working-tree surface rooted per-lane (jails, sweep, snapshot/reset, validation,
+      restore); read-side surfaces stay canonical (shared refs/objects)
+- [x] Live e2e: two requests executing **concurrently** in one workspace, both delivered —
+      the g4smoke run: both tasks running at once in their own trees, the younger request
+      delivering while the older still ran, a repo *born* in a tree (`projects/beta`)
+      adopted and merged, both `--no-ff` merges cut from the same base on `develop`,
+      trees torn down. The live run also caught (and the fix shipped for) relative
+      `CLAW_DATA_DIR` breaking `worktree add` dest resolution.
+- Follow-ups noted: the lazy workspace scaffold writes `AGENT.md` into a lane *tree* when
+  the canonical repo predates it, riding the request branch and tripping literal-minded
+  validators (only bites workspaces whose meta never committed a scaffold); a
+  working-tree-less `merge-tree` delivery would close the free-lane-dirt race.
 
 
 ## Decision record (settled 2026-07-03)
