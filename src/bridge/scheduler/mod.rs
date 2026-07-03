@@ -76,7 +76,18 @@ fn start(conn: &rusqlite::Connection, shared: &SharedServerState, task: Task) {
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
     super::tasks::refresh_detail_if_open(conn, shared, &task.id);
     activity(shared, &task, ActivityKind::Started, String::new());
+    snapshot_bases(conn, &task);
     launch_current(conn, &task);
+}
+
+/// Git-ify the workspace (lazy meta-repo + project births) and record each repo's pre-task
+/// HEAD at the task's first launch (G0) — the bases a restart resets to. Failures are logged,
+/// never blocking the launch: a git-less environment degrades to the pre-G0 behaviour.
+fn snapshot_bases(conn: &rusqlite::Connection, task: &Task) {
+    let root = workspace::dir_for(&data_dir(), &task.workspace_id);
+    for err in crate::gitops::snapshot_task_bases(conn, &root, &task.id) {
+        log_line(format!("gitops: snapshot {}: {err}", task.id));
+    }
 }
 
 /// Launch the task's **current step's** producer/stage run on a worker thread (self-posting
@@ -564,6 +575,23 @@ enum Next {
     Fail,
 }
 
+/// Whether a finished run triggers the harness commit sweep — a pure decision, unit-tested.
+/// Successful producer/stage passes only: validators are read-only by contract, and a failed
+/// pass must leave the tree dirty for the revise loop.
+fn commits_pass(role: RunRole, ok: bool) -> bool {
+    ok && !matches!(role, RunRole::Validator)
+}
+
+/// The pass commit's subject line: `<step>: <task title>` (the `Task:`/`Run:` trailers carry
+/// the identities; the subject is for the human reading `git log`).
+fn pass_subject(step: Option<&Step>, task: &Task) -> String {
+    let step_name = step.map_or("task", |step| step.name.as_str());
+    format!(
+        "{step_name}: {}",
+        crate::text::first_line_capped(&task.title, 60)
+    )
+}
+
 fn next_action(step_position: i64, step_count: usize, ok: bool) -> Next {
     if !ok {
         Next::Fail
@@ -745,12 +773,13 @@ pub fn finished(
             .or_else(|| owner_of(conn, &task.workspace_id)),
         _ => step_agent(conn, &task, s),
     });
-    if let Ok(run_id) = crate::id::new_id() {
+    let run_id = crate::id::new_id().ok();
+    if let Some(run_id) = run_id.as_deref() {
         let transcript = transcript_json(&invocations);
         let _ = task_runs::append(
             conn,
             &task_runs::NewRun {
-                id: &run_id,
+                id: run_id,
                 task_id: id,
                 position: task.step_position,
                 role: role_str(role),
@@ -768,6 +797,39 @@ pub fn finished(
     }
     // The run is recorded — the persisted transcript supersedes the live typewriter buffer.
     super::clear_live_turn(shared, id);
+    // The harness commit step (G0 of docs/requests.md): a successful producer/stage pass
+    // commits every dirty repo (meta + projects) with Task:/Run: trailers. Validators are
+    // read-only by contract and never commit; a failed pass deliberately leaves the tree
+    // dirty so the revise loop's context matches the disk.
+    if commits_pass(role, ok) {
+        let root = workspace::dir_for(&data_dir(), &task.workspace_id);
+        let (commits, errors) = crate::gitops::commit_pass(
+            &root,
+            agent.as_deref(),
+            &pass_subject(step.as_ref(), &task),
+            &task.id,
+            run_id.as_deref().unwrap_or("unrecorded"),
+        );
+        for pass in commits {
+            // A repo born mid-task has no launch-time base — its pre-pass seed commit
+            // becomes the base a restart resets to (first write wins for known repos).
+            if let Some(base) = pass.base_before {
+                let _ = db::task_repos::record_base(conn, &task.id, &pass.repo, &base);
+            }
+            let repo = if pass.repo.is_empty() {
+                "workspace"
+            } else {
+                pass.repo.as_str()
+            };
+            log_line(format!(
+                "gitops: {} committed {repo} @ {:.12}",
+                task.id, pass.commit
+            ));
+        }
+        for err in errors {
+            log_line(format!("gitops: commit {}: {err}", task.id));
+        }
+    }
 
     match role {
         RunRole::Stage => match next_action(task.step_position, steps.len(), ok) {

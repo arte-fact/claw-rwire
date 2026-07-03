@@ -8,6 +8,7 @@ mod bridge;
 mod db;
 mod diff;
 mod env_file;
+mod gitops;
 mod id;
 mod mcp;
 mod sandbox;

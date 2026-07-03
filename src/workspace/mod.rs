@@ -65,6 +65,10 @@ pub fn scaffold(workspace: &Path, agent_name: &str) -> Result<(), WorkspaceError
     if !agent_md.exists() {
         std::fs::write(&agent_md, starter_agent_md(agent_name))?;
     }
+    // Lazy-init the workspace meta-repo (G0 of docs/requests.md): the workspace's own
+    // material is versioned; `projects/` stays sovereign. Git trouble must not block
+    // workspace creation — the task-launch snapshot re-attempts it and logs failures.
+    let _ = crate::gitops::ensure_meta_repo(workspace);
     Ok(())
 }
 

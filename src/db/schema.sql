@@ -363,3 +363,15 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_messages
   ON agent_messages(agent_group_id, workspace_id, id);
+
+-- Pre-task git bases (G0 of docs/requests.md): the HEAD of each workspace repo — '' is the
+-- meta-repo, else 'projects/<name>' — captured at the task's first launch. A task *restart*
+-- (a fresh attempt) resets every recorded repo to its base, so the new attempt gets fresh
+-- files instead of inheriting the abandoned attempt's dirty tree. Additive (claw-rwire-only).
+CREATE TABLE IF NOT EXISTS task_repos (
+  task_id     TEXT NOT NULL REFERENCES tasks(id),
+  repo        TEXT NOT NULL,
+  base_commit TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  PRIMARY KEY (task_id, repo)
+);

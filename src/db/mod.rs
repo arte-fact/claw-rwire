@@ -9,6 +9,7 @@ pub mod endpoints;
 pub mod pipeline;
 pub mod resolution;
 pub mod settings;
+pub mod task_repos;
 pub mod task_runs;
 pub mod tasks;
 pub mod workspaces;

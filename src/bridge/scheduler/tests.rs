@@ -255,3 +255,15 @@ fn effective_output_summarizes_silent_tool_turns() {
     assert_eq!(effective_output(&spoke), "all set");
     assert!(effective_output(&agent::TurnResult::default()).is_empty());
 }
+
+#[test]
+fn only_successful_producer_or_stage_passes_trigger_the_commit_sweep() {
+    // The G0 contract: validators are read-only and never commit; a failed pass leaves the
+    // tree dirty on purpose (the revise loop's context must match the disk).
+    assert!(commits_pass(RunRole::Producer, true));
+    assert!(commits_pass(RunRole::Stage, true));
+    assert!(!commits_pass(RunRole::Validator, true));
+    assert!(!commits_pass(RunRole::Producer, false));
+    assert!(!commits_pass(RunRole::Stage, false));
+    assert!(!commits_pass(RunRole::Validator, false));
+}

@@ -453,10 +453,24 @@ pub fn resume(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str)
 }
 
 /// Restart a task from a clean slate (step 0, fresh attempt) — from a stopped or terminal task.
+/// Fresh attempt = fresh files (G0 of docs/requests.md): every repo the task recorded a
+/// pre-task base for is reset to it first, so the new attempt no longer inherits the
+/// abandoned attempt's dirty tree. A partial reset is surfaced but doesn't block the restart.
 pub fn restart(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
     let Ok(Some(task)) = tasks::get(conn, id) else {
         return;
     };
+    let root = crate::workspace::dir_for(&super::data_dir(), &task.workspace_id);
+    let reset_errors = crate::gitops::reset_task_tree(conn, &root, id);
+    if !reset_errors.is_empty() {
+        surface(
+            shared,
+            format!(
+                "restart: tree reset incomplete: {}",
+                reset_errors.join("; ")
+            ),
+        );
+    }
     if let Err(err) = tasks::restart(conn, id) {
         return surface(shared, format!("restart task: {err}"));
     }
