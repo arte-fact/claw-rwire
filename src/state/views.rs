@@ -309,6 +309,8 @@ pub struct TaskView {
     pub auto_retries: i64,
     /// The per-task auto-retry budget override, prefilled in the edit drawer (`None` = default).
     pub max_retries: Option<i64>,
+    /// The Request the task belongs to (G1) — the card wears a request tag when set.
+    pub request_id: Option<String>,
     /// The manual-restart generation (shown as "attempt N" once > 0).
     pub attempt: i64,
     /// When a retry is scheduled next (`HH:MM`), if the task is holding on a backoff.
@@ -452,6 +454,9 @@ pub struct RunView {
     pub attempt: i64,
     /// `HH:MM` (UTC) the run was recorded — the thread entry's timestamp.
     pub time: String,
+    /// The pass's git diff (stat + capped patch across its commits, G2) — empty when the
+    /// pass committed nothing. The Peek renders it behind a Diff disclosure.
+    pub diff: String,
     /// The memory layer the run launched with (R3.5 M4 provenance), or empty — the Peek shows
     /// it so "why did it do that?" has an answer.
     pub memory: String,
@@ -752,4 +757,56 @@ pub struct AgentDraft {
     pub model: String,
     pub prompt: String,
     pub tools: Vec<String>,
+}
+
+// ── Requests (G2) ──────────────────────────────────────────────────────────────────
+
+/// One open request on the board's Requests rail: progress + diffstat at a glance.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RequestCardView {
+    pub id: String,
+    pub title: String,
+    /// `planning` / `executing` / `queued` — the rail's status chip.
+    pub status: String,
+    /// "2/5 task(s) done" (empty while planning).
+    pub progress: String,
+    /// "+A/−D across F file(s)" so far (empty until a pass commits).
+    pub stat: String,
+}
+
+/// The request page (`/w/:wid/requests/:rid`): the whole story in one scroll.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RequestDetail {
+    pub id: String,
+    pub workspace_id: String,
+    pub title: String,
+    /// The user's words, verbatim — what delivery is ultimately judged against.
+    pub ask: String,
+    pub status: String,
+    pub branch: String,
+    /// The plan + work tasks, oldest first, each with its activity diffstat.
+    pub tasks: Vec<RequestTaskEntry>,
+    /// The repos the request touched (branch point → merge).
+    pub repos: Vec<RequestRepoEntry>,
+    /// The global diff's stat block (base..tip per repo, joined).
+    pub diff_stat: String,
+    /// The global diff's patch, capped — rendered with the DiffLine vocabulary.
+    pub diff_patch: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RequestTaskEntry {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub is_plan: bool,
+    /// Sum of the task's pass-commit numstats ("+A/−D"), empty when it committed nothing.
+    pub stat: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RequestRepoEntry {
+    pub repo: String,
+    pub base: String,
+    pub merge: String,
 }

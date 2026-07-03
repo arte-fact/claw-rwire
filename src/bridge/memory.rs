@@ -494,6 +494,7 @@ mod tests {
             attempt: 0,
             created_at: String::new(),
             memory: None,
+            commits: None,
         }
     }
 
@@ -615,6 +616,7 @@ mod tests {
                 transcript: None,
                 attempt: 0,
                 memory: None,
+                commits: None,
             },
         )
         .expect("run");

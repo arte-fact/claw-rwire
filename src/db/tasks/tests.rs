@@ -58,6 +58,7 @@ fn produced(conn: &Connection, run_id: &str, task_id: &str, agent: &str) {
             transcript: None,
             attempt: 0,
             memory: None,
+            commits: None,
         },
     )
     .expect("run");

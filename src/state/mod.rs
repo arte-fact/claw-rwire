@@ -89,6 +89,10 @@ pub struct App {
     pub role_defaults: RoleDefaults,
     /// The task whose detail view (run chain) is open, or `None`.
     pub task_detail: Option<TaskDetail>,
+    /// The request page (`/w/:wid/requests/:rid`) currently open, or `None` (G2).
+    pub request_detail: Option<RequestDetail>,
+    /// The active workspace's open requests — the board's Requests rail (G2).
+    pub requests: Vec<RequestCardView>,
     /// The agent whose thread page (`/w/:wid/agent/:aid`) is open, or `None` — so background
     /// lifecycle events know whether to re-project [`Self::agent_thread`].
     pub open_agent: Option<String>,

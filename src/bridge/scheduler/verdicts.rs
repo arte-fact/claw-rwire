@@ -160,6 +160,7 @@ pub(super) fn auto_pass_gate(
                 transcript: None,
                 attempt: task.attempt,
                 memory: None,
+                commits: None,
             },
         );
     }
@@ -408,6 +409,7 @@ pub fn human_verdict(
                 transcript: None,
                 attempt: task.attempt,
                 memory: None,
+                commits: None,
             },
         );
     }

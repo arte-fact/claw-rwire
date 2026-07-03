@@ -247,6 +247,14 @@ pub(crate) fn run_entry(
             toggled,
         ));
     }
+    if !run.diff.trim().is_empty() {
+        // What the pass actually changed on disk (G2) — collapsed, next to the forensics.
+        body.push(crate::ui::run_chain::diff_row(
+            &run.diff,
+            &format!("{key}.diff"),
+            toggled,
+        ));
+    }
     body.extend(run.tools.iter().enumerate().map(|(index, tool)| {
         crate::ui::run_chain::tool_row(tool, &format!("{key}.{index}"), toggled)
     }));

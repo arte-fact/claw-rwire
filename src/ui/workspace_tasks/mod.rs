@@ -55,6 +55,7 @@ pub fn tasks(app: &App) -> ElementBuilder {
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
         .append([
             toolbar(app.tasks_list_view),
+            requests_rail(app, &workspace.id),
             filter_bar(&app.board_filter),
             locked_banner(app),
             board,
@@ -64,6 +65,63 @@ pub fn tasks(app: &App) -> ElementBuilder {
             // The Peek modal (opens over the board when a card is clicked or a task is deep-linked).
             crate::ui::task_detail::peek_modal(app),
         ])
+}
+
+/// The Requests rail (G2): every open request as a row — status, progress, diffstat — each
+/// linking to its request page. Hidden while the workspace has no open requests, so boards
+/// without delegation stay exactly as they were.
+fn requests_rail(app: &App, workspace_id: &str) -> ElementBuilder {
+    if app.requests.is_empty() {
+        return el(El::Div).st([St::DisplayNone]);
+    }
+    let rows: Vec<ElementBuilder> = app
+        .requests
+        .iter()
+        .map(|request| {
+            let mut parts = vec![
+                request_badge(&request.status),
+                rwire::Link::route(&format!("/w/{workspace_id}/requests/{}", request.id))
+                    .st([St::MinW0, St::Flex1, St::Truncate, St::TextSm, St::TextHigh])
+                    .hover([St::TextAccent])
+                    .text(&request.title),
+            ];
+            if !request.progress.is_empty() {
+                parts.push(
+                    el(El::Span)
+                        .st([St::TextXs, St::TextMuted])
+                        .text(&request.progress),
+                );
+            }
+            if !request.stat.is_empty() {
+                parts.push(
+                    el(El::Span)
+                        .st([St::TextXs, St::TextMuted])
+                        .text(&request.stat),
+                );
+            }
+            el(El::Div)
+                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+                .append(parts)
+        })
+        .collect();
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
+        .append(rows)
+}
+
+/// A request's lifecycle chip on the rail.
+fn request_badge(status: &str) -> ElementBuilder {
+    let intent = match status {
+        "executing" => BadgeIntent::Primary,
+        "planning" => BadgeIntent::Warning,
+        _ => BadgeIntent::Default,
+    };
+    Badge::new()
+        .intent(intent)
+        .shape(BadgeShape::Square)
+        .fill(BadgeFill::Outline)
+        .text(status.to_owned())
+        .build()
 }
 
 /// A banner shown while the workspace has a task in flight (running/awaiting): the pipeline editor

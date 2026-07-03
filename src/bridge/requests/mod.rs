@@ -3,6 +3,9 @@
 //! touched repo and a receipt into the origin chat. Validation is stubbed as pass in v0
 //! (the macro review against the ask verbatim is G3).
 
+mod view;
+pub(crate) use view::{load_detail, pass_diff, rail_views};
+
 use rusqlite::Connection;
 
 use crate::db::{
@@ -135,6 +138,23 @@ fn deliver(conn: &Connection, request: &Request) {
     ping(conn, request, &receipt);
 }
 
+/// Parse a run's stored pass commits (`[{"repo","sha"}]`) into (repo, sha) pairs.
+pub(crate) fn parse_commits(json: Option<&str>) -> Vec<(String, String)> {
+    let Some(json) = json else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<serde_json::Value>>(json)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|value| {
+            Some((
+                value.get("repo")?.as_str()?.to_owned(),
+                value.get("sha")?.as_str()?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
 /// The request a task belongs to, if any.
 fn request_of(conn: &Connection, task: &Task) -> Option<Request> {
     let request_id = task.request_id.as_deref()?;
@@ -191,6 +211,7 @@ mod tests {
             workspace_id: "ws".to_owned(),
             origin_chat: None,
             title: "Add a difficulty setting!! (v2)".to_owned(),
+            ask: String::new(),
             status: RequestStatus::Planning,
             branch: None,
         };

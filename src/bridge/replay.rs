@@ -117,6 +117,7 @@ pub(super) fn validator_thread(
     current_output: &str,
     files: &[String],
     prior: &[TaskRun],
+    diff: Option<&str>,
 ) -> Vec<ChatMessage> {
     let mut msgs = vec![ChatMessage::system(system)];
     let mut last_output: Option<&str> = None;
@@ -133,7 +134,7 @@ pub(super) fn validator_thread(
             _ => {}
         }
     }
-    let mut current = validator_context(spec, current_output, files);
+    let mut current = validator_context(spec, current_output, files, diff);
     // On a re-review the validator already inspected an earlier version (above), so point it at
     // the delta instead of a full re-inspection — cheaper, and it still runs the build/tests.
     if run_idx > 0 {
@@ -198,7 +199,7 @@ fn step_context(spec: &str, prior: &[TaskRun], step_name: &str) -> String {
 
 /// The user turn for a validator run: the spec, the producer's output to review, and the real
 /// workspace paths so the reviewer reads the actual files instead of guessing bare names.
-fn validator_context(spec: &str, output: &str, files: &[String]) -> String {
+fn validator_context(spec: &str, output: &str, files: &[String], diff: Option<&str>) -> String {
     let tree = if files.is_empty() {
         String::new()
     } else {
@@ -208,8 +209,19 @@ fn validator_context(spec: &str, output: &str, files: &[String]) -> String {
             lines.join("\n")
         )
     };
+    // The pass's actual changes (G2): the reviewer judges the diff, not the prose — a
+    // "tests pass" claim is checked against what was really touched.
+    let changes = diff
+        .map(|diff| {
+            format!(
+                "\n\nWhat actually changed on disk during this task (git diff against the \
+                 task's start — judge the claims against this, and `repo_diff` shows more):\n\
+                 {diff}"
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "Task spec:\n{spec}\n\nThe assignee produced this for review:\n\n{output}{tree}\n\n\
+        "Task spec:\n{spec}\n\nThe assignee produced this for review:\n\n{output}{changes}{tree}\n\n\
          Review it against the spec: `list` the workspace to see what's actually there, `find` to \
          locate files or grep for a pattern, `read` the files, and if it's code use `bash` to run \
          the project's build and tests yourself (e.g. `cargo build`/`cargo test`) rather than \
@@ -243,6 +255,7 @@ mod tests {
             attempt: 0,
             created_at: String::new(),
             memory: None,
+            commits: None,
         }
     }
 
@@ -322,7 +335,7 @@ mod tests {
     #[test]
     fn validator_thread_iteration_zero_is_a_single_review_turn() {
         let files = vec!["projects/x/src/lib.rs".to_owned()];
-        let msgs = validator_thread("sys", "the spec", "the output", &files, &[]);
+        let msgs = validator_thread("sys", "the spec", "the output", &files, &[], None);
         assert_eq!(roles(&msgs), vec![Role::System, Role::User]);
         let turn = msgs[1].content.as_deref().unwrap_or("");
         assert!(turn.contains("projects/x/src/lib.rs"));
@@ -344,7 +357,7 @@ mod tests {
                 Some(verdict_call),
             ),
         ];
-        let msgs = validator_thread("sys", "the spec", "v2", &[], &prior);
+        let msgs = validator_thread("sys", "the spec", "v2", &[], &prior, None);
         // system, user(present v1), asst(verdict call), tool, asst(reply), user(current: v2)
         assert_eq!(
             roles(&msgs),
@@ -378,10 +391,19 @@ mod tests {
     #[test]
     fn validator_context_lists_the_real_file_paths() {
         let files = vec!["projects/rogue/src/render.rs".to_owned()];
-        let ctx = validator_context("the spec", "the output", &files);
+        let ctx = validator_context(
+            "the spec",
+            "the output",
+            &files,
+            Some("+1 line in docs/x.md"),
+        );
         assert!(ctx.contains("projects/rogue/src/render.rs"));
+        assert!(
+            ctx.contains("What actually changed on disk") && ctx.contains("+1 line in docs/x.md"),
+            "the reviewer sees the real diff: {ctx}"
+        );
         assert!(ctx.contains("verdict"));
-        assert!(!validator_context("s", "o", &[]).contains("Workspace files"));
+        assert!(!validator_context("s", "o", &[], None).contains("Workspace files"));
     }
 
     #[test]

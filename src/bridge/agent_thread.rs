@@ -411,6 +411,7 @@ mod tests {
             transcript: None,
             attempt: 0,
             memory: None,
+            commits: None,
         }
     }
 

@@ -44,14 +44,16 @@ impl RequestStatus {
     }
 }
 
-/// The `ask` (the user's words, verbatim — G3's validation contract) and `created_at` stay
-/// in the table but off the struct until the request page (G2) reads them.
+/// `created_at` stays in the table but off the struct until something reads it.
 #[derive(Debug, Clone)]
 pub struct Request {
     pub id: String,
     pub workspace_id: String,
     pub origin_chat: Option<String>,
     pub title: String,
+    /// The user's words, verbatim — the request page shows them and G3's validation judges
+    /// the branch diff against them.
+    pub ask: String,
     pub status: RequestStatus,
     /// `req/<short-id>-<slug>`, minted at plan approval — `None` while planning.
     pub branch: Option<String>,
@@ -67,7 +69,7 @@ pub struct RequestRepo {
     pub merge_commit: Option<String>,
 }
 
-const SELECT: &str = "SELECT id, workspace_id, origin_chat_id, title, status, branch \
+const SELECT: &str = "SELECT id, workspace_id, origin_chat_id, title, ask, status, branch \
                       FROM requests";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Request> {
@@ -76,8 +78,9 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Request> {
         workspace_id: row.get(1)?,
         origin_chat: row.get(2)?,
         title: row.get(3)?,
-        status: RequestStatus::from_str(&row.get::<_, String>(4)?),
-        branch: row.get(5)?,
+        ask: row.get(4)?,
+        status: RequestStatus::from_str(&row.get::<_, String>(5)?),
+        branch: row.get(6)?,
     })
 }
 

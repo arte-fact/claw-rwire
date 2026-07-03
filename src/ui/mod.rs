@@ -16,6 +16,7 @@ mod files;
 mod logs;
 mod memory;
 mod prompts;
+mod request_page;
 mod run_chain;
 mod system_map;
 mod task_detail;
@@ -82,6 +83,10 @@ pub fn routes() -> Router {
                 WsTab::Tasks,
                 workspace_tasks::tasks(),
             ))
+        })
+        .page("/w/:wid/requests/:rid", |p| {
+            // The request page (G2): the ask's whole story — plan, tasks, diffs, delivery.
+            view(workspace::shell(wid(p), WsTab::Tasks, request_page::page()))
         })
         .page("/w/:wid/workflow", |p| {
             view(workspace::shell(
@@ -662,6 +667,13 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     }
     // A deep link to a task: load the board's lane (so the modal opens over a populated board)
     // and the task's detail/run chain (which also opens its Peek modal).
+    if let Some(params) = RoutePattern::new("/w/:wid/requests/:rid").matches(path)
+        && let Some(rid) = params.get("rid")
+    {
+        bridge::send(Command::LoadRequestDetail {
+            request_id: rid.to_owned(),
+        });
+    }
     if let Some(params) = RoutePattern::new("/w/:wid/tasks/:tid").matches(path) {
         if let Some(wid) = params.get("wid").map(str::to_owned) {
             bridge::send(Command::LoadTasks { workspace: wid });
@@ -702,6 +714,7 @@ fn workspace_of(path: &str) -> Option<String> {
         "/w/:wid/files",
         "/w/:wid/tasks",
         "/w/:wid/tasks/:tid",
+        "/w/:wid/requests/:rid",
         "/w/:wid/workflow",
         "/w/:wid/team",
         "/w/:wid/agent/:aid",

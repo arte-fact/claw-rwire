@@ -238,8 +238,16 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
         // builds on what it already checked rather than re-inspecting the whole tree.
         let prior =
             task_runs::list_for_task_attempt(conn, &task.id, task.attempt).unwrap_or_default();
-        let messages =
-            super::replay::validator_thread(&system_prompt, &task.spec, output, &files, &prior);
+        // What the task actually changed (G2): the reviewer judges the diff, not the prose.
+        let diff = review_diff(conn, &task.id, &workspace_dir);
+        let messages = super::replay::validator_thread(
+            &system_prompt,
+            &task.spec,
+            output,
+            &files,
+            &prior,
+            diff.as_deref(),
+        );
         // `read` + `list` + `find` (browse/search the tree) + `bash` (run the project's
         // build/tests), plus the `verdict` tool. A reviewer asked to confirm code "builds and tests
         // clean" can't do so with `read` alone — the live failure was a validator calling `bash`
@@ -381,6 +389,48 @@ fn run_meta(conn: &rusqlite::Connection, task: &Task) -> RunMeta {
 
 fn env_lookup(key: &str) -> Option<String> {
     std::env::var(key).ok()
+}
+
+/// Cap on the diff injected into a validator prompt — stat + patch; `repo_diff` has the rest.
+const REVIEW_DIFF_CAP_CHARS: usize = 4_000;
+
+/// What the task changed so far — its recorded bases against the (clean, post-commit) tree,
+/// stat + patch per repo, capped. `None` when nothing changed or the workspace has no repos.
+fn review_diff(
+    conn: &rusqlite::Connection,
+    task_id: &str,
+    root: &std::path::Path,
+) -> Option<String> {
+    let bases = db::task_repos::bases_for(conn, task_id).ok()?;
+    let mut parts: Vec<String> = Vec::new();
+    for base in &bases {
+        let Ok(dir) = crate::gitops::repo_dir(root, &base.repo) else {
+            continue;
+        };
+        let stat =
+            crate::gitops::diff(&dir, Some(&base.base_commit), None, true).unwrap_or_default();
+        if stat.is_empty() {
+            continue;
+        }
+        let patch =
+            crate::gitops::diff(&dir, Some(&base.base_commit), None, false).unwrap_or_default();
+        let label = if base.repo.is_empty() {
+            "workspace"
+        } else {
+            base.repo.as_str()
+        };
+        parts.push(format!("{label}:\n{stat}\n{patch}"));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let joined = parts.join("\n\n");
+    Some(if joined.chars().count() > REVIEW_DIFF_CAP_CHARS {
+        let head: String = joined.chars().take(REVIEW_DIFF_CAP_CHARS).collect();
+        format!("{head}\n…[diff truncated — repo_diff shows the rest]")
+    } else {
+        joined
+    })
 }
 
 /// The mid-run steer poll (R5): drain the running agent's queue **only while this run is
@@ -791,33 +841,12 @@ pub fn finished(
         _ => step_agent(conn, &task, s),
     });
     let run_id = crate::id::new_id().ok();
-    if let Some(run_id) = run_id.as_deref() {
-        let transcript = transcript_json(&invocations);
-        let _ = task_runs::append(
-            conn,
-            &task_runs::NewRun {
-                id: run_id,
-                task_id: id,
-                position: task.step_position,
-                role: role_str(role),
-                agent: agent.as_deref(),
-                output: Some(&output),
-                verdict: verdict.as_ref().map(|(decision, _)| decision.as_str()),
-                feedback: verdict.as_ref().map(|(_, feedback)| feedback.as_str()),
-                iteration: task.iteration,
-                ok,
-                transcript: transcript.as_deref(),
-                attempt: task.attempt,
-                memory: memory.as_deref(),
-            },
-        );
-    }
-    // The run is recorded — the persisted transcript supersedes the live typewriter buffer.
-    super::clear_live_turn(shared, id);
-    // The harness commit step (G0 of docs/requests.md): a successful producer/stage pass
-    // commits every dirty repo (meta + projects) with Task:/Run: trailers. Validators are
-    // read-only by contract and never commit; a failed pass deliberately leaves the tree
-    // dirty so the revise loop's context matches the disk.
+    // The harness commit step (G0 of docs/requests.md) runs BEFORE the run row is recorded
+    // so the row can carry its pass commits (the G2 diff anchor). A successful producer/stage
+    // pass commits every dirty repo (meta + projects) with Request:/Task:/Run: trailers.
+    // Validators are read-only by contract and never commit; a failed pass deliberately
+    // leaves the tree dirty so the revise loop's context matches the disk.
+    let mut pass_commits: Vec<serde_json::Value> = Vec::new();
     if commits_pass(role, ok) {
         let root = workspace::dir_for(&data_dir(), &task.workspace_id);
         // A request-bound pass lands on the request's branch (G1) — cut from develop at
@@ -863,11 +892,43 @@ pub fn finished(
                 "gitops: {} committed {repo} @ {:.12}",
                 task.id, pass.commit
             ));
+            pass_commits.push(serde_json::json!({ "repo": pass.repo, "sha": pass.commit }));
         }
         for err in errors {
             log_line(format!("gitops: commit {}: {err}", task.id));
         }
     }
+
+    // Record the run in the chain (context source + audit trail), pass commits included.
+    if let Some(run_id) = run_id.as_deref() {
+        let transcript = transcript_json(&invocations);
+        let commits_json = if pass_commits.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&pass_commits).ok()
+        };
+        let _ = task_runs::append(
+            conn,
+            &task_runs::NewRun {
+                id: run_id,
+                task_id: id,
+                position: task.step_position,
+                role: role_str(role),
+                agent: agent.as_deref(),
+                output: Some(&output),
+                verdict: verdict.as_ref().map(|(decision, _)| decision.as_str()),
+                feedback: verdict.as_ref().map(|(_, feedback)| feedback.as_str()),
+                iteration: task.iteration,
+                ok,
+                transcript: transcript.as_deref(),
+                attempt: task.attempt,
+                memory: memory.as_deref(),
+                commits: commits_json.as_deref(),
+            },
+        );
+    }
+    // The run is recorded — the persisted transcript supersedes the live typewriter buffer.
+    super::clear_live_turn(shared, id);
 
     match role {
         RunRole::Stage => match next_action(task.step_position, steps.len(), ok) {

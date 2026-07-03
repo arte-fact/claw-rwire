@@ -158,6 +158,10 @@ pub enum Command {
     LoadTaskDetail {
         task_id: String,
     },
+    /// Project a request's page (`/w/:wid/requests/:rid` opening, G2).
+    LoadRequestDetail {
+        request_id: String,
+    },
     /// Open an agent's workspace thread (`/w/:wid/agent/:aid`) — project its merged
     /// tasks/runs/live timeline scoped to that workspace.
     OpenAgentThread {
@@ -556,6 +560,9 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadTasks { workspace } => tasks::load(conn, shared, &workspace),
         Command::LoadDashboard => tasks::project_dashboard(conn, shared),
         Command::LoadTaskDetail { task_id } => tasks::load_detail(conn, shared, &task_id),
+        Command::LoadRequestDetail { request_id } => {
+            requests::load_detail(conn, shared, &request_id)
+        }
         Command::OpenAgentThread { agent, workspace } => {
             agent_thread::load(conn, shared, &agent, &workspace)
         }

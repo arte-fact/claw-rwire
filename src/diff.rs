@@ -63,6 +63,30 @@ pub fn line_diff(old: &str, new: &str) -> Vec<DiffLine> {
     out
 }
 
+/// Classify a unified git patch's lines for rendering with the same vocabulary: `+` lines
+/// are Added, `-` Removed, and everything else (context, hunk/file headers) Equal — the
+/// `+++`/`---` file headers stay context, not churn.
+pub fn patch_lines(patch: &str) -> Vec<DiffLine> {
+    patch
+        .lines()
+        .map(|line| {
+            let kind = if line.starts_with("+++") || line.starts_with("---") {
+                DiffKind::Equal
+            } else if line.starts_with('+') {
+                DiffKind::Added
+            } else if line.starts_with('-') {
+                DiffKind::Removed
+            } else {
+                DiffKind::Equal
+            };
+            DiffLine {
+                kind,
+                text: line.to_owned(),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,6 +127,24 @@ mod tests {
         assert_eq!(
             kinds(&line_diff("a\nb", "a")),
             vec![(DiffKind::Equal, "a"), (DiffKind::Removed, "b")]
+        );
+    }
+
+    #[test]
+    fn patch_lines_classifies_a_unified_git_patch() {
+        let patch = "diff --git a/x.md b/x.md\n--- a/x.md\n+++ b/x.md\n@@ -1,2 +1,2 @@\n context\n-old\n+new";
+        let kinds: Vec<DiffKind> = patch_lines(patch).iter().map(|l| l.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                DiffKind::Equal, // diff --git
+                DiffKind::Equal, // --- header, not a removal
+                DiffKind::Equal, // +++ header, not an addition
+                DiffKind::Equal, // @@ hunk
+                DiffKind::Equal, // context
+                DiffKind::Removed,
+                DiffKind::Added,
+            ]
         );
     }
 

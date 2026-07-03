@@ -301,6 +301,15 @@ pub fn open_for_request(conn: &Connection, request_id: &str) -> rusqlite::Result
     )
 }
 
+/// A request's tasks (the plan included), oldest first — the request page's timeline.
+pub fn list_for_request(conn: &Connection, request_id: &str) -> rusqlite::Result<Vec<Task>> {
+    let mut stmt = conn.prepare(&format!(
+        "{SELECT} WHERE request_id = ?1 ORDER BY created_at ASC"
+    ))?;
+    let rows = stmt.query_map(params![request_id], from_row)?;
+    rows.collect()
+}
+
 /// How many work tasks a request materialised (the plan gate excluded) — the receipt's
 /// "N task(s)" and the digest's progress denominator.
 pub fn count_for_request(conn: &Connection, request_id: &str) -> rusqlite::Result<i64> {

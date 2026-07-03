@@ -67,6 +67,42 @@ pub(crate) fn memory_row(memory: &str, key: &str, toggled: &[String]) -> Element
     )
 }
 
+/// A pass's git diff as a disclosure row (G2): a muted "diff · <first stat line>" header
+/// that opens to the patch, `+`/`-` lines coloured with the shared DiffLine vocabulary.
+pub(crate) fn diff_row(diff: &str, key: &str, toggled: &[String]) -> ElementBuilder {
+    let open = toggled.iter().any(|t| t == key);
+    let body = open.then(|| {
+        let rows: Vec<ElementBuilder> = crate::diff::patch_lines(diff)
+            .into_iter()
+            .map(|line| {
+                let color = match line.kind {
+                    DiffKind::Added => St::TextSuccess,
+                    DiffKind::Removed => St::TextError,
+                    DiffKind::Equal => St::TextMuted,
+                };
+                el(El::Div)
+                    .st([St::WhitespacePreWrap, St::BreakWords, St::TextXs, color])
+                    .text(&line.text)
+            })
+            .collect();
+        el(El::Div)
+            .st([St::PSm, St::BgApp, St::OverflowXAuto])
+            .append(rows)
+    });
+    let summary = diff
+        .lines()
+        .find(|line| line.contains('|') || line.contains("file"))
+        .unwrap_or_else(|| diff.lines().next().unwrap_or(""));
+    disclosure_row(
+        key,
+        open,
+        "diff",
+        &format!("what this pass changed · {}", one_line(summary, 90)),
+        None,
+        body,
+    )
+}
+
 /// The shared disclosure-row scaffold: a full-width toggle header (caret + name + a truncated
 /// summary + an optional trailing mark) over the body when open. One shape for tool calls and
 /// the memory snapshot, so the forensics read uniformly.
@@ -443,6 +479,7 @@ mod tests {
             attempt: 0,
             time: String::new(),
             memory: String::new(),
+            diff: String::new(),
         }
     }
 

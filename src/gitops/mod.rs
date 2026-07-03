@@ -138,8 +138,47 @@ pub fn untracked(dir: &Path) -> Result<String, GitError> {
 /// receipt's "+A/−D across F files". Binary files count as a file with 0/0 lines.
 pub fn diff_numstat(dir: &Path, range: &str) -> Result<(u64, u64, u64), GitError> {
     let out = git(dir, &["--no-pager", "diff", "--numstat", range])?;
+    Ok(numstat_totals(&out))
+}
+
+/// `git diff` of a commit range (`base..tip`), as stat or patch — the request page's
+/// global-diff source.
+pub fn diff_range(dir: &Path, range: &str, stat: bool) -> Result<String, GitError> {
+    let mut args: Vec<&str> = vec!["--no-pager", "diff"];
+    if stat {
+        args.push("--stat");
+    }
+    args.push(range);
+    git(dir, &args)
+}
+
+/// One pass commit's (files, insertions, deletions) vs its parent(s) — per-run diff stats.
+pub fn show_numstat(dir: &Path, commit: &str) -> Result<(u64, u64, u64), GitError> {
+    let out = git(
+        dir,
+        &["--no-pager", "show", "--numstat", "--format=", commit],
+    )?;
+    Ok(numstat_totals(&out))
+}
+
+/// One pass commit as stat + patch (the Peek's Diff disclosure) — capped by the caller.
+pub fn show_patch(dir: &Path, commit: &str) -> Result<String, GitError> {
+    git(
+        dir,
+        &[
+            "--no-pager",
+            "show",
+            "--stat",
+            "--patch",
+            "--format=%h %s",
+            commit,
+        ],
+    )
+}
+
+fn numstat_totals(out: &str) -> (u64, u64, u64) {
     let (mut files, mut adds, mut dels) = (0, 0, 0);
-    for line in out.lines() {
+    for line in out.lines().filter(|line| !line.trim().is_empty()) {
         let mut cols = line.split('\t');
         let added = cols.next().unwrap_or("0");
         let deleted = cols.next().unwrap_or("0");
@@ -147,7 +186,7 @@ pub fn diff_numstat(dir: &Path, range: &str) -> Result<(u64, u64, u64), GitError
         adds += added.parse::<u64>().unwrap_or(0);
         dels += deleted.parse::<u64>().unwrap_or(0);
     }
-    Ok((files, adds, dels))
+    (files, adds, dels)
 }
 
 /// Whether the working tree differs from HEAD (`status --porcelain` non-empty; untracked

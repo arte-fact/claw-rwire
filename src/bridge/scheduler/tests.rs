@@ -25,6 +25,7 @@ fn resume_run(
         attempt: 0,
         created_at: String::new(),
         memory: None,
+        commits: None,
     }
 }
 

@@ -262,6 +262,10 @@ fn signal_tags(task: &TaskView) -> Vec<ElementBuilder> {
     if task.status == "awaiting" {
         tags.push(Tag::new("needs you").intent(TagIntent::Primary).build());
     }
+    if task.request_id.is_some() {
+        // Part of a Request (G1) — the rail above the board tracks the whole ask.
+        tags.push(Tag::new("request").build());
+    }
     if !task.blockers.is_empty() {
         tags.push(
             Tag::new(format!("⛔ {}", task.blockers.len()))

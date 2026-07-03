@@ -40,6 +40,7 @@ pub fn lane_views(conn: &rusqlite::Connection, workspace: &str) -> Vec<TaskView>
             } else {
                 None
             },
+            request_id: task.request_id,
         })
         .collect()
 }
@@ -102,6 +103,7 @@ pub(super) fn run_view(
         attempt: run.attempt,
         time: super::hh_mm(&run.created_at),
         memory: run.memory.unwrap_or_default(),
+        diff: String::new(),
     }
 }
 
@@ -128,10 +130,17 @@ pub(super) fn proposed_tasks(
 fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::state::TaskDetail> {
     let names = agent_names(conn);
     tasks::get(conn, task_id).ok().flatten().map(|task| {
+        let root = crate::workspace::dir_for(&super::data_dir(), &task.workspace_id);
         let runs = crate::db::task_runs::list_for_task(conn, task_id)
             .unwrap_or_default()
             .into_iter()
-            .map(|run| run_view(&names, run))
+            .map(|run| {
+                // The pass's Diff disclosure (G2): `git show` over the run's stored commits.
+                let diff = super::requests::pass_diff(&root, run.commits.as_deref());
+                let mut view = run_view(&names, run);
+                view.diff = diff;
+                view
+            })
             .collect();
         let proposed = if task.is_plan {
             proposed_tasks(conn, &task.id)
@@ -205,11 +214,17 @@ fn snippet(text: &str) -> String {
 pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
     let views = lane_views(conn, workspace);
     let columns = columns_for(conn, workspace);
+    let requests = super::requests::rail_views(conn, workspace);
     shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_TASKS, App::FIELD_PIPELINE_COLUMNS]),
+        ChangeSet::from_fields(&[
+            App::FIELD_TASKS,
+            App::FIELD_PIPELINE_COLUMNS,
+            App::FIELD_REQUESTS,
+        ]),
         move |app| {
             app.tasks = views;
             app.pipeline_columns = columns;
+            app.requests = requests;
         },
     );
 }
@@ -220,6 +235,7 @@ pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: 
 pub fn project_if_active(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
     let views = lane_views(conn, workspace);
     let columns = columns_for(conn, workspace);
+    let requests = super::requests::rail_views(conn, workspace);
     // Keep the Workflow editor's lock live: a task going running/awaiting (or finishing) must
     // flip the lock so the editor's controls reflect reality rather than going stale + dead.
     let locked = tasks::has_inflight(conn, workspace).unwrap_or(false);
@@ -229,12 +245,14 @@ pub fn project_if_active(conn: &rusqlite::Connection, shared: &SharedServerState
             App::FIELD_TASKS,
             App::FIELD_PIPELINE_COLUMNS,
             App::FIELD_WORKFLOW_LOCKED,
+            App::FIELD_REQUESTS,
         ]),
         move |app| {
             if app.active_workspace.as_deref() == Some(workspace.as_str()) {
                 app.tasks = views;
                 app.pipeline_columns = columns;
                 app.workflow_locked = locked;
+                app.requests = requests;
             }
         },
     );
@@ -684,6 +702,7 @@ mod tests {
                 transcript: None,
                 attempt: 0,
                 memory: None,
+                commits: None,
             },
         )
         .expect("run");

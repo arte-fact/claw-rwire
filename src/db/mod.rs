@@ -79,6 +79,7 @@ fn apply_schema(conn: &Connection) -> Result<(), DbError> {
 /// created (`CREATE TABLE IF NOT EXISTS` can't alter an existing table). Each step is
 /// idempotent, so this runs safely on every open. rust-claw never reads these tables.
 fn migrate(conn: &Connection) -> Result<(), DbError> {
+    add_task_run_commits_column(conn).map_err(DbError::Schema)?;
     add_task_request_column(conn).map_err(DbError::Schema)?;
     add_workspace_owner_column(conn).map_err(DbError::Schema)?;
     widen_agent_workspaces_to_m_n(conn).map_err(DbError::Schema)?;
@@ -93,6 +94,16 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_task_proposal_column(conn).map_err(DbError::Schema)?;
     add_task_archived_column(conn).map_err(DbError::Schema)?;
     Ok(())
+}
+
+/// Add `task_runs.commits` (the harness's pass commits per run, G2) to a DB that predates
+/// it. A fresh DB already has it from the schema — "duplicate column" is ignored.
+fn add_task_run_commits_column(conn: &Connection) -> rusqlite::Result<()> {
+    match conn.execute("ALTER TABLE task_runs ADD COLUMN commits TEXT", []) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 /// Add `tasks.request_id` (the Request a task belongs to, G1) to a DB that predates it. A
