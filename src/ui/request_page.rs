@@ -3,7 +3,9 @@
 //! repos it touched (branch point → merge), and the global diff against the branch point.
 
 use rwire::{El, ElementBuilder, Link, St, el, handler, renderer};
-use rwire_components::{Badge, BadgeFill, BadgeIntent, BadgeShape, Button, ButtonSize, Text};
+use rwire_components::{
+    Badge, BadgeFill, BadgeIntent, BadgeShape, Breadcrumb, Button, ButtonSize, Text,
+};
 
 use crate::bridge::{self, Command};
 use crate::diff::DiffKind;
@@ -20,7 +22,7 @@ fn body(app: &App) -> ElementBuilder {
     let Some(detail) = &app.request_detail else {
         return Text::body("Loading the request…").muted().build();
     };
-    let mut sections = vec![header(detail), controls(detail), ask_block(detail)];
+    let mut sections = vec![header(app, detail), ask_block(detail)];
     if !detail.validation.is_empty() {
         sections.push(section(
             "Validation",
@@ -48,11 +50,21 @@ fn body(app: &App) -> ElementBuilder {
         .append(sections)
 }
 
-fn header(detail: &RequestDetail) -> ElementBuilder {
+/// The page's first line, per the navigation redesign (N0): breadcrumb trail
+/// (workspace › request), the status badge riding the crumb tail, the branch, and the
+/// status-appropriate controls right-aligned — place, state, and verbs on one line.
+fn header(app: &App, detail: &RequestDetail) -> ElementBuilder {
+    let workspace = app
+        .workspaces
+        .iter()
+        .find(|w| w.id == detail.workspace_id)
+        .map(|w| w.name.clone())
+        .unwrap_or_else(|| detail.workspace_id.clone());
     let mut row = vec![
-        el(El::Div)
-            .st([St::TextLg, St::FontSemibold, St::TextHigh])
-            .text(&detail.title),
+        Breadcrumb::new()
+            .item(workspace, Some(format!("/w/{}", detail.workspace_id)))
+            .item(detail.title.clone(), None::<String>)
+            .build(),
         status_badge(&detail.status),
     ];
     if !detail.branch.is_empty() {
@@ -62,6 +74,7 @@ fn header(detail: &RequestDetail) -> ElementBuilder {
                 .text(&detail.branch),
         );
     }
+    row.push(controls(detail));
     el(El::Div)
         .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::FlexWrap])
         .append(row)
@@ -203,7 +216,7 @@ fn controls(detail: &RequestDetail) -> ElementBuilder {
         return el(El::Div).st([St::DisplayNone]);
     }
     el(El::Div)
-        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::MlAuto])
         .append(buttons)
 }
 
