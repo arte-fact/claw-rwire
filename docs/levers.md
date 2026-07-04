@@ -56,6 +56,6 @@ the app never used.
 - [x] Sweep re-asserts critical project ignore lines (`node_modules/`, `target/`, `.env`)
       every pass — the incident's root: a React scaffold clobbered `.gitignore`, `add -A`
       tracked node_modules, and the git index tore (`unknown index entry format`)
-- [ ] Later: a real toast queue (rwire `Toast`) instead of the single-slot banner;
+- [x] Toast queue (rwire `Toast`): surface()d failures stack bottom-right on every page, capped at 5, per-toast dismiss; App.error stays the admin forms inline channel. Later:
       scheduler/gitops background errors surfaced somewhere visible (Activity feed shows
       lifecycle, not errors); error taxonomy (user-actionable vs telemetry)

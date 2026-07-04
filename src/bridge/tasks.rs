@@ -684,10 +684,17 @@ pub(super) fn agent_names(conn: &rusqlite::Connection) -> Vec<(String, String)> 
         .collect()
 }
 
+/// Queue a failure toast (L6): capped, newest last — the shell renders the stack on every
+/// page, each dismissable. (`App.error` stays the admin forms' inline channel.)
 pub(crate) fn surface(shared: &SharedServerState, error: String) {
     super::log_line(format!("bridge tasks: {error}"));
-    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_ERROR]), move |app| {
-        app.error = Some(error)
+    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_TOASTS]), move |app| {
+        let id = app.toasts.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+        app.toasts
+            .push(crate::state::ToastView { id, message: error });
+        if app.toasts.len() > 5 {
+            app.toasts.remove(0);
+        }
     });
 }
 

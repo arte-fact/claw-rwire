@@ -838,3 +838,11 @@ pub struct RestorableFile {
     pub sha: String,
     pub path: String,
 }
+
+/// One queued failure toast (the L6 queue): `surface()`d errors render as a dismissable
+/// stack on whatever page the operator is on.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ToastView {
+    pub id: u64,
+    pub message: String,
+}
