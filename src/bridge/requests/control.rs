@@ -31,7 +31,7 @@ pub(super) fn begin_validation(conn: &Connection, request: &Request) {
         .flatten()
         .is_some_and(|ws| ws.auto_approve);
     if auto {
-        launch_validation(conn, request);
+        launch_validation(conn, request, false);
     } else {
         ping(
             conn,
@@ -59,7 +59,7 @@ pub(crate) fn recover_validations(conn: &Connection) {
                     "requests: relaunching the macro review of {} (orphaned by a restart)",
                     request.id
                 ));
-                launch_validation(conn, &request);
+                launch_validation(conn, &request, false);
             }
         }
     }
@@ -68,7 +68,7 @@ pub(crate) fn recover_validations(conn: &Connection) {
 /// The agent macro review, on a worker thread: the reviewer sees the ask verbatim and the
 /// whole branch diff, may inspect the tree, and must call `verdict`. Posts
 /// [`Command::RequestValidated`] back to the bridge.
-fn launch_validation(conn: &Connection, request: &Request) {
+fn launch_validation(conn: &Connection, request: &Request, nudge: bool) {
     let reviewer = validation_reviewer(conn, &request.workspace_id);
     let Some(reviewer) = reviewer else {
         return log_line(format!(
@@ -110,6 +110,15 @@ fn launch_validation(conn: &Connection, request: &Request) {
             diff
         },
     );
+    let brief = if nudge {
+        format!(
+            "{brief}\n\nYour previous review turn ended WITHOUT calling the `verdict` \
+             tool, so it decided nothing. Inspect less, conclude more: call `verdict` \
+             (pass / revise / reject) in THIS turn."
+        )
+    } else {
+        brief
+    };
     let messages = crate::agent::build_messages(
         &system_prompt,
         std::slice::from_ref(&crate::state::ChatMessage {
@@ -215,6 +224,17 @@ pub(crate) fn on_validated(
     };
     if request.status != RequestStatus::Validating {
         return; // resolved by the user (or superseded) while the review ran
+    }
+    // The reviewer's indecision gets one nudged retry (the macro analogue of the task-level
+    // L1 rule) before the request holds for the user.
+    if decision == "revise" && note.contains("returned no verdict") && request.validation.is_none()
+    {
+        log_line(format!(
+            "requests: macro review of {} ended without a verdict — retrying with a nudge",
+            request.id
+        ));
+        launch_validation(conn, &request, true);
+        return;
     }
     let summary = format!("{decision} — {}", crate::text::first_line_capped(note, 200));
     let _ = db::requests::set_validation(conn, request_id, &summary);
