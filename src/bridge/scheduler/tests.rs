@@ -268,3 +268,36 @@ fn only_successful_producer_or_stage_passes_trigger_the_commit_sweep() {
     assert!(!commits_pass(RunRole::Stage, false));
     assert!(!commits_pass(RunRole::Validator, false));
 }
+
+#[test]
+fn verdictless_reviews_counts_only_this_iterations_inconclusive_ones() {
+    use crate::db::task_runs::TaskRun;
+    let run =
+        |role: &str, position: i64, iteration: i64, verdict: Option<&str>, ok: bool| TaskRun {
+            id: String::new(),
+            position,
+            role: role.to_owned(),
+            agent: None,
+            output: None,
+            verdict: verdict.map(str::to_owned),
+            feedback: None,
+            iteration,
+            ok,
+            transcript: None,
+            attempt: 0,
+            created_at: String::new(),
+            memory: None,
+            commits: None,
+        };
+    let prior = vec![
+        run("producer", 1, 0, None, true),  // producers never count
+        run("validator", 1, 0, None, true), // counts: this position+iteration, no verdict
+        run("validator", 1, 0, Some("revise"), true), // concluded — not counted
+        run("validator", 0, 0, None, true), // other position
+        run("validator", 1, 1, None, true), // other iteration
+        run("validator", 1, 0, None, false), // failed run — the retry_or_fail path owns it
+    ];
+    assert_eq!(super::verdictless_reviews(&prior, 1, 0), 1);
+    assert_eq!(super::verdictless_reviews(&prior, 1, 1), 1);
+    assert_eq!(super::verdictless_reviews(&prior, 2, 0), 0);
+}

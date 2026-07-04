@@ -54,6 +54,25 @@ pub(super) fn route_verdict(
                 step.max_iterations,
             ) {
                 let _ = tasks::set_iteration(conn, &task.id, task.iteration + 1);
+                // Trouble is quieter than success (L4): from the second round on, the
+                // request's chat hears that the review loop is still churning — the
+                // operator can steer before the budget exhausts.
+                if task.iteration >= 1
+                    && let Some(request_id) = task.request_id.as_deref()
+                    && let Ok(Some(request)) = crate::db::requests::get(conn, request_id)
+                {
+                    super::super::requests::ping(
+                        conn,
+                        &request,
+                        &format!(
+                            "🔁 **{}** — review round {}/{}: {}",
+                            task.title,
+                            task.iteration + 2,
+                            step.max_iterations + 1,
+                            crate::text::first_line_capped(&feedback, 160)
+                        ),
+                    );
+                }
                 if let Ok(Some(again)) = tasks::get(conn, &task.id) {
                     relaunch(conn, &again);
                 }

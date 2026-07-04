@@ -266,7 +266,7 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             task_runs::list_for_task_attempt(conn, &task.id, task.attempt).unwrap_or_default();
         // What the task actually changed (G2): the reviewer judges the diff, not the prose.
         let diff = review_diff(conn, &task.id, &workspace_dir);
-        let messages = super::replay::validator_thread(
+        let mut messages = super::replay::validator_thread(
             &system_prompt,
             &task.spec,
             output,
@@ -274,6 +274,17 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             &prior,
             diff.as_deref(),
         );
+        // The conclude-now nudge (L1): a retried review is told its previous turn ended
+        // without a verdict — inspect less, conclude more.
+        if verdictless_reviews(&prior, task.step_position, task.iteration) > 0 {
+            messages.push(agent::ChatMessage::text(
+                agent::Role::User,
+                "Your previous review turn ended WITHOUT calling the `verdict` tool, so it \
+                 decided nothing. Conclude NOW: weigh what you have already inspected and \
+                 call `verdict` (pass / revise / reject) in this turn."
+                    .to_owned(),
+            ));
+        }
         // `read` + `list` + `find` (browse/search the tree) + `bash` (run the project's
         // build/tests), plus the `verdict` tool. A reviewer asked to confirm code "builds and tests
         // clean" can't do so with `read` alone — the live failure was a validator calling `bash`
@@ -495,6 +506,29 @@ fn consume_steers(conn: &rusqlite::Connection, agent_id: &str, workspace_id: &st
             message.body
         })
         .collect()
+}
+
+/// How many review retries a verdict-less validator turn gets before the None verdict
+/// falls through to a charged revise (L1: 1 launch + 2 retries per iteration).
+const MAX_VERDICTLESS_RETRIES: usize = 2;
+
+/// Count this iteration's inconclusive reviews — successful validator runs at `position`
+/// that recorded no verdict — a pure decision, unit-tested.
+fn verdictless_reviews(
+    prior: &[crate::db::task_runs::TaskRun],
+    position: i64,
+    iteration: i64,
+) -> usize {
+    prior
+        .iter()
+        .filter(|run| {
+            run.role == "validator"
+                && run.ok
+                && run.position == position
+                && run.iteration == iteration
+                && run.verdict.is_none()
+        })
+        .count()
 }
 
 /// The produced-but-never-reviewed output of an attempt at `position`, if any — a pure
@@ -991,6 +1025,30 @@ pub fn finished(
             }
         }
         RunRole::Validator => {
+            // L1a (docs/levers.md): a verdict-less review is the reviewer's indecision, not
+            // a judgement — retry the REVIEW (bounded) instead of charging the producer an
+            // iteration. The retried run replays its own inconclusive turns and is nudged
+            // to conclude (launch_validator); past the cap it falls through to route_verdict,
+            // whose None-fallback is today's revise.
+            if ok
+                && verdict.is_none()
+                && let Some(step) = &step
+            {
+                let prior = task_runs::list_for_task_attempt(conn, &task.id, task.attempt)
+                    .unwrap_or_default();
+                if verdictless_reviews(&prior, task.step_position, task.iteration)
+                    <= MAX_VERDICTLESS_RETRIES
+                {
+                    log_line(format!(
+                        "scheduler: {} review ended without a verdict — retrying the review",
+                        task.id
+                    ));
+                    launch_validator(conn, &task, step, &last_producer_output(conn, &task.id));
+                    super::tasks::project_if_active(conn, shared, &task.workspace_id);
+                    super::tasks::refresh_detail_if_open(conn, shared, &task.id);
+                    return;
+                }
+            }
             if !ok {
                 // A validator *execution* failure (endpoint timeout, transport error) is not a
                 // review verdict — the producer's work is done and recorded. Retry within the
