@@ -49,7 +49,8 @@ pub(crate) fn on_plan_rejected(conn: &Connection, plan: &Task) {
 /// A request task reached a terminal state: deliver when the whole set has landed. Every
 /// task of the request (the plan included) must be `done` — a failed or cancelled sibling
 /// holds delivery until it's restarted to completion, so a partial request never merges.
-pub(crate) fn maybe_deliver(conn: &Connection, task: &Task) {
+pub(crate) fn maybe_deliver(conn: &Connection, shared: &rwire::SharedServerState, task: &Task) {
+    let _ = shared;
     let Some(request) = request_of(conn, task) else {
         return;
     };
@@ -72,7 +73,7 @@ pub(crate) fn maybe_deliver(conn: &Connection, task: &Task) {
 /// (a conflict with a parallel request, a dirty canonical tree) leaves the request open with
 /// the trouble surfaced — nothing half-delivers silently, and `develop` is never left
 /// mid-merge (the merge aborts).
-pub(super) fn deliver(conn: &Connection, request: &Request) {
+pub(super) fn deliver(conn: &Connection, shared: &rwire::SharedServerState, request: &Request) {
     let root = workspace::dir_for(&data_dir(), &request.workspace_id);
     let tree = gitops::tree_root(&data_dir(), &request.workspace_id, &request.id);
     let repos = db::requests::repos_for(conn, &request.id).unwrap_or_default();
@@ -130,6 +131,9 @@ pub(super) fn deliver(conn: &Connection, request: &Request) {
                 errors.join("; ")
             ),
         );
+        // The operator is on the request page, not the chat — the error must reach the
+        // screen they clicked on (the audit's headline gap).
+        super::tasks::surface(shared, format!("Delivery failed: {}", errors.join("; ")));
         return;
     }
     // Everything merged — the tree has served its purpose (G4). Tear it down and drop the

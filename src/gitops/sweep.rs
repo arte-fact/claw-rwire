@@ -38,9 +38,26 @@ pub fn ensure_meta_repo(root: &Path) -> Result<(), GitError> {
 /// Append the `projects/` line to the meta `.gitignore` when it's missing (creating the file
 /// if need be) — idempotent, and it survives an agent rewriting the file.
 fn ensure_ignore_line(root: &Path) -> Result<(), GitError> {
-    let path = root.join(".gitignore");
+    ensure_ignore_lines(root, &[META_IGNORE_LINE])
+}
+
+/// Ignore lines a project repo must never lose, whatever scaffolding tools rewrite its
+/// `.gitignore` to: dependency/build trees torn into the index corrupt it (live: a React
+/// scaffold replaced the seed with `/target`, `git add -A` tracked node_modules, and the
+/// index died with `unknown index entry format`), and `.env` must never ride a commit.
+const PROJECT_IGNORE_LINES: &[&str] = &["node_modules/", "target/", ".env"];
+
+/// Append each missing line to a repo's `.gitignore` (creating it if need be) — idempotent,
+/// additive, and it survives an agent or a scaffolder rewriting the file.
+fn ensure_ignore_lines(dir: &Path, lines: &[&str]) -> Result<(), GitError> {
+    let path = dir.join(".gitignore");
     let current = std::fs::read_to_string(&path).unwrap_or_default();
-    if current.lines().any(|line| line.trim() == META_IGNORE_LINE) {
+    let missing: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| !current.lines().any(|have| have.trim() == *line))
+        .collect();
+    if missing.is_empty() {
         return Ok(());
     }
     let newline = if current.is_empty() || current.ends_with('\n') {
@@ -48,7 +65,7 @@ fn ensure_ignore_line(root: &Path) -> Result<(), GitError> {
     } else {
         "\n"
     };
-    std::fs::write(&path, format!("{current}{newline}{META_IGNORE_LINE}\n"))?;
+    std::fs::write(&path, format!("{current}{newline}{}\n", missing.join("\n")))?;
     Ok(())
 }
 
@@ -160,6 +177,11 @@ pub fn commit_pass(
         match is_dirty(&dir) {
             Ok(false) => continue,
             Ok(true) => {
+                if !repo.is_empty()
+                    && let Err(err) = ensure_ignore_lines(&dir, PROJECT_IGNORE_LINES)
+                {
+                    errors.push(format!("{repo}: ignore lines: {err}"));
+                }
                 let request_base = match request {
                     Some(req) => match ensure_on_request_branch(&dir, req.branch) {
                         Ok(base) => base,

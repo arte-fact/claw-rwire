@@ -115,7 +115,42 @@ fn view(body: ElementBuilder) -> ElementBuilder {
     el(El::Div)
         .style(fill())
         .st([St::DisplayFlex, St::FlexCol, St::OverflowHidden])
-        .append([body])
+        .append([global_error_banner(), body])
+}
+
+/// The global error banner (the error-handling audit's fix): `surface()`d failures render
+/// on WHATEVER page the operator is on — a failed Deliver used to reach only the server
+/// log and a chat ping while the request page sat silent. Dismissable; replaced by the
+/// next error (single-slot, last wins).
+#[renderer]
+fn global_error_banner(app: &App) -> ElementBuilder {
+    let Some(error) = &app.error else {
+        return el(El::Div).st([St::DisplayNone]);
+    };
+    el(El::Div)
+        .st([
+            St::FlexShrink0,
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::PxMd,
+            St::PySm,
+            St::BorderWarning,
+            St::TextSm,
+            St::TextWarning,
+        ])
+        .append([
+            el(El::Span)
+                .st([St::MinW0, St::Flex1, St::BreakWords])
+                .text(error),
+            crate::ui::widgets::ghost("dismiss", dismiss_error()),
+        ])
+}
+
+#[handler]
+fn dismiss_error(app: &mut App, ctx: &EventContext) {
+    let _ = ctx;
+    app.error = None;
 }
 
 const DRAWER_W: &str = "16rem";

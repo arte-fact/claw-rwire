@@ -684,7 +684,7 @@ pub(super) fn agent_names(conn: &rusqlite::Connection) -> Vec<(String, String)> 
         .collect()
 }
 
-fn surface(shared: &SharedServerState, error: String) {
+pub(crate) fn surface(shared: &SharedServerState, error: String) {
     super::log_line(format!("bridge tasks: {error}"));
     shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_ERROR]), move |app| {
         app.error = Some(error)

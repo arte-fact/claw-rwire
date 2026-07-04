@@ -293,7 +293,7 @@ pub(super) fn terminal_finish(
     super::super::tasks::refresh_detail_if_open(conn, shared, &task.id);
     // A request task landing may complete the whole request — delivery v0 (G1) merges the
     // request branch to develop per repo and drops the receipt into the origin chat.
-    super::super::requests::maybe_deliver(conn, task);
+    super::super::requests::maybe_deliver(conn, shared, task);
     if let Some(chat) = &task.origin_chat {
         super::super::notify::completion(chat, &task.title, status.as_str(), output);
     }

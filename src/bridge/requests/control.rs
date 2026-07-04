@@ -239,7 +239,7 @@ pub(crate) fn on_validated(
     let summary = format!("{decision} — {}", crate::text::first_line_capped(note, 200));
     let _ = db::requests::set_validation(conn, request_id, &summary);
     if decision == "pass" {
-        super::deliver(conn, &request);
+        super::deliver(conn, shared, &request);
     } else {
         ping(
             conn,
@@ -265,7 +265,7 @@ pub(crate) fn deliver_now(conn: &Connection, shared: &SharedServerState, request
     if request.validation.is_none() {
         let _ = db::requests::set_validation(conn, request_id, "pass — delivered by you");
     }
-    super::deliver(conn, &request);
+    super::deliver(conn, shared, &request);
     refresh(conn, shared, &request);
 }
 
@@ -317,6 +317,10 @@ pub(crate) fn abandon(conn: &Connection, shared: &SharedServerState, request_id:
             request.title
         )
     } else {
+        super::super::tasks::surface(
+            shared,
+            format!("Abandon hit trouble: {}", errors.join("; ")),
+        );
         format!(
             "🗑 Abandoned **{}** — with git trouble: {}",
             request.title,
@@ -371,6 +375,7 @@ pub(crate) fn rollback(conn: &Connection, shared: &SharedServerState, request_id
                 errors.join("; ")
             ),
         );
+        super::super::tasks::surface(shared, format!("Rollback failed: {}", errors.join("; ")));
     }
     refresh(conn, shared, &request);
 }
@@ -397,6 +402,7 @@ pub(crate) fn push(conn: &Connection, shared: &SharedServerState, request_id: &s
         }
     }
     let note = if !errors.is_empty() {
+        super::super::tasks::surface(shared, format!("Push failed: {}", errors.join("; ")));
         format!(
             "⚠️ Push of **{}** hit trouble: {}",
             request.title,
@@ -438,9 +444,10 @@ pub(crate) fn restore_file(
         .and_then(|dir| gitops::restore_file(&dir, sha, path).map_err(|err| err.to_string()));
     match outcome {
         Ok(()) => log_line(format!("requests: restored {path} to before {sha:.12}")),
-        Err(err) => log_line(format!("requests: restore {path}: {err}")),
+        Err(err) => {
+            super::super::tasks::surface(shared, format!("Restore of {path} failed: {err}"));
+        }
     }
-    let _ = shared;
 }
 
 /// Re-project everything a control action can change: the request page, the rail + board.

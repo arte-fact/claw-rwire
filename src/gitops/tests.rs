@@ -570,3 +570,25 @@ fn composition_adopts_canonical_dirt_so_trees_see_dropped_files() {
     assert!(!is_dirty(&root).expect("status"), "canonical dirt adopted");
     assert!(log_message(&root, "develop").contains("adopt pre-request"));
 }
+
+#[test]
+fn sweep_reasserts_project_ignore_lines_a_scaffolder_clobbered() {
+    // The React-scaffold incident: a tool replaced the seeded .gitignore with `/target`,
+    // the sweep tracked node_modules, and the index tore. Critical lines come back on
+    // every sweep of a dirty project repo.
+    let root = scratch("ignore-reassert");
+    let app = root.join("projects/app");
+    ensure_project_repo(&app).expect("birth");
+    std::fs::write(app.join(".gitignore"), "/target\n").expect("clobber");
+    write(&root, "projects/app/node_modules/dep/index.js", "x");
+    write(&root, "projects/app/src/main.rs", "fn main() {}");
+    let (_, errors) = commit_pass(&root, None, "pass", "t", "r", None);
+    assert_eq!(errors, Vec::<String>::new());
+    let ignore = std::fs::read_to_string(app.join(".gitignore")).expect("read");
+    assert!(ignore.contains("/target") && ignore.contains("node_modules/"));
+    let tracked = git(&app, &["ls-files"]).expect("ls-files");
+    assert!(
+        !tracked.contains("node_modules"),
+        "the dependency tree must never enter the index: {tracked}"
+    );
+}

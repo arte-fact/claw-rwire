@@ -42,3 +42,20 @@ M3 sat at five failing tests mid-iteration with no signal until it recovered.
       closes the delivery-vs-dirty-canonical race
 - [ ] Abandon kills in-flight workers (process-group kill) — closes the orphan-writer
       resurrection under `trees/`
+
+### L6 — error-handling audit (2026-07-04, from the failed-Deliver incident)
+The app HAS an error channel (`App.error` via `surface()`) — but only chat + Files rendered
+it, and only `bridge/{files,tasks}` wrote to it. The whole request control plane (Deliver /
+Rollback / Push / Abandon / Restore) reported failures to the server log and a chat ping
+only — invisible on the page the operator actually clicked. rwire ships a `Toast` component
+the app never used.
+- [x] Global error banner in the shell: `surface()`d failures now render on every page,
+      dismissable (single-slot, last wins)
+- [x] Request verbs surface their failures (delivery merge errors, rollback/push/abandon
+      trouble, per-file restore) — plus chat ping + log as before
+- [x] Sweep re-asserts critical project ignore lines (`node_modules/`, `target/`, `.env`)
+      every pass — the incident's root: a React scaffold clobbered `.gitignore`, `add -A`
+      tracked node_modules, and the git index tore (`unknown index entry format`)
+- [ ] Later: a real toast queue (rwire `Toast`) instead of the single-slot banner;
+      scheduler/gitops background errors surfaced somewhere visible (Activity feed shows
+      lifecycle, not errors); error taxonomy (user-actionable vs telemetry)
