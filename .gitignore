@@ -8,3 +8,4 @@ Cargo.lock.bak
 .playwright-mcp/
 *.jpeg
 /claw-data-e2e
+claw-data-backup-*/

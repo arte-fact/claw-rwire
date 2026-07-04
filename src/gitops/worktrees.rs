@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use super::requests::{DEVELOP, branch_exists, ensure_develop};
 use super::sweep::{ensure_workspace_repos, repos};
-use super::{GitError, current_branch, git, is_dirty, is_repo, repo_dir};
+use super::{GitError, commit_all, current_branch, git, is_dirty, is_repo, repo_dir};
 
 /// Where a request's tree lives: **outside** the workspace root — no repo scan, file jail,
 /// or sibling lane can see it — at `<data>/trees/<workspace-id>/<request-short8>`. Always
@@ -76,11 +76,18 @@ fn tree_repo_dir(tree: &Path, repo: &str) -> PathBuf {
     }
 }
 
-/// Move the canonical repo onto `develop`: ensure the branch exists and check it out when
-/// the tree is clean. A dirty tree (a free-lane pass mid-write, a legacy mid-flight
-/// request) is left where it is — the checkout would clobber work.
+/// Move the canonical repo onto `develop`: adopt any dirt first, then ensure the branch
+/// exists and check it out. Adoption is the same rule as the task-launch snapshot: files
+/// dropped into the canonical tree between requests — the Files tab, a user copying a
+/// reference document in — must reach the integration line, or a composed tree can't see
+/// the very files the ask names (the live from-scratch e2e failure: an untracked
+/// `docs/empire.bas` was invisible to every request lane). A repo sitting off `develop`
+/// with dirt keeps both (legacy edge, unchanged behaviour).
 fn settle_on_develop(dir: &Path) -> Result<(), GitError> {
     ensure_develop(dir)?;
+    if is_dirty(dir)? && current_branch(dir)? == DEVELOP {
+        commit_all(dir, None, "claw: adopt pre-request workspace state")?;
+    }
     if current_branch(dir)? != DEVELOP && !is_dirty(dir)? {
         git(dir, &["checkout", DEVELOP])?;
     }

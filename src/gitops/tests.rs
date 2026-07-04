@@ -548,3 +548,25 @@ fn tree_root_is_absolute_even_for_a_relative_data_dir() {
     assert!(tree.is_absolute(), "{}", tree.display());
     assert!(tree.ends_with("data/trees/ws/request1"));
 }
+
+#[test]
+fn composition_adopts_canonical_dirt_so_trees_see_dropped_files() {
+    // The from-scratch e2e failure: a reference document copied into the canonical
+    // workspace after the meta repo's birth sat untracked — the concierge could read it,
+    // but every request tree composed from develop without it, and the first task was
+    // rejected for "missing" input. Composition must adopt canonical dirt first.
+    let root = scratch("wt-adopt-dirt");
+    ensure_meta_repo(&root).expect("meta");
+    write(&root, "docs/reference.bas", "10 PRINT \"EMPIRE\"");
+    let tree = scratch("wt-adopt-dirt-trees").join("tree");
+    assert_eq!(
+        ensure_request_tree(&root, &tree, "req/ee-adopt"),
+        Vec::<String>::new()
+    );
+    assert!(
+        tree.join("docs/reference.bas").exists(),
+        "the dropped file must reach the composed tree"
+    );
+    assert!(!is_dirty(&root).expect("status"), "canonical dirt adopted");
+    assert!(log_message(&root, "develop").contains("adopt pre-request"));
+}
