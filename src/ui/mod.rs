@@ -215,15 +215,16 @@ fn agents_nav(app: &App) -> ElementBuilder {
         // selection the old thread list used.
         rows.push(concierge_row(concierge, open.is_none()));
     }
+    if !nav.groups.is_empty() {
+        rows.push(section_label("Workspaces"));
+    }
     for group in &nav.groups {
-        rows.push(group_header(
-            &group.workspace_id,
-            &group.workspace_name,
-            active_ws == Some(group.workspace_id.as_str()),
-            group.awaiting,
-        ));
         // Agent threads left the sidebar (N3): the workspace header's member avatars carry
-        // them — the nav halves in height and stays about places, not people.
+        // them — one row per workspace, a live dot + the needs-you badge (the mockup's row).
+        rows.push(workspace_row(
+            group,
+            active_ws == Some(group.workspace_id.as_str()),
+        ));
     }
     rows.push(new_workspace_link());
     el(El::Div)
@@ -237,30 +238,40 @@ fn agents_nav(app: &App) -> ElementBuilder {
         .append(rows)
 }
 
-/// A workspace group header — a clickable section label linking to the workspace's board (so every
-/// board stays reachable), with the workspace's "needs you" badge on the right.
-fn group_header(id: &str, name: &str, active: bool, awaiting: usize) -> ElementBuilder {
+/// One workspace row: a live status dot (pulsing while any member works), the name, and the
+/// workspace's "needs you" badge — linking to its board.
+fn workspace_row(group: &crate::state::AgentNavGroup, active: bool) -> ElementBuilder {
+    use rwire_components::{StatusDot, StatusDotIntent};
     let color = if active { St::TextHigh } else { St::TextMuted };
-    Link::route(&format!("/w/{id}"))
+    let working = group
+        .agents
+        .iter()
+        .any(|agent| agent.status == crate::state::AgentStatus::Working);
+    let dot = if working {
+        StatusDot::new()
+            .intent(StatusDotIntent::Primary)
+            .pulse(true)
+    } else {
+        StatusDot::new()
+    };
+    Link::route(&format!("/w/{}", group.workspace_id))
         .on(Ev::Click, close_nav())
         .st([
             St::DisplayFlex,
             St::ItemsCenter,
             St::GapSm,
+            St::PyXs,
             St::PxMd,
-            St::PtSm,
-            St::PbXs,
-            St::TextXs,
-            St::TextUppercase,
-            St::TrackingWide,
+            St::TextSm,
             St::NoUnderline,
             St::CursorPointer,
             color,
         ])
         .hover([St::TextHigh])
         .append([
-            el(El::Span).st([St::Flex1]).text(name),
-            awaiting_badge(awaiting),
+            dot.build(),
+            el(El::Span).st([St::Flex1]).text(&group.workspace_name),
+            awaiting_badge(group.awaiting),
         ])
 }
 

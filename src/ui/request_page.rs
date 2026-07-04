@@ -382,8 +382,16 @@ fn push(app: &mut App, ctx: &EventContext) {
 }
 
 fn section(title: &str, body: ElementBuilder) -> ElementBuilder {
+    // The mockup's bordered panel: label over content in a hairline box.
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .st([
+            St::BorderDefault,
+            St::BgSurface,
+            St::PSm,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapSm,
+        ])
         .append([
             el(El::Div)
                 .st([St::TextXs, St::TextLow, St::TextUppercase])

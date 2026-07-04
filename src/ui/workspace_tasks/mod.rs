@@ -56,6 +56,9 @@ pub fn tasks(app: &App) -> ElementBuilder {
         .append([
             needs_you(app, &workspace.id),
             requests_section(app, &workspace.id),
+            el(El::Div)
+                .st([St::TextXs, St::TextLow, St::TextUppercase])
+                .text("Board · free-standing tasks"),
             toolbar(app.tasks_list_view),
             filter_bar(&app.board_filter),
             locked_banner(app),

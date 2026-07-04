@@ -64,26 +64,34 @@ fn header(app: &App, detail: &TaskDetail) -> ElementBuilder {
         .append([crumbs, status_badge(&detail.status), meta(app, detail)])
 }
 
-/// Assignee avatar + (when live) the current step / iteration — the header's quiet tail.
+/// Assignee avatar + the mockup's context chips: step, assignee, attempt · iteration —
+/// facts, not filters. The header's quiet tail.
 fn meta(app: &App, detail: &TaskDetail) -> ElementBuilder {
+    use rwire_components::Chip;
     let task = app.tasks.iter().find(|t| t.id == detail.id);
     let assignee = task.and_then(|t| t.agent.as_deref()).unwrap_or("owner");
     let mut row = vec![Avatar::new().name(assignee).size(AvatarSize::Sm).build()];
-    let terminal = matches!(
-        detail.status.as_str(),
-        "done" | "failed" | "rejected" | "cancelled"
-    );
-    if let Some(task) = task.filter(|_| !terminal)
-        && let Some(step) = app.pipeline_columns.get(task.step_position.max(0) as usize)
-    {
-        let mut label = step.clone();
-        if task.iteration > 0 {
-            label.push_str(&format!(" · iter {}", task.iteration + 1));
+    if let Some(task) = task {
+        if let Some(step) = app.pipeline_columns.get(task.step_position.max(0) as usize) {
+            row.push(Chip::new(step.clone()).build());
         }
-        row.push(el(El::Span).st([St::TextXs, St::TextMuted]).text(&label));
+        row.push(
+            Chip::new(format!(
+                "attempt {} · iter {}",
+                task.attempt + 1,
+                task.iteration + 1
+            ))
+            .build(),
+        );
     }
     el(El::Div)
-        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::MlAuto])
+        .st([
+            St::DisplayFlex,
+            St::ItemsCenter,
+            St::GapSm,
+            St::MlAuto,
+            St::FlexWrap,
+        ])
         .append(row)
 }
 
@@ -115,21 +123,15 @@ fn page_thread(app: &App, detail: &TaskDetail) -> ElementBuilder {
         .append(thread_entries(app, detail));
     el(El::Div)
         .st([St::Flex1, St::MinH0, St::DisplayFlex, St::FlexCol])
-        .append([thread::scroll(column), gate_bar(detail)])
+        .append([thread::scroll(column), gate_bar(app, detail)])
 }
 
 /// The ordered thread entries: the spec (as the originating request), a plan's proposed tasks,
 /// each run as an authored entry, then the live run when one is in flight.
 fn thread_entries(app: &App, detail: &TaskDetail) -> Vec<ElementBuilder> {
-    let mut entries = vec![thread::entry(
-        "you",
-        St::TextHigh,
-        Some("request"),
-        "",
-        None,
-        true,
-        vec![crate::ui::widgets::markdown(detail.spec.clone())],
-    )];
+    // The spec lives in its own panel above (the mockup's SPEC box) — the thread starts
+    // with the work: a plan's proposal, then the runs.
+    let mut entries: Vec<ElementBuilder> = Vec::new();
     if detail.is_plan {
         entries.push(thread::entry(
             "claw",
@@ -398,7 +400,7 @@ fn control_buttons(detail: &TaskDetail) -> Vec<ElementBuilder> {
 
 /// The Thread's pinned bottom bar — the review composer when the task is parked at a human gate,
 /// else the run controls. A `FlexShrink0` sibling below the scroll, like the chat composer.
-fn gate_bar(detail: &TaskDetail) -> ElementBuilder {
+fn gate_bar(app: &App, detail: &TaskDetail) -> ElementBuilder {
     let inner = if detail.awaiting {
         review_gate(&detail.id)
     } else {
@@ -406,10 +408,71 @@ fn gate_bar(detail: &TaskDetail) -> ElementBuilder {
             .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
             .append(control_buttons(detail))
     };
+    let mut children = vec![inner];
+    // The docked steer composer (the mockup's bottom bar): while the task is live, a note
+    // here queues for the assignee and rides its next pass boundary (R4) — on a phone the
+    // task page reads as a chat with the agent, which is what it is.
+    if matches!(detail.status.as_str(), "running" | "pending") {
+        use rwire_components::Composer;
+        let agent = app
+            .tasks
+            .iter()
+            .find(|t| t.id == detail.id)
+            .and_then(|t| t.agent.as_deref())
+            .unwrap_or("the agent");
+        children.push(
+            Composer::new()
+                .id(format!("task-steer-{}", detail.id))
+                .placeholder(format!("Steer {agent} — delivered at its next pass…"))
+                .compact(true)
+                .on_submit(send_task_steer())
+                .build()
+                .st([St::WFull]),
+        );
+    }
     el(El::Div)
-        .st([St::FlexShrink0, St::BorderT, St::PMd])
+        .st([
+            St::FlexShrink0,
+            St::BorderT,
+            St::PMd,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapSm,
+        ])
         .md([St::PxLg])
-        .append([inner])
+        .append(children)
+}
+
+/// Queue a steer note for the task's assignee (falls back to the workspace owner at run
+/// time, matching the scheduler's effective-assignee rule).
+#[handler]
+fn send_task_steer(app: &mut App, ctx: &EventContext) {
+    let Some(detail) = app.task_detail.as_ref() else {
+        return;
+    };
+    let body = ctx.field("message").unwrap_or_default().trim().to_owned();
+    if body.is_empty() {
+        return;
+    }
+    let agent = app
+        .tasks
+        .iter()
+        .find(|t| t.id == detail.id)
+        .and_then(|t| t.agent_id.clone())
+        .or_else(|| {
+            app.workspaces
+                .iter()
+                .find(|w| w.id == detail.workspace_id)
+                .and_then(|w| w.owner.clone())
+        });
+    let Some(agent) = agent else {
+        return;
+    };
+    bridge::send(Command::SteerAgent {
+        agent,
+        workspace: detail.workspace_id.clone(),
+        body,
+    });
 }
 
 /// The inline review composer for a parked task: Approve / Reject, then a "what to change…" field

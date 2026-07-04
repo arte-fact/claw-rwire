@@ -86,14 +86,18 @@ fn header(app: &App) -> ElementBuilder {
         0 => "no members".to_owned(),
         n => format!("{n} member{}", if n == 1 { "" } else { "s" }),
     };
+    // The mockup's compact masthead: the workspace name as the page's current crumb, the
+    // member avatars right-aligned on the same line (owner/team detail lives in Team).
+    let _ = (owner, team);
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::FlexWrap])
         .append([
-            Text::heading1(workspace.name.clone()).build(),
-            Text::body(format!("owner {owner} · {team}"))
-                .muted()
-                .build(),
-            member_avatars(workspace),
+            el(El::Span)
+                .st([St::TextLg, St::FontSemibold, St::TextHigh])
+                .text(&workspace.name),
+            el(El::Div)
+                .st([St::MlAuto])
+                .append([member_avatars(workspace)]),
         ])
 }
 
