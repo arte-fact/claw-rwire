@@ -45,6 +45,26 @@ pub(super) fn begin_validation(conn: &Connection, request: &Request) {
     }
 }
 
+/// Boot recovery: relaunch macro reviews orphaned by a server restart. A request stuck
+/// `validating` with no verdict recorded is, in an auto-approve workspace, a review whose
+/// worker died mid-run (a non-auto workspace parks there by design — the user's gate).
+pub(crate) fn recover_validations(conn: &Connection) {
+    for ws in db::workspaces::list(conn).unwrap_or_default() {
+        if !ws.auto_approve {
+            continue;
+        }
+        for request in db::requests::open_for_workspace(conn, &ws.id).unwrap_or_default() {
+            if request.status == RequestStatus::Validating && request.validation.is_none() {
+                log_line(format!(
+                    "requests: relaunching the macro review of {} (orphaned by a restart)",
+                    request.id
+                ));
+                launch_validation(conn, &request);
+            }
+        }
+    }
+}
+
 /// The agent macro review, on a worker thread: the reviewer sees the ask verbatim and the
 /// whole branch diff, may inspect the tree, and must call `verdict`. Posts
 /// [`Command::RequestValidated`] back to the bridge.

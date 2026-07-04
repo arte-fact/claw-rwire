@@ -13,6 +13,9 @@ use super::{admin, data_dir, log_line, project_chat_memory, project_memory_overv
 /// Prime the projection from the DB and select the most recent thread. On first
 /// run (no threads yet) seed one so the operator lands in a ready chat.
 pub(super) fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
+    // Reviews don't survive a restart (worker threads die with the process) — relaunch
+    // any macro validation left verdict-less in an auto-approve workspace.
+    super::requests::control::recover_validations(conn);
     if chat::list_chats(conn).map(|chats| chats.is_empty()) == Ok(true)
         && let Ok(id) = id::new_id()
     {
