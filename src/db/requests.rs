@@ -53,7 +53,6 @@ impl RequestStatus {
     }
 }
 
-/// `created_at` stays in the table but off the struct until something reads it.
 #[derive(Debug, Clone)]
 pub struct Request {
     pub id: String,
@@ -68,6 +67,8 @@ pub struct Request {
     pub branch: Option<String>,
     /// The macro-validation verdict + feedback (G3), or `None` before validation ran.
     pub validation: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// One repo a request touched: the branch point recorded when the branch was cut there,
@@ -81,7 +82,7 @@ pub struct RequestRepo {
 }
 
 const SELECT: &str = "SELECT id, workspace_id, origin_chat_id, title, ask, status, branch, \
-                      validation FROM requests";
+                      validation, created_at, updated_at FROM requests";
 
 fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Request> {
     Ok(Request {
@@ -93,6 +94,8 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Request> {
         status: RequestStatus::from_str(&row.get::<_, String>(5)?),
         branch: row.get(6)?,
         validation: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
     })
 }
 

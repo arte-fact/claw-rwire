@@ -22,9 +22,12 @@ fn body(app: &App) -> ElementBuilder {
     let Some(detail) = &app.request_detail else {
         return Text::body("Loading the request…").muted().build();
     };
-    let mut sections = vec![header(app, detail), ask_block(detail)];
+    // Two columns on desktop (N3): the story on the left (contract → verdict → timeline),
+    // the git reality on the right (branch, repos, history); phones stack them. The full
+    // diff keeps the page's bottom at full width, one disclosure per file.
+    let mut story = vec![ask_block(detail)];
     if !detail.validation.is_empty() {
-        sections.push(section(
+        story.push(section(
             "Validation",
             el(El::Div)
                 .st([
@@ -37,16 +40,43 @@ fn body(app: &App) -> ElementBuilder {
         ));
     }
     if !detail.tasks.is_empty() {
-        sections.push(section("Tasks", timeline(detail)));
+        story.push(section("Tasks", timeline(detail)));
     }
+    let mut side = vec![branch_panel(detail)];
     if !detail.repos.is_empty() {
-        sections.push(section("Repos", repos(detail)));
+        side.push(section("Repos", repos(detail)));
     }
+    side.push(section("History", history(detail)));
+    let columns = el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapLg])
+        .md([St::FlexRow, St::ItemsStart])
+        .append([
+            el(El::Div)
+                .st([
+                    St::DisplayFlex,
+                    St::FlexCol,
+                    St::GapLg,
+                    St::MinW0,
+                    St::Flex1,
+                ])
+                .append(story),
+            el(El::Div)
+                .st([
+                    St::DisplayFlex,
+                    St::FlexCol,
+                    St::GapLg,
+                    St::MinW0,
+                    St::Flex1,
+                    St::MaxWMd,
+                ])
+                .append(side),
+        ]);
+    let mut sections = vec![header(app, detail), columns];
     if !detail.diff_stat.is_empty() {
-        sections.push(section("Diff", global_diff(detail)));
+        sections.push(section("Diff", global_diff(app, detail)));
     }
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapLg, St::MaxW2xl])
+        .st([St::DisplayFlex, St::FlexCol, St::GapLg, St::MaxW80rem])
         .append(sections)
 }
 
@@ -95,6 +125,67 @@ fn ask_block(detail: &RequestDetail) -> ElementBuilder {
             ])
             .text(&detail.ask),
     )
+}
+
+/// The branch at a glance: name, the tasks-done hairline meter, and the diff totals.
+fn branch_panel(detail: &RequestDetail) -> ElementBuilder {
+    use rwire_components::{Progress, ProgressSize};
+    let done = detail
+        .tasks
+        .iter()
+        .filter(|task| task.status == "done")
+        .count();
+    let total = detail.tasks.len();
+    let mut rows: Vec<ElementBuilder> = Vec::new();
+    if !detail.branch.is_empty() {
+        rows.push(
+            el(El::Div)
+                .st([St::TextXs, St::TextAccent, St::Truncate])
+                .text(&detail.branch),
+        );
+    }
+    if total > 0 {
+        rows.push(
+            Progress::new()
+                .value(done as u32)
+                .max(total as u32)
+                .size(ProgressSize::Sm)
+                .label(format!("{done}/{total} tasks done"))
+                .build(),
+        );
+        rows.push(
+            el(El::Div)
+                .st([St::TextXs, St::TextMuted])
+                .text(&format!("{done}/{total} task(s) done")),
+        );
+    }
+    section(
+        "Branch",
+        el(El::Div)
+            .st([St::DisplayFlex, St::FlexCol, St::GapXs])
+            .append(rows),
+    )
+}
+
+/// The lifecycle at a glance — asked / current status, from the row's own stamps.
+fn history(detail: &RequestDetail) -> ElementBuilder {
+    let row = |time: &str, text: &str| {
+        el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::TextXs])
+            .append([
+                el(El::Span).st([St::TextLow]).text(time),
+                el(El::Span).st([St::TextMuted]).text(text),
+            ])
+    };
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
+        .append([
+            row(&detail.asked_at, "asked"),
+            row(
+                &detail.updated_at,
+                &format!("{} — last change", detail.status),
+            ),
+        ])
 }
 
 fn timeline(detail: &RequestDetail) -> ElementBuilder {
@@ -154,37 +245,68 @@ fn repos(detail: &RequestDetail) -> ElementBuilder {
         .append(rows)
 }
 
-/// The whole request against its branch point: the stat block, then the capped patch in the
-/// shared DiffLine colours.
-fn global_diff(detail: &RequestDetail) -> ElementBuilder {
+/// The whole request against its branch point: the stat block, then the patch split into
+/// one disclosure per file (N3) — closed by default, so a big request scans as a file list.
+fn global_diff(app: &App, detail: &RequestDetail) -> ElementBuilder {
     let mut children = vec![
         el(El::Div)
             .st([St::TextXs, St::TextMuted, St::WhitespacePreWrap])
             .text(&detail.diff_stat),
     ];
-    if !detail.diff_patch.is_empty() {
-        let rows: Vec<ElementBuilder> = crate::diff::patch_lines(&detail.diff_patch)
-            .into_iter()
-            .map(|line| {
-                let color = match line.kind {
-                    DiffKind::Added => St::TextSuccess,
-                    DiffKind::Removed => St::TextError,
-                    DiffKind::Equal => St::TextMuted,
-                };
-                el(El::Div)
-                    .st([St::WhitespacePreWrap, St::BreakWords, St::TextXs, color])
-                    .text(&line.text)
-            })
-            .collect();
-        children.push(
+    for (index, chunk) in split_per_file(&detail.diff_patch).into_iter().enumerate() {
+        let summary = chunk
+            .lines()
+            .next()
+            .unwrap_or("")
+            .rsplit(" b/")
+            .next()
+            .unwrap_or("")
+            .to_owned();
+        let key = format!("reqdiff.{index}");
+        let open = app.tool_toggled.iter().any(|t| t == &key);
+        let body = open.then(|| {
+            let rows: Vec<ElementBuilder> = crate::diff::patch_lines(&chunk)
+                .into_iter()
+                .map(|line| {
+                    let color = match line.kind {
+                        DiffKind::Added => St::TextSuccess,
+                        DiffKind::Removed => St::TextError,
+                        DiffKind::Equal => St::TextMuted,
+                    };
+                    el(El::Div)
+                        .st([St::WhitespacePreWrap, St::BreakWords, St::TextXs, color])
+                        .text(&line.text)
+                })
+                .collect();
             el(El::Div)
                 .st([St::PSm, St::BgApp, St::OverflowXAuto])
-                .append(rows),
-        );
+                .append(rows)
+        });
+        children.push(crate::ui::run_chain::disclosure_row(
+            &key, open, "file", &summary, None, body,
+        ));
     }
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append(children)
+}
+
+/// Split a multi-file patch on its `diff --git` boundaries (repo headers ride along with
+/// the file that follows them).
+fn split_per_file(patch: &str) -> Vec<String> {
+    if patch.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut chunks: Vec<String> = Vec::new();
+    for line in patch.lines() {
+        if line.starts_with("diff --git ") || chunks.is_empty() {
+            chunks.push(String::new());
+        }
+        let chunk = chunks.last_mut().expect("chunk");
+        chunk.push_str(line);
+        chunk.push('\n');
+    }
+    chunks
 }
 
 /// The status-appropriate explicit acts (G3). Delivery/rollback stay reversible-by-design

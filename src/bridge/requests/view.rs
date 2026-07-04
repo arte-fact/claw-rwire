@@ -101,6 +101,8 @@ fn build_detail(conn: &Connection, request_id: &str) -> Option<RequestDetail> {
         diff_patch,
         validation: request.validation.unwrap_or_default(),
         has_remote,
+        asked_at: stamp(&request.created_at),
+        updated_at: stamp(&request.updated_at),
     })
 }
 
@@ -151,6 +153,13 @@ fn card_view(conn: &Connection, request: &Request, active_ids: &[String]) -> Req
         total,
         branch: request.branch.clone().unwrap_or_default(),
     }
+}
+
+/// `2026-07-04T09:11:22.123Z` → `07-04 09:11` for the history panel.
+fn stamp(iso: &str) -> String {
+    let date = iso.get(5..10).unwrap_or("");
+    let time = iso.get(11..16).unwrap_or("");
+    format!("{date} {time}").trim().to_owned()
 }
 
 /// The request's diff totals so far — base..(merge | branch tip) summed across repos.

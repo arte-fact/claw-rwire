@@ -806,6 +806,9 @@ pub struct RequestDetail {
     pub validation: String,
     /// Whether any touched repo has a remote — shows the (explicit, gated) Push control.
     pub has_remote: bool,
+    /// `MM-DD HH:MM` stamps for the history panel: asked at / last status change.
+    pub asked_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

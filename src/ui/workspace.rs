@@ -100,12 +100,16 @@ fn header(app: &App) -> ElementBuilder {
 /// A row of member avatars (initials, tooltip = name) — the team at a glance in the header.
 fn member_avatars(workspace: &WorkspaceView) -> ElementBuilder {
     let avatars: Vec<ElementBuilder> = workspace
-        .member_names
+        .members
         .iter()
+        .zip(&workspace.member_names)
         .take(8)
-        .map(|name| {
+        .map(|(id, name)| {
             Tooltip::new(name.clone())
-                .child(Avatar::new().name(name).size(AvatarSize::Sm).build())
+                .child(
+                    rwire::router::Link::route(&format!("/w/{}/agent/{id}", workspace.id))
+                        .append([Avatar::new().name(name).size(AvatarSize::Sm).build()]),
+                )
                 .build()
         })
         .collect();

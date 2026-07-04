@@ -32,7 +32,7 @@ use rwire::style::Style;
 use rwire::{
     At, CurrentRoute, El, ElementBuilder, Ev, Router, St, el, handler, icons, outlet, renderer,
 };
-use rwire_components::{Button, ButtonIntent, ButtonSize, StatusDot, StatusDotIntent};
+use rwire_components::{Button, ButtonIntent, ButtonSize};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, Tab};
@@ -206,7 +206,6 @@ fn section_label(text: &str) -> ElementBuilder {
 #[renderer]
 fn agents_nav(app: &App) -> ElementBuilder {
     let open = app.open_agent.as_deref();
-    let open_ws = app.open_agent_workspace.as_deref();
     let active_ws = app.active_workspace.as_deref();
     let nav = &app.agent_nav;
     let mut rows: Vec<ElementBuilder> = vec![section_label("Concierge")];
@@ -223,13 +222,8 @@ fn agents_nav(app: &App) -> ElementBuilder {
             active_ws == Some(group.workspace_id.as_str()),
             group.awaiting,
         ));
-        for agent in &group.agents {
-            // Threads are (agent, workspace)-scoped, so the same agent under two workspace
-            // groups is two distinct rows with two distinct URLs — only the open pair lights up.
-            let active =
-                open == Some(agent.id.as_str()) && open_ws == Some(group.workspace_id.as_str());
-            rows.push(agent_row(agent, &group.workspace_id, active));
-        }
+        // Agent threads left the sidebar (N3): the workspace header's member avatars carry
+        // them — the nav halves in height and stays about places, not people.
     }
     rows.push(new_workspace_link());
     el(El::Div)
@@ -294,47 +288,6 @@ fn concierge_row(row: &crate::state::AgentNavRow, active: bool) -> ElementBuilde
             el(El::Span).st([St::Flex1]).text(&row.name),
             awaiting_badge(row.awaiting),
         ])
-}
-
-/// One agent row: the leading gutter (accent rail + status dot), the name, and — when it has tasks
-/// parked at a gate — the approval badge. Deep-links to the agent's thread **in this workspace**
-/// (`/w/:wid/agent/:aid`), mirroring the (agent, workspace) context scoping.
-fn agent_row(row: &crate::state::AgentNavRow, workspace_id: &str, active: bool) -> ElementBuilder {
-    let color = if active { St::TextHigh } else { St::TextMuted };
-    Link::route(&format!("/w/{workspace_id}/agent/{}", row.id))
-        .on(Ev::Click, close_nav())
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::PyXs,
-            St::PxMd,
-            St::CursorPointer,
-            St::TextSm,
-            St::NoUnderline,
-            color,
-        ])
-        .hover([St::TextHigh])
-        .append([
-            chat::accent_bar(active),
-            chat::icon_slot(status_dot(row.status)),
-            el(El::Span).st([St::Flex1]).text(&row.name),
-            awaiting_badge(row.awaiting),
-        ])
-}
-
-/// The leading status glyph: an accent **pulsing** dot while the agent is working, else a muted
-/// dot (an awaiting agent is idle-but-parked — its approval badge carries that signal).
-fn status_dot(status: crate::state::AgentStatus) -> ElementBuilder {
-    let working = status == crate::state::AgentStatus::Working;
-    StatusDot::new()
-        .intent(if working {
-            StatusDotIntent::Primary
-        } else {
-            StatusDotIntent::Muted
-        })
-        .pulse(working)
-        .build()
 }
 
 /// The create affordance at the tail of the agent nav — workspaces are created on the dashboard.

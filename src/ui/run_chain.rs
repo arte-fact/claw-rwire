@@ -132,7 +132,7 @@ pub(crate) fn diff_row(
 /// The shared disclosure-row scaffold: a full-width toggle header (caret + name + a truncated
 /// summary + an optional trailing mark) over the body when open. One shape for tool calls and
 /// the memory snapshot, so the forensics read uniformly.
-fn disclosure_row(
+pub(crate) fn disclosure_row(
     key: &str,
     open: bool,
     name: &str,

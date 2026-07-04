@@ -334,6 +334,8 @@ mod tests {
             status: RequestStatus::Planning,
             branch: None,
             validation: None,
+            created_at: String::new(),
+            updated_at: String::new(),
         };
         assert_eq!(
             branch_name(&request),
