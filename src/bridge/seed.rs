@@ -187,13 +187,15 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
             validator_kind: Some("agent"),
             validator_agent: Some(CRITIC_ID),
             validator_prompt: None,
-            max_iterations: 2,
+            // Four produce⇄review rounds before escalating to a human: two proved too tight
+            // for real work — a live E-task burned both on a single mechanical nit and parked.
+            max_iterations: 4,
             on_exhaust: "human",
         },
     );
 
     // Research's reviewed loop — one step: Scout writes the report, Critic checks it exists and is
-    // sourced (≤2), then it completes. This closes the failure where a single unreviewed Scout run
+    // sourced (≤4), then it completes. This closes the failure where a single unreviewed Scout run
     // was accepted as done even when it wrote nothing. On exhaust it parks for a human.
     let _ = pipeline::insert(
         conn,
@@ -208,7 +210,7 @@ pub fn seed_showcase(conn: &rusqlite::Connection, data_dir: &Path) {
             validator_kind: Some("agent"),
             validator_agent: Some(CRITIC_ID),
             validator_prompt: Some(RESEARCH_REVIEW_PROMPT),
-            max_iterations: 2,
+            max_iterations: 4,
             on_exhaust: "human",
         },
     );
