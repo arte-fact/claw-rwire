@@ -771,12 +771,17 @@ pub struct AgentDraft {
 pub struct RequestCardView {
     pub id: String,
     pub title: String,
-    /// `planning` / `executing` / `queued` — the rail's status chip.
+    /// `planning` / `executing` / `queued` / `validating` — the card's status chip.
     pub status: String,
     /// "2/5 task(s) done" (empty while planning).
     pub progress: String,
     /// "+A/−D across F file(s)" so far (empty until a pass commits).
     pub stat: String,
+    /// Tasks done / total — the card's hairline meter (0/0 while planning).
+    pub done: i64,
+    pub total: i64,
+    /// `req/<short>-<slug>` once minted (empty while planning).
+    pub branch: String,
 }
 
 /// The request page (`/w/:wid/requests/:rid`): the whole story in one scroll.

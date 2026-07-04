@@ -30,6 +30,7 @@ pub(super) fn kanban_board(app: &App, wid: &str) -> ElementBuilder {
             let cards: Vec<&crate::state::TaskView> = app
                 .tasks
                 .iter()
+                .filter(|task| task.request_id.is_none())
                 .filter(|task| task_column(task, step_count) == index)
                 .filter(|task| task_matches_filter(task, &app.board_filter))
                 .collect();

@@ -10,7 +10,7 @@ use crate::state::{App, TaskView, WorkspaceView};
 use crate::ui::widgets::accent_submit;
 use rwire_components::{
     Badge, BadgeFill, BadgeIntent, BadgeShape, Button, ButtonSize, Drawer, DrawerPosition,
-    EmptyState, Input, Select, Text, Textarea,
+    EmptyState, Input, Progress, ProgressSize, Select, StatusDot, StatusDotIntent, Text, Textarea,
 };
 
 mod board;
@@ -35,13 +35,13 @@ pub fn tasks(app: &App) -> ElementBuilder {
         .filter(|a| workspace.members.iter().any(|m| m == &a.id))
         .map(|a| (a.id.clone(), a.name.clone()))
         .collect();
-    // A brand-new workspace gets a real empty state with the two ways to start; once any
-    // task exists (even archived filters can empty a view), the boards render themselves.
-    let board = if app.tasks.is_empty() {
+    // The board holds only free-standing tasks (N2): delegated work lives in its request's
+    // timeline. A workspace with none gets a real empty state with the ways to start.
+    let board = if !app.tasks.iter().any(|t| t.request_id.is_none()) {
         EmptyState::new()
-            .title("No tasks yet")
+            .title("No free-standing tasks")
             .description(
-                "Delegate work from the chat and the plan lands here, or queue one directly                  with New task.",
+                "Delegated work lives in its requests above. Queue a one-off directly with                  New task.",
             )
             .build()
     } else if app.tasks_list_view {
@@ -54,8 +54,9 @@ pub fn tasks(app: &App) -> ElementBuilder {
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
         .append([
+            needs_you(app, &workspace.id),
+            requests_section(app, &workspace.id),
             toolbar(app.tasks_list_view),
-            requests_rail(app, &workspace.id),
             filter_bar(&app.board_filter),
             locked_banner(app),
             board,
@@ -65,53 +66,179 @@ pub fn tasks(app: &App) -> ElementBuilder {
         ])
 }
 
-/// The Requests rail (G2): every open request as a row — status, progress, diffstat — each
-/// linking to its request page. Hidden while the workspace has no open requests, so boards
-/// without delegation stay exactly as they were.
-fn requests_rail(app: &App, workspace_id: &str) -> ElementBuilder {
-    if app.requests.is_empty() {
-        return el(El::Div).st([St::DisplayNone]);
-    }
-    let rows: Vec<ElementBuilder> = app
-        .requests
+/// The needs-you strip (N2): everything in the workspace waiting on the operator — tasks
+/// parked at a human gate and requests parked in validation — each linking straight to the
+/// page where the decision happens. Absent when nothing needs you.
+fn needs_you(app: &App, workspace_id: &str) -> ElementBuilder {
+    let mut rows: Vec<ElementBuilder> = app
+        .tasks
         .iter()
-        .map(|request| {
-            let mut parts = vec![
-                request_badge(&request.status),
-                rwire::Link::route(&format!("/w/{workspace_id}/requests/{}", request.id))
+        .filter(|task| task.status == "awaiting")
+        .map(|task| {
+            needs_row(
+                rwire::Link::route(&format!("/w/{workspace_id}/tasks/{}", task.id))
                     .st([St::MinW0, St::Flex1, St::Truncate, St::TextSm, St::TextHigh])
                     .hover([St::TextAccent])
-                    .text(&request.title),
-            ];
-            if !request.progress.is_empty() {
-                parts.push(
-                    el(El::Span)
-                        .st([St::TextXs, St::TextMuted])
-                        .text(&request.progress),
-                );
-            }
-            if !request.stat.is_empty() {
-                parts.push(
-                    el(El::Span)
-                        .st([St::TextXs, St::TextMuted])
-                        .text(&request.stat),
-                );
-            }
-            el(El::Div)
-                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-                .append(parts)
+                    .text(&task.title),
+                "awaiting your review",
+            )
         })
         .collect();
+    rows.extend(
+        app.requests
+            .iter()
+            .filter(|request| request.status == "validating")
+            .map(|request| {
+                needs_row(
+                    rwire::Link::route(&format!("/w/{workspace_id}/requests/{}", request.id))
+                        .st([St::MinW0, St::Flex1, St::Truncate, St::TextSm, St::TextHigh])
+                        .hover([St::TextAccent])
+                        .text(&request.title),
+                    "validated — awaiting your verdict",
+                )
+            }),
+    );
+    if rows.is_empty() {
+        return el(El::Div).st([St::DisplayNone]);
+    }
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
+        .st([
+            St::BorderWarning,
+            St::PSm,
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapXs,
+        ])
         .append(rows)
 }
 
-/// A request's lifecycle chip on the rail.
+fn needs_row(link: ElementBuilder, note: &str) -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+        .append([
+            el(El::Span)
+                .st([St::TextXs, St::TextWarning])
+                .text("needs you"),
+            link,
+            el(El::Span).st([St::TextXs, St::TextMuted]).text(note),
+        ])
+}
+
+/// The Requests section (N2): every open request as a card — title, status, the hairline
+/// done-meter, diffstat, branch, and a live "what is it doing right now" line. Hidden while
+/// the workspace has no open requests, so boards without delegation stay as they were.
+fn requests_section(app: &App, workspace_id: &str) -> ElementBuilder {
+    if app.requests.is_empty() {
+        return el(El::Div).st([St::DisplayNone]);
+    }
+    let mut children = vec![
+        el(El::Div)
+            .st([St::TextXs, St::TextLow, St::TextUppercase])
+            .text(&format!("Requests · {} open", app.requests.len())),
+    ];
+    children.extend(app.requests.iter().map(|request| {
+        let mut lines = vec![
+            el(El::Div)
+                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+                .append([
+                    rwire::Link::route(&format!("/w/{workspace_id}/requests/{}", request.id))
+                        .st([
+                            St::MinW0,
+                            St::Flex1,
+                            St::Truncate,
+                            St::TextSm,
+                            St::TextHigh,
+                            St::FontSemibold,
+                        ])
+                        .hover([St::TextAccent])
+                        .text(&request.title),
+                    request_badge(&request.status),
+                ]),
+        ];
+        let mut meta: Vec<ElementBuilder> = Vec::new();
+        if request.total > 0 {
+            meta.push(
+                el(El::Div)
+                    .style(rwire::style::Style::new().set("max-width", "8rem"))
+                    .st([St::WFull])
+                    .append([Progress::new()
+                        .value(request.done.max(0) as u32)
+                        .max(request.total.max(1) as u32)
+                        .size(ProgressSize::Sm)
+                        .label(request.progress.clone())
+                        .build()]),
+            );
+            meta.push(
+                el(El::Span)
+                    .st([St::TextXs, St::TextMuted, St::WhitespaceNowrap])
+                    .text(&request.progress),
+            );
+        }
+        if !request.stat.is_empty() {
+            meta.push(
+                el(El::Span)
+                    .st([St::TextXs, St::TextMuted, St::WhitespaceNowrap])
+                    .text(&request.stat),
+            );
+        }
+        if !request.branch.is_empty() {
+            // Desktop-only detail: the branch name is noise on a phone (mobile-first, N2).
+            meta.push(
+                el(El::Span)
+                    .st([St::TextXs, St::TextLow, St::Truncate, St::DisplayNone])
+                    .md([St::DisplayBlock])
+                    .text(&request.branch),
+            );
+        }
+        // The live line: the request's currently running task, straight off the lane.
+        if let Some(task) = app
+            .tasks
+            .iter()
+            .find(|t| t.request_id.as_deref() == Some(request.id.as_str()) && t.status == "running")
+        {
+            let agent = task.agent.clone().unwrap_or_else(|| "owner".to_owned());
+            meta.push(
+                el(El::Div)
+                    .st([St::DisplayFlex, St::ItemsCenter, St::GapXs, St::MinW0])
+                    .append([
+                        StatusDot::new().intent(StatusDotIntent::Primary).build(),
+                        rwire::Link::route(&format!("/w/{workspace_id}/tasks/{}", task.id))
+                            .st([St::TextXs, St::TextAccent, St::Truncate])
+                            .hover([St::Underline])
+                            .text(&task.title),
+                        el(El::Span)
+                            .st([St::TextXs, St::TextLow, St::WhitespaceNowrap])
+                            .text(&agent),
+                    ]),
+            );
+        }
+        if !meta.is_empty() {
+            lines.push(
+                el(El::Div)
+                    .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::FlexWrap])
+                    .append(meta),
+            );
+        }
+        el(El::Div)
+            .st([
+                St::BorderDefault,
+                St::PSm,
+                St::DisplayFlex,
+                St::FlexCol,
+                St::GapXs,
+            ])
+            .append(lines)
+    }));
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append(children)
+}
+
+/// A request's lifecycle chip on a card.
 fn request_badge(status: &str) -> ElementBuilder {
     let intent = match status {
         "executing" => BadgeIntent::Primary,
-        "planning" => BadgeIntent::Warning,
+        "planning" | "validating" => BadgeIntent::Warning,
         _ => BadgeIntent::Default,
     };
     Badge::new()

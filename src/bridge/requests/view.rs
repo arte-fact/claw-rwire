@@ -128,10 +128,15 @@ fn card_view(conn: &Connection, request: &Request, active_ids: &[String]) -> Req
         RequestStatus::Executing => "queued".to_owned(),
         other => other.as_str().to_owned(),
     };
-    let progress = if request.status == RequestStatus::Executing {
+    let (done, total) = if request.status == RequestStatus::Planning {
+        (0, 0)
+    } else {
         let total = db::tasks::count_for_request(conn, &request.id).unwrap_or(0);
         let open = db::tasks::open_for_request(conn, &request.id).unwrap_or(0);
-        format!("{}/{total} task(s) done", (total - open).max(0))
+        ((total - open).max(0), total)
+    };
+    let progress = if total > 0 {
+        format!("{done}/{total} task(s) done")
     } else {
         String::new()
     };
@@ -142,6 +147,9 @@ fn card_view(conn: &Connection, request: &Request, active_ids: &[String]) -> Req
         status,
         progress,
         stat: totals_line(root, &repos),
+        done,
+        total,
+        branch: request.branch.clone().unwrap_or_default(),
     }
 }
 

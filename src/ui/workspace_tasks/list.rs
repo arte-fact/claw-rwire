@@ -18,6 +18,7 @@ pub(super) fn list_board(app: &App, members: &[(String, String)], wid: &str) -> 
     let mut cards: Vec<ElementBuilder> = app
         .tasks
         .iter()
+        .filter(|task| task.request_id.is_none())
         .filter(|task| task_matches_filter(task, &app.board_filter))
         .map(|task| task_card(task, members, editing == Some(task.id.as_str()), wid))
         .collect();

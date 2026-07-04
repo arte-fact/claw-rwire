@@ -26,9 +26,9 @@ pub enum WsTab {
 impl WsTab {
     fn label(self) -> &'static str {
         match self {
-            WsTab::Dashboard => "Overview",
+            WsTab::Dashboard => "Settings",
             WsTab::Files => "Files",
-            WsTab::Tasks => "Tasks",
+            WsTab::Tasks => "Work",
             WsTab::Workflow => "Workflow",
             WsTab::Team => "Team",
         }
