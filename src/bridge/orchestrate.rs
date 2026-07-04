@@ -202,7 +202,20 @@ pub fn planned(
         .ok()
         .flatten()
         .is_some_and(|ws| ws.auto_approve);
-    if auto_approve && result.is_ok() {
+    // The mid-turn approve race (live, 13:41): the operator approved batch A while the
+    // planning turn was still running; the turn then proposed batch B, and this hook
+    // auto-materialized it onto the SAME request — duplicate task sets, the second built
+    // on the first's branch. A plan already resolved keeps nothing to materialize.
+    let still_open = db::tasks::get(conn, plan_id)
+        .ok()
+        .flatten()
+        .is_some_and(|plan| plan.status == db::tasks::TaskStatus::Awaiting);
+    if !still_open {
+        let _ = db::tasks::proposal::clear(conn, plan_id);
+        log_line(format!(
+            "orchestrate: plan {plan_id} was resolved mid-turn — leftover proposal discarded"
+        ));
+    } else if auto_approve && result.is_ok() {
         match db::tasks::proposal::materialize(conn, plan_id, Some(origin_chat)) {
             Ok(count) => {
                 let _ = db::tasks::finish(

@@ -401,7 +401,13 @@ fn control_buttons(detail: &TaskDetail) -> Vec<ElementBuilder> {
 /// The Thread's pinned bottom bar — the review composer when the task is parked at a human gate,
 /// else the run controls. A `FlexShrink0` sibling below the scroll, like the chat composer.
 fn gate_bar(app: &App, detail: &TaskDetail) -> ElementBuilder {
-    let inner = if detail.awaiting {
+    let inner = if detail.awaiting && detail.is_plan && detail.proposed.is_empty() {
+        // A plan parked before its proposal exists (or mid-replan): an Approve here would
+        // be a silent no-op — say what's happening instead of offering a dead button.
+        el(El::Div)
+            .st([St::TextXs, St::TextMuted, St::Italic])
+            .text("Still planning — the proposal will appear here for your review.")
+    } else if detail.awaiting {
         review_gate(&detail.id)
     } else {
         el(El::Div)
