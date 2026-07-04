@@ -62,8 +62,6 @@ pub fn tasks(app: &App) -> ElementBuilder {
             new_task_drawer(app, workspace),
             // The in-situ pipeline step editor (opens from a step column header).
             crate::ui::workspace_workflow::step_drawer(app),
-            // The Peek modal (opens over the board when a card is clicked or a task is deep-linked).
-            crate::ui::task_detail::peek_modal(app),
         ])
 }
 

@@ -469,6 +469,9 @@ pub struct RunView {
 pub struct TaskDetail {
     pub id: String,
     pub workspace_id: String,
+    /// The owning request (id, title) when the task is request-bound — the middle crumb.
+    pub request_id: String,
+    pub request_title: String,
     pub title: String,
     pub spec: String,
     pub status: String,

@@ -139,14 +139,12 @@ fn column_header(
 /// assignee avatar + signal tags (blocked / recurrent / retry / attempt), and an inline action
 /// row (Approve when parked, run controls otherwise) — the at-a-glance view of one task.
 fn kanban_card(task: &TaskView, steps: &[String], wid: &str) -> ElementBuilder {
-    let _ = wid;
     let mut rows = vec![
         el(El::Div)
             .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
             .append([
-                // The title opens the task's Peek modal over the board (no navigation away).
-                crate::ui::widgets::bare_button(crate::ui::task_detail::open_peek())
-                    .data("task", &task.id)
+                // The title routes to the task's page (N1) — the canonical task surface.
+                rwire::router::Link::route(&format!("/w/{wid}/tasks/{}", task.id))
                     .st([
                         St::Flex1,
                         St::TextXs,

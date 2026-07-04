@@ -77,12 +77,8 @@ pub fn routes() -> Router {
             ))
         })
         .page("/w/:wid/tasks/:tid", |p| {
-            // A deep link to a task renders the board; the bridge opens its Peek modal over it.
-            view(workspace::shell(
-                wid(p),
-                WsTab::Tasks,
-                workspace_tasks::tasks(),
-            ))
+            // The task page (N1): the canonical home of one task — spec, thread, controls.
+            view(workspace::shell(wid(p), WsTab::Tasks, task_detail::page()))
         })
         .page("/w/:wid/requests/:rid", |p| {
             // The request page (G2): the ask's whole story — plan, tasks, diffs, delivery.

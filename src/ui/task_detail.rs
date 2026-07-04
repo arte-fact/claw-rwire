@@ -1,119 +1,74 @@
-//! The task **Peek** modal (Phase F-4 / UX overhaul U2): a task's one-page view over the board.
-//! Two tabs — **Overview** (spec + run controls) and **Thread**, a chat log of the task built on
-//! the shared [`thread`] widgets: each run is an authored, phase-tagged entry with collapsible
-//! tool rows; the live run streams into the newest entry; and review happens inline in a pinned
-//! composer at the bottom. Opened by a card click (`open_peek`) or a deep link to
-//! `/w/:wid/tasks/:tid` (the bridge sets `selected_task`). Renders from `App.task_detail`.
+//! The task **page** (navigation redesign N1): `/w/:wid/tasks/:tid` — the canonical home of
+//! one task, replacing the Peek modal. A breadcrumb (workspace › request › task) over the
+//! task's **thread**: a chat log built on the shared [`thread`] widgets — the originating
+//! spec, each run as an authored, phase-tagged entry with collapsible tool/diff rows, the
+//! live run streaming in — above a pinned gate bar (review composer when parked, else run
+//! controls). Board cards and deep links route here; renders from `App.task_detail`.
 
-use rwire::style::Style;
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, icons, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
 use rwire_components::{
-    Avatar, AvatarSize, Button, ButtonIntent, ButtonSize, Input, StatusDot, StatusDotIntent, Text,
+    Avatar, AvatarSize, Breadcrumb, Button, ButtonSize, Input, StatusDot, StatusDotIntent, Text,
 };
 
 use super::thread;
 use crate::bridge::{self, Command};
 use crate::state::{App, LiveItem, ProposedTask, TaskDetail};
-use crate::ui::workspace::card;
 
-/// The Peek modal: a self-contained overlay opened over the board when a task is selected. A plain
-/// builder (not its own `#[renderer]`) called inside the board renderer — so reading
-/// `selected_task` / `task_detail` / live state subscribes the board, which re-renders it live (the
-/// same pattern as the New-task drawer). Built by hand rather than the `Modal` component so the
-/// panel paints **above** the backdrop (the component layers the backdrop on top of the panel).
-pub fn peek_modal(app: &App) -> ElementBuilder {
-    let Some(selected) = app.selected_task.as_deref() else {
-        return el(El::Div).st([St::DisplayNone]);
+/// The task page, filling the workspace shell's content area. The thread supplies its own
+/// scroll; the page never scrolls as a whole, so the breadcrumb header and the gate bar stay
+/// in view (the same pinned-chrome shape the modal had).
+pub fn page() -> ElementBuilder {
+    el(El::Div)
+        .st([St::Flex1, St::MinH0, St::DisplayFlex, St::FlexCol])
+        .append([body()])
+}
+
+#[renderer]
+fn body(app: &App) -> ElementBuilder {
+    let Some(detail) = &app.task_detail else {
+        return Text::body("Loading the task…").muted().build();
     };
-    let content = match &app.task_detail {
-        Some(detail) if detail.id == selected => peek_content(app, detail),
-        _ => Text::body("Loading…").muted().build(),
-    };
-    // Container (flex-centred) holding two siblings: the backdrop (fills it, click = close) and the
-    // panel (later in DOM, so it paints above the backdrop — no z-index juggling needed).
     el(El::Div)
         .st([
-            St::PositionFixed,
-            St::Inset0,
-            St::Z1400,
+            St::Flex1,
+            St::MinH0,
             St::DisplayFlex,
-            St::ItemsCenter,
-            St::JustifyCenter,
-            St::PSm,
+            St::FlexCol,
+            St::GapSm,
         ])
-        .md([St::PMd])
-        .append([
-            el(El::Div)
-                .st([
-                    St::PositionAbsolute,
-                    St::Inset0,
-                    St::BgOverlay50,
-                    St::CursorPointer,
-                ])
-                .on(Ev::Click, close_peek()),
-            el(El::Div)
-                // A wide, **fixed-height** panel (60rem × 85vh, capped to the viewport) so the modal
-                // is the same size whatever the task — the head is pinned and the body scrolls.
-                .style(
-                    Style::new()
-                        .set("width", "60rem")
-                        .set("max-width", "100%")
-                        .set("height", "85vh"),
-                )
-                .st([
-                    St::PositionRelative,
-                    St::DisplayFlex,
-                    St::FlexCol,
-                    St::BgSurface,
-                    St::BorderDefault,
-                    St::OverflowHidden,
-                ])
-                .append([content]),
-        ])
+        .append([header(app, detail), page_thread(app, detail)])
 }
 
-/// The modal body: a pinned head (close row, header, tab strip) over a scrolling body (the active
-/// tab) — so the fixed-height panel keeps its chrome in view while the content scrolls.
-fn peek_content(app: &App, detail: &TaskDetail) -> ElementBuilder {
+/// The page's first line: breadcrumb (workspace › request › task) with the status badge on
+/// the tail, then the assignee + step meta — place and state before the thread.
+fn header(app: &App, detail: &TaskDetail) -> ElementBuilder {
+    let workspace = app
+        .workspaces
+        .iter()
+        .find(|w| w.id == detail.workspace_id)
+        .map(|w| w.name.clone())
+        .unwrap_or_else(|| detail.workspace_id.clone());
+    let mut crumbs = Breadcrumb::new().item(workspace, Some(format!("/w/{}", detail.workspace_id)));
+    if !detail.request_id.is_empty() {
+        crumbs = crumbs.item(
+            crate::text::first_line_capped(&detail.request_title, 40),
+            Some(format!(
+                "/w/{}/requests/{}",
+                detail.workspace_id, detail.request_id
+            )),
+        );
+    }
+    let crumbs = crumbs.item(detail.title.clone(), None::<String>).build();
     el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::Flex1, St::MinH0])
-        .append([
-            el(El::Div)
-                .st([St::DisplayFlex, St::FlexCol, St::GapMd, St::PMd])
-                .md([St::PLg])
-                .append([
-                    close_row(),
-                    peek_header(app, detail),
-                    peek_tabs(app.detail_tab),
-                ]),
-            // The body fills the remaining height; each tab owns its own scroll (Overview scrolls
-            // as one pane, the Thread autoscrolls above a pinned gate bar).
-            el(El::Div)
-                .st([St::Flex1, St::MinH0, St::DisplayFlex, St::FlexCol])
-                .append([peek_tab_body(app, detail)]),
-        ])
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::FlexWrap])
+        .append([crumbs, status_badge(&detail.status), meta(app, detail)])
 }
 
-/// A right-aligned close (✕) button for the panel.
-fn close_row() -> ElementBuilder {
-    el(El::Div)
-        .st([St::DisplayFlex, St::JustifyEnd])
-        .append([Button::icon_only(icons::Icon::Close, "Close")
-            .intent(ButtonIntent::Ghost)
-            .size(ButtonSize::Sm)
-            .on_click(close_peek())])
-}
-
-/// Title + assignee avatar + status + (when live) the current step / iteration.
-fn peek_header(app: &App, detail: &TaskDetail) -> ElementBuilder {
+/// Assignee avatar + (when live) the current step / iteration — the header's quiet tail.
+fn meta(app: &App, detail: &TaskDetail) -> ElementBuilder {
     let task = app.tasks.iter().find(|t| t.id == detail.id);
     let assignee = task.and_then(|t| t.agent.as_deref()).unwrap_or("owner");
-    let mut row = vec![
-        Avatar::new().name(assignee).size(AvatarSize::Sm).build(),
-        el(El::Span)
-            .st([St::Flex1, St::TextLg, St::TextHigh, St::FontSemibold])
-            .text(&detail.title),
-    ];
+    let mut row = vec![Avatar::new().name(assignee).size(AvatarSize::Sm).build()];
     let terminal = matches!(
         detail.status.as_str(),
         "done" | "failed" | "rejected" | "cancelled"
@@ -127,67 +82,33 @@ fn peek_header(app: &App, detail: &TaskDetail) -> ElementBuilder {
         }
         row.push(el(El::Span).st([St::TextXs, St::TextMuted]).text(&label));
     }
-    row.push(
-        el(El::Span)
-            .st([St::TextXs, St::TextMuted, St::TextUppercase])
-            .text(&detail.status),
-    );
     el(El::Div)
-        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::MlAuto])
         .append(row)
 }
 
-/// The Overview / Thread tab strip. Activity + Review are unified into the chat-log **Thread**.
-fn peek_tabs(active: usize) -> ElementBuilder {
-    el(El::Div)
-        .st([
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapXs,
-            St::BorderBDefault,
-            St::PbSm,
-        ])
-        .append([
-            tab_chip("Overview", 0, active),
-            tab_chip("Thread", 1, active),
-        ])
+/// The task lifecycle as a badge — the same square/outline vocabulary as the request page.
+fn status_badge(status: &str) -> ElementBuilder {
+    use rwire_components::{Badge, BadgeFill, BadgeIntent, BadgeShape};
+    let intent = match status {
+        "running" => BadgeIntent::Primary,
+        "done" => BadgeIntent::Success,
+        "failed" | "rejected" | "cancelled" => BadgeIntent::Error,
+        "awaiting" => BadgeIntent::Warning,
+        _ => BadgeIntent::Default,
+    };
+    Badge::new()
+        .intent(intent)
+        .shape(BadgeShape::Square)
+        .fill(BadgeFill::Outline)
+        .text(status.to_owned())
+        .build()
 }
 
-fn tab_chip(label: &str, index: usize, active: usize) -> ElementBuilder {
-    crate::ui::widgets::chip(label, index == active, set_detail_tab())
-        .data("tab", &index.to_string())
-}
-
-/// The active tab's content, filling the modal body.
-fn peek_tab_body(app: &App, detail: &TaskDetail) -> ElementBuilder {
-    match app.detail_tab {
-        1 => peek_thread(app, detail),
-        _ => scroll_pane(peek_overview(detail)),
-    }
-}
-
-/// A simple scrolling pane for the Overview tab (the Thread supplies its own scroll).
-fn scroll_pane(inner: ElementBuilder) -> ElementBuilder {
-    el(El::Div)
-        .st([St::Flex1, St::MinH0, St::OverflowYAuto, St::PxMd, St::PbMd])
-        .md([St::PxLg, St::PbLg])
-        .append([inner])
-}
-
-/// Overview: the spec (markdown) and the run controls.
-fn peek_overview(detail: &TaskDetail) -> ElementBuilder {
-    el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapMd])
-        .append([
-            card("Spec", crate::ui::widgets::markdown(detail.spec.clone())),
-            control_bar(detail),
-        ])
-}
-
-/// Thread: the task as a chat log. An autoscrolling column of authored, phase-tagged entries —
+/// The task as a chat log. An autoscrolling column of authored, phase-tagged entries —
 /// the originating spec, a plan's proposal, each persisted run, and (while running) the live run
 /// streaming in — above a pinned gate bar (review composer when parked, else run controls).
-fn peek_thread(app: &App, detail: &TaskDetail) -> ElementBuilder {
+fn page_thread(app: &App, detail: &TaskDetail) -> ElementBuilder {
     let column = el(El::Div)
         .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
         .md([St::PLg])
@@ -292,13 +213,9 @@ pub(crate) fn run_entry(
 #[renderer]
 fn live_entry(app: &App) -> ElementBuilder {
     // Self-contained synced region: only this reads `live_turns`, so a token flush repaints just
-    // the live line. Show nothing unless the *selected* task is running.
+    // the live line. Show nothing unless the page's task is running.
     let hidden = || el(El::Div).st([St::DisplayNone]);
-    let Some(detail) = app
-        .task_detail
-        .as_ref()
-        .filter(|d| app.selected_task.as_deref() == Some(d.id.as_str()))
-    else {
+    let Some(detail) = app.task_detail.as_ref() else {
         return hidden();
     };
     if detail.status != "running" {
@@ -479,16 +396,6 @@ fn control_buttons(detail: &TaskDetail) -> Vec<ElementBuilder> {
     }
 }
 
-/// The Overview tab's run-control bar (the same buttons, in a titled card).
-fn control_bar(detail: &TaskDetail) -> ElementBuilder {
-    card(
-        "Controls",
-        el(El::Div)
-            .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-            .append(control_buttons(detail)),
-    )
-}
-
 /// The Thread's pinned bottom bar — the review composer when the task is parked at a human gate,
 /// else the run controls. A `FlexShrink0` sibling below the scroll, like the chat composer.
 fn gate_bar(detail: &TaskDetail) -> ElementBuilder {
@@ -551,33 +458,6 @@ fn action_button(
     btn.size(ButtonSize::Sm)
         .on_click(on_click)
         .data("task", task)
-}
-
-/// Open a task's Peek modal (card click) — set the selection + load its detail.
-#[handler]
-pub fn open_peek(app: &mut App, ctx: &EventContext) {
-    if let Some(id) = ctx.data("task") {
-        app.selected_task = Some(id.to_owned());
-        app.detail_tab = 0;
-        bridge::send(Command::LoadTaskDetail {
-            task_id: id.to_owned(),
-        });
-    }
-}
-
-/// Close the Peek modal (backdrop / the X).
-#[handler]
-fn close_peek(app: &mut App, ctx: &EventContext) {
-    let _ = ctx;
-    app.selected_task = None;
-}
-
-/// Switch the modal's active tab.
-#[handler]
-fn set_detail_tab(app: &mut App, ctx: &EventContext) {
-    if let Some(tab) = ctx.data("tab") {
-        app.detail_tab = tab.parse().unwrap_or(0);
-    }
 }
 
 #[handler]
