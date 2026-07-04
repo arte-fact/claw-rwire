@@ -153,16 +153,21 @@ pub fn set_branch(conn: &Connection, id: &str, branch: &str) -> rusqlite::Result
 /// a concurrent build's CPU.
 pub const MAX_ACTIVE: usize = 2;
 
-/// The workspace's **active** requests — the oldest `limit` executing *or validating* ones,
-/// FIFO. Each holds a lane (its worktree) until delivered/abandoned; a validating request
-/// still holds its slot — its tree sits on the branch awaiting the macro review.
+/// The workspace's **active** requests — the oldest `limit` that can still *run work*,
+/// FIFO: every `executing` one, plus `validating` ones with open tasks (a task restarted
+/// mid-review). A validating request merely **parked for its verdict** keeps its tree but
+/// takes no dispatch lane: two parked reviews used to hold both slots and starve every
+/// queued request in the workspace (the live Empire wedge).
 pub fn active_requests(
     conn: &Connection,
     workspace_id: &str,
     limit: usize,
 ) -> rusqlite::Result<Vec<Request>> {
     let mut stmt = conn.prepare(&format!(
-        "{SELECT} WHERE workspace_id = ?1 AND status IN ('executing','validating')
+        "{SELECT} WHERE workspace_id = ?1 AND (status = 'executing'
+             OR (status = 'validating' AND EXISTS (
+                   SELECT 1 FROM tasks t WHERE t.request_id = requests.id
+                      AND t.status IN ('pending','running','awaiting'))))
           ORDER BY created_at LIMIT ?2"
     ))?;
     let rows = stmt.query_map(params![workspace_id, limit as i64], from_row)?;
@@ -324,6 +329,14 @@ mod tests {
         assert_eq!(request.status, RequestStatus::Executing);
     }
 
+    fn active_ids(conn: &Connection, limit: usize) -> Vec<String> {
+        active_requests(conn, "ws", limit)
+            .expect("active")
+            .into_iter()
+            .map(|req| req.id)
+            .collect()
+    }
+
     #[test]
     fn active_requests_are_the_oldest_executing_fifo_capped() {
         let conn = seeded();
@@ -340,23 +353,57 @@ mod tests {
         set_status(&conn, "r1", RequestStatus::Executing).expect("s");
         set_status(&conn, "r2", RequestStatus::Executing).expect("s");
         set_status(&conn, "r3", RequestStatus::Executing).expect("s");
-        let ids: Vec<String> = active_requests(&conn, "ws", 2)
-            .expect("a")
-            .into_iter()
-            .map(|req| req.id)
-            .collect();
-        assert_eq!(ids, ["r1", "r2"], "oldest two hold the lanes; r3 queues");
+        assert_eq!(
+            active_ids(&conn, 2),
+            ["r1", "r2"],
+            "oldest two hold the lanes; r3 queues"
+        );
 
-        // Delivery frees a lane for the next queued request FIFO; a validating request
-        // still holds its slot (its tree awaits the macro review).
+        // Delivery frees a lane for the next queued request FIFO. A validating request
+        // holds a slot only while it still has work to run (a task restarted mid-review)
+        // — kept runnable here by r2's pending task.
+        task(&conn, "t-r2", Some("r2"));
         set_status(&conn, "r1", RequestStatus::Delivered).expect("s");
         set_status(&conn, "r2", RequestStatus::Validating).expect("s");
-        let ids: Vec<String> = active_requests(&conn, "ws", 2)
-            .expect("a")
-            .into_iter()
-            .map(|req| req.id)
-            .collect();
-        assert_eq!(ids, ["r2", "r3"]);
+        assert_eq!(active_ids(&conn, 2), ["r2", "r3"]);
+
+        // Its restart lands → parked for the verdict → the slot goes to the queue.
+        crate::db::tasks::finish(&conn, "t-r2", crate::db::tasks::TaskStatus::Done, None)
+            .expect("done");
+        assert_eq!(active_ids(&conn, 2), ["r3"]);
+    }
+
+    #[test]
+    fn parked_validations_do_not_starve_the_lanes() {
+        // The live Empire wedge: two requests parked in `validating` (every task done,
+        // awaiting a human verdict) held both dispatch slots, so a younger executing
+        // request's tasks never ran. Parked validations keep their trees but take no lane.
+        let conn = seeded();
+        for id in ["r1", "r2", "r3"] {
+            create(&conn, id, "ws", None, id, id).expect("create");
+        }
+        for id in ["r1", "r2"] {
+            let task_id = format!("t-{id}");
+            task(&conn, &task_id, Some(id));
+            crate::db::tasks::finish(&conn, &task_id, crate::db::tasks::TaskStatus::Done, None)
+                .expect("done");
+            set_status(&conn, id, RequestStatus::Validating).expect("s");
+        }
+        set_status(&conn, "r3", RequestStatus::Executing).expect("s");
+        task(&conn, "t-r3", Some("r3"));
+
+        assert_eq!(
+            active_ids(&conn, MAX_ACTIVE),
+            ["r3"],
+            "the executing request gets a lane past the parked reviews"
+        );
+        assert_eq!(
+            crate::db::tasks::next_ready(&conn, "ws", Some("r3"))
+                .expect("scan")
+                .expect("some")
+                .id,
+            "t-r3"
+        );
     }
 
     #[test]

@@ -264,10 +264,20 @@ touched repos for browsable history and is `-d`-dropped in untouched ones, on ab
       adopted and merged, both `--no-ff` merges cut from the same base on `develop`,
       trees torn down. The live run also caught (and the fix shipped for) relative
       `CLAW_DATA_DIR` breaking `worktree add` dest resolution.
+- [x] Lane starvation fix (shipped 2026-07-04, from live usage): a validating request
+      **parked for its verdict** keeps its tree but no longer consumes a dispatch slot —
+      two parked reviews used to hold both lanes and freeze every queued request in the
+      workspace (the Empire wedge). Active = executing, or validating with open tasks
+      (a restart mid-review). Live-verified: an executing request dispatched past two
+      parked validations within one tick. The digest also now labels validating requests
+      correctly instead of "planning — awaiting the plan".
 - Follow-ups noted: the lazy workspace scaffold writes `AGENT.md` into a lane *tree* when
   the canonical repo predates it, riding the request branch and tripping literal-minded
   validators (only bites workspaces whose meta never committed a scaffold); a
-  working-tree-less `merge-tree` delivery would close the free-lane-dirt race.
+  working-tree-less `merge-tree` delivery would close the free-lane-dirt race; abandoning
+  a request whose worker is mid-run leaves the worker writing into the removed tree —
+  the epoch guard drops its result, but the orphan process can resurrect plain (git-less)
+  directories under `trees/` until it finishes (harmless junk; delete it).
 
 
 ## Decision record (settled 2026-07-03)

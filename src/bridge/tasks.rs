@@ -620,6 +620,9 @@ pub(crate) fn status_digest(conn: &rusqlite::Connection) -> Option<String> {
                 crate::db::requests::RequestStatus::Executing => {
                     "queued behind the active request(s)".to_owned()
                 }
+                crate::db::requests::RequestStatus::Validating => {
+                    "validating — the branch diff awaits its review verdict".to_owned()
+                }
                 _ => "planning — awaiting the plan".to_owned(),
             };
             parts.push(format!("request \"{}\" ({progress})", request.title));
