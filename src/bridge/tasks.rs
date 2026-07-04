@@ -631,6 +631,23 @@ pub(crate) fn status_digest(conn: &rusqlite::Connection) -> Option<String> {
             };
             parts.push(format!("request \"{}\" ({progress})", request.title));
         }
+        // The reference-material manifest (L3): what docs exist, so the concierge cites
+        // them instead of re-reading files every turn (the Empire e2e re-read the same
+        // .bas five times per turn).
+        let root = crate::workspace::dir_for(&super::data_dir(), &ws.id);
+        let docs = std::fs::read_dir(root.join("docs"))
+            .map(|entries| {
+                let mut names: Vec<String> = entries
+                    .filter_map(Result::ok)
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .collect();
+                names.sort();
+                names
+            })
+            .unwrap_or_default();
+        if !docs.is_empty() {
+            parts.push(format!("docs/: {}", docs.join(", ")));
+        }
         if !parts.is_empty() {
             lines.push(format!("- {} — {}", ws.name, parts.join("; ")));
         }

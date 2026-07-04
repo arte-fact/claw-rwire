@@ -177,6 +177,26 @@ pub(super) fn deliver(conn: &Connection, request: &Request) {
         "requests: delivered {} ({})",
         request.id, request.title
     ));
+    // Knowledge flows forward (L3): the owner's workspace memory records what shipped, so
+    // the next plan starts from "what exists here" instead of cold.
+    if let Ok(Some(ws)) = db::workspaces::get(conn, &request.workspace_id)
+        && let Some(owner) = ws.owner
+        && let Ok(memory) = db::agent_memory::get(conn, &owner, Some(&request.workspace_id))
+    {
+        let summary = memory.summary;
+        let line = format!(
+            "Delivered request \"{}\" — {tasks_done} task(s), +{adds}/−{dels} across \
+             {files} file(s) on develop.",
+            crate::text::first_line_capped(&request.title, 60)
+        );
+        let _ = db::agent_memory::set(
+            conn,
+            &owner,
+            Some(&request.workspace_id),
+            format!("{summary}\n{line}").trim(),
+            memory.summarized_through,
+        );
+    }
     ping(conn, request, &receipt);
 }
 

@@ -78,12 +78,39 @@ pub fn load_brief(conn: &rusqlite::Connection, shared: &SharedServerState, works
     };
     let brief = read("AGENT.md");
     let standards = read("STANDARDS.md");
+    let checks = crate::db::settings::get_or(conn, &checks_key(workspace), "");
     shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_WORKSPACE_BRIEF, App::FIELD_WORKSPACE_STANDARDS]),
+        ChangeSet::from_fields(&[
+            App::FIELD_WORKSPACE_BRIEF,
+            App::FIELD_WORKSPACE_STANDARDS,
+            App::FIELD_WORKSPACE_CHECKS,
+        ]),
         move |app| {
             app.workspace_brief = brief;
             app.workspace_standards = standards;
+            app.workspace_checks = checks;
         },
+    );
+}
+
+/// The settings key for a workspace's machine-check command (L1 of docs/levers.md).
+pub(crate) fn checks_key(workspace: &str) -> String {
+    format!("workspace.{workspace}.checks")
+}
+
+/// Save the workspace's machine-check command — run by the harness after each successful
+/// producer pass, its capped output injected into the review prompt.
+pub fn save_checks(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    command: &str,
+) {
+    let _ = crate::db::settings::set(conn, &checks_key(workspace), command.trim());
+    let command = command.trim().to_owned();
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_WORKSPACE_CHECKS]),
+        move |app| app.workspace_checks = command,
     );
 }
 

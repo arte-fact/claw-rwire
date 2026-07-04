@@ -65,12 +65,29 @@ pub fn scaffold(workspace: &Path, agent_name: &str) -> Result<(), WorkspaceError
     if !agent_md.exists() {
         std::fs::write(&agent_md, starter_agent_md(agent_name))?;
     }
+    // Structure has a gate now (L2 of docs/levers.md): validators receive this memo, so
+    // seeding it means architecture gets reviewed — the Empire e2e shipped a working game
+    // as one 3,386-line main.rs because nothing objected.
+    let standards = workspace.join("STANDARDS.md");
+    if !standards.exists() {
+        std::fs::write(&standards, STARTER_STANDARDS)?;
+    }
     // Lazy-init the workspace meta-repo (G0 of docs/requests.md): the workspace's own
     // material is versioned; `projects/` stays sovereign. Git trouble must not block
     // workspace creation — the task-launch snapshot re-attempts it and logs failures.
     let _ = crate::gitops::ensure_meta_repo(workspace);
     Ok(())
 }
+
+/// The default `STANDARDS.md` memo — the validator's curated review rules (R5). Structure
+/// rules lead: they are the ones nothing else enforces.
+const STARTER_STANDARDS: &str = "# Review standards\n\n\
+- Structure: split code into modules per subsystem; keep files under ~300 lines and \
+functions under ~40 — reject monoliths even when they work.\n\
+- Tests live beside the code they cover and must pass (`cargo test` or the project's \
+equivalent) before a pass verdict.\n\
+- Builds must be warning-clean.\n\
+- Reject prose claims that the diff does not back up.\n";
 
 /// The default `AGENT.md` body for a freshly scaffolded workspace: a placeholder purpose line
 /// plus the folder conventions, so a delegated task knows where its output should go.

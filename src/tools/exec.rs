@@ -50,7 +50,7 @@ pub fn bash_in(strategy: &ExecStrategy, command: &str) -> String {
     }
 }
 
-fn run(workspace: &Path, command: &str, timeout: Duration) -> String {
+pub(crate) fn run(workspace: &Path, command: &str, timeout: Duration) -> String {
     let (out_path, err_path) = temp_paths();
     let (out_file, err_file) = match (
         std::fs::File::create(&out_path),

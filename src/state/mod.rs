@@ -114,6 +114,9 @@ pub struct App {
     pub tool_toggled: Vec<String>,
     /// The board's active quick-filter: `all` | `awaiting` | `running` | `blocked` | `failed`.
     pub board_filter: String,
+    /// The active workspace's machine-check command (L1: run after each producer pass,
+    /// its output injected into the review) — the Settings editor's value.
+    pub workspace_checks: String,
     /// The active workspace's configured pipeline steps (the Workflow editor).
     pub workflow_steps: Vec<StepView>,
     /// The pipeline editor is locked because the workspace has in-flight tasks.

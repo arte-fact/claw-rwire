@@ -356,6 +356,11 @@ pub enum Command {
         body: String,
     },
     /// Save a workspace's `STANDARDS.md` — the validator standards memo (the Overview editor).
+    /// Save the workspace's machine-check command (L1: Settings tab).
+    SaveChecks {
+        workspace: String,
+        command: String,
+    },
     SaveStandards {
         workspace: String,
         content: String,
@@ -733,6 +738,9 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             workspace,
             body,
         } => steer::send_message(conn, shared, &agent, &workspace, &body),
+        Command::SaveChecks { workspace, command } => {
+            files::save_checks(conn, shared, &workspace, &command)
+        }
         Command::SaveStandards { workspace, content } => {
             files::save_standards(conn, shared, &workspace, &content)
         }

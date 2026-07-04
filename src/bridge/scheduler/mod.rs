@@ -265,7 +265,24 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
         let prior =
             task_runs::list_for_task_attempt(conn, &task.id, task.attempt).unwrap_or_default();
         // What the task actually changed (G2): the reviewer judges the diff, not the prose.
-        let diff = review_diff(conn, &task.id, &workspace_dir);
+        let mut diff = review_diff(conn, &task.id, &workspace_dir);
+        // Machine checks before model review (L1): the workspace's configured command runs
+        // in the lane; its capped output rides the prompt — lint/build/test verdicts come
+        // from machines, judgment from the reviewer.
+        let checks_cmd =
+            db::settings::get_or(conn, &super::files::checks_key(&task.workspace_id), "");
+        if !checks_cmd.trim().is_empty() {
+            let out = crate::tools::exec::run(
+                &workspace_dir,
+                &checks_cmd,
+                Duration::from_secs(CHECKS_TIMEOUT_SECS),
+            );
+            let capped: String = out.chars().take(CHECKS_CAP_CHARS).collect();
+            diff = Some(format!(
+                "{}\n\nMachine checks (`{checks_cmd}`):\n{capped}",
+                diff.unwrap_or_default()
+            ));
+        }
         let mut messages = super::replay::validator_thread(
             &system_prompt,
             &task.spec,
@@ -430,6 +447,9 @@ fn env_lookup(key: &str) -> Option<String> {
 
 /// Cap on the diff injected into a validator prompt — stat + patch; `repo_diff` has the rest.
 const REVIEW_DIFF_CAP_CHARS: usize = 4_000;
+/// Machine checks (L1): wall-clock ceiling and prompt-output cap.
+const CHECKS_TIMEOUT_SECS: u64 = 180;
+const CHECKS_CAP_CHARS: usize = 2_000;
 
 /// What the task changed so far — its recorded bases against the (clean, post-commit) tree,
 /// stat + patch per repo, capped. `None` when nothing changed or the workspace has no repos.

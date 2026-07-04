@@ -5,7 +5,7 @@
 
 mod coder;
 mod concierge;
-mod exec;
+pub(crate) mod exec;
 mod git_screen;
 mod planning;
 mod repo;

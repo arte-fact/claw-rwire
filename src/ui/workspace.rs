@@ -199,6 +199,10 @@ pub fn dashboard(app: &App) -> ElementBuilder {
                 "Review standards",
                 standards_editor(&workspace.id, &app.workspace_standards),
             ),
+            card(
+                "Machine checks",
+                checks_editor(&workspace.id, &app.workspace_checks),
+            ),
         ])
 }
 
@@ -275,6 +279,41 @@ fn standards_editor(wid: &str, content: &str) -> ElementBuilder {
                 "Save standards",
             ),
         ])
+}
+
+/// The machine-check command (L1 of docs/levers.md): run by the harness in the task's lane
+/// after each successful producer pass; its capped output rides the review prompt, so
+/// build/lint/test verdicts come from machines and judgment from the reviewer.
+fn checks_editor(wid: &str, content: &str) -> ElementBuilder {
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapSm])
+        .append([
+            el(El::Div).st([St::TextXs, St::TextMuted]).text(
+                "Machine checks — a shell command run after each pass; its output is \
+                 attached to the review (e.g. cd projects/app && cargo clippy && cargo test).",
+            ),
+            crate::ui::widgets::md_editor(
+                format!("checks-{wid}"),
+                "checks",
+                content,
+                "e.g. cd projects/<name> && cargo test",
+                "3rem",
+                save_checks(),
+                "Save checks",
+            ),
+        ])
+}
+
+#[handler]
+fn save_checks(app: &mut App, ctx: &EventContext) {
+    let Some(id) = app.active_workspace.clone() else {
+        return;
+    };
+    let command = ctx.field("checks").unwrap_or_default().to_owned();
+    bridge::send(Command::SaveChecks {
+        workspace: id,
+        command,
+    });
 }
 
 #[handler]
