@@ -133,40 +133,40 @@ Commits `2951e36` (kinds + prompt layer + page), `ce40094` (strip).
       Projects strip on the Work tab beside Requests; breadcrumb-integrated (workspace ›
       project). *Site*: `ui/project_page.rs`, `workspace_tasks/mod.rs`.
 
-## P1b — CI: machines judge before models (completes L1/M2)
+## P1b — CI: machines judge before models (completes L1/M2) — SHIPPED 2026-07-05
 
-- [ ] **Per-repo detection replaces the global command**: after each successful producer
-      pass, for every repo the pass touched (from `pass_commits`), a `Cargo.toml` at the
-      repo root ⇒ run `cargo fmt --check`, `clippy --all-targets -- -D warnings`,
-      `cargo test` (+ `build --release` only where a `[[bin]]` exists and P2 needs the
-      artifact). The `workspace.<id>.checks` setting becomes a **per-repo override**
-      (`workspace.<id>.checks.<repo>`), kept as the escape hatch for non-cargo stacks.
-      *Site*: new `src/ci.rs` (detection + runner + result types); called from
-      `scheduler/mod.rs finished()` after `commit_pass`.
-- [ ] **Fail fast, review green**: red checks after a producer pass short-circuit to a
-      producer retry with the failure tail as feedback — no Critic round spent on what
-      clippy already knew. *Decision (recommended)*: check-retries are their own bounded
-      counter (2, like verdict-less retries), NOT `max_iterations` — reviewer budget and
-      machine budget stay separate; exhausted check-retries fall through to the normal
-      review (Critic sees the red tail and judges).
-      *Site*: `finished()` producer arm before `gate_action`; pure decision fn + tests.
-- [ ] **Structured results**: `task_runs.checks` column (JSON:
-      `[{repo, check, ok, tail}]`, migration duplicate-tolerant like `commits`); rendered
-      as a badge row in the run entry (task page) and aggregated on the request page/card
-      (`✓ checks` / `✗ fmt, test`).
-      *Site*: `db/task_runs.rs`, `bridge/tasks.rs run_view`, `ui/run_chain.rs`,
-      `requests/view.rs`.
-- [ ] **The macro gate sees CI**: auto-delivery requires the request's latest checks
-      green; the Deliver button shows red state (human override allowed, recorded in
-      `validation`).
-      *Site*: `requests/control.rs on_validated/deliver_now`, `ui/request_page.rs`.
-- [ ] **CI runtime tier**: 600s timeout const, per-lane `CARGO_TARGET_DIR` reuse
-      (`<tree>/.claw-target` shared across the request's passes) so iteration builds are
-      incremental.
-      *Site*: `src/ci.rs`; verify tree teardown removes it.
-- [ ] **`checks` tool**: producers/validators run the project's own CI suite on demand —
-      the same runner the harness uses, one source of truth for machine judgement.
-      *Site*: `tools/` new tool over `src/ci.rs`, in producer + validator profiles.
+Kind now binds the CI recipe (the P1 promise realised). Machine judgement moved from a single
+workspace command run at review time to per-repo CI at producer-finish, with fail-fast on red.
+Commits `b73b43b` (core), `860408f` (structured results), `b1542ca` (macro gate), `477701f`
+(checks tool).
+
+- [x] **Per-repo detection replaces the global command** (2026-07-05): after each successful
+      producer pass, every repo the pass committed is judged by its **kind's** recipe
+      (`ProjectKind::checks()` — Rust kinds ⇒ `cargo fmt --check`, `clippy --all-targets -D
+      warnings`, `cargo test`; other stacks override-only). `workspace.<id>.checks` became the
+      per-repo override (`…checks.<repo>`, meta key back-compat). `build --release` deferred to
+      P2 (it needs the artifact; keeps iteration fast). *Site*: `src/ci.rs`, `kinds.rs`,
+      `scheduler/mod.rs finished()`.
+- [x] **Fail fast, review green** (2026-07-05): red checks re-run the producer with the
+      failure tail (surfaced by `producer_thread`), bounded by its own counter
+      (`MAX_CHECK_RETRIES = 2`, separate from `max_iterations`); past the cap it falls through
+      to the normal review with the red result visible. `unreviewed_output` skips a red pass so
+      a restart re-produces. Pure decision covered by a scheduler test.
+- [x] **Structured results** (2026-07-05): `task_runs.checks` column (JSON
+      `[{repo,check,ok,tail}]`, duplicate-tolerant migration); a badge strip per producer run
+      (`run_chain::checks_row`, red tails behind a disclosure) and a Checks section on the
+      request page (`request_checks` unions each task's latest pass).
+- [x] **The macro gate sees CI** (2026-07-05): auto-delivery (`on_validated` pass) is held
+      when the request's latest checks are red — pings the operator, records the hold in
+      `validation`; the Deliver button becomes "Deliver anyway" (explicit human override,
+      `deliver_now` ungated).
+- [x] **CI runtime tier** (2026-07-05): 600s per-check timeout (`ci::CHECK_TIMEOUT`). No
+      shared `CARGO_TARGET_DIR` — Rust gitignores `/target` and the lane worktree persists
+      across passes, so builds are already incremental (and a shared dir would fight the
+      sandbox mount). Simpler than the planned `<tree>/.claw-target`, same outcome.
+- [x] **`checks` tool** (2026-07-05): `ChecksToolbox` runs the same per-repo runner on demand,
+      composed into both the producer and validator toolboxes; a red result returns as a failed
+      call. *Site*: `tools/checks.rs`.
 - [ ] Ops (harvested L1): put Critic on a stronger model than the producers — two fields
       on the System page; do it when picking the next model lineup.
 
