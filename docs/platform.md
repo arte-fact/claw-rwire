@@ -27,6 +27,25 @@
   flow proven), built Empire on it; operator promotes gaps upstream (Breadcrumb, Progress,
   tokens precedent). Missing: the paved road.
 
+## Elegance constraints (bind every phase)
+
+1. **Derive, don't store.** The filesystem and git are already the registry — a project IS
+   its directory, its kind IS a pure function over its files, its history IS
+   `request_repos`. Rows exist only for state with an independent lifecycle. Net new
+   storage across all phases: **one column** (`task_runs.checks`), **zero tables**.
+2. **One runner, three consumers.** Harness CI, the agents' `checks` tool, and the
+   delivery gate share one implementation (`src/ci.rs`); a machine verdict means the same
+   thing everywhere or it means nothing.
+3. **Complexity flows upstream.** Anything reusable by any rwire app (base-path, proxy
+   plumbing if generic) lands in the framework; claw stays a consumer. The
+   Breadcrumb/Progress precedent, as policy.
+4. **Reuse the seams that exist**: teardown hooks (P0 kills), the boot-recovery pattern
+   (P2 staging), `disclosure_row` (check tails), sparse settings (overrides only when
+   overridden), the detail/projection pattern (project page = request page's shape).
+5. **New-file budget**: `kinds.rs`, `ci.rs`, `bridge/preview.rs`, `ui/project_page.rs` —
+   four modules, each under the house 300-line cap. A phase that wants a fifth file
+   justifies it in its commit message.
+
 ## P0 — isola on (the safety floor for everything below)
 
 - [ ] **Enable**: release built `--features sandbox`; `CLAW_SANDBOX=isola` in `.env`.
@@ -67,14 +86,14 @@ project today is a directory with no identity. **Kind is the paved-road bundle**
 the CI recipe, the preview recipe + base-path knob, the prompt layer, the tool profile,
 and the skills — one concept rounding up prompts/tools/skills instead of settings sprawl.
 
-- [ ] `projects` table: workspace_id, name (repo rel), **kind** (`rwire-app` | `rust-bin`
-      | `node-app` | `docs` | `other`), created_at; registered at repo birth/clone/adopt,
-      kind auto-detected (Cargo.toml, rwire dep, package.json), operator-overridable.
-      *Site*: `db/projects.rs`, hooks in `gitops::sweep` birth + adoption + P3 clone tool.
-- [ ] `ProjectKind` registry (code, not config): per kind — checks recipe, preview
-      command + base-path mapping, prompt layer text, default skills. *Site*: new
-      `src/kinds.rs`; the settings keys from the old P1/P2 drafts become overrides on the
-      project row, not the primary mechanism.
+- [ ] **Projects are derived, never registered**: identity = the directory `repos()`
+      already lists; **kind = a pure function** over its files (rwire dep in Cargo.toml →
+      `rwire-app`; Cargo.toml → `rust-bin`; package.json → `node-app`; else `other`),
+      computed on read — no table, no registration hooks, no sync bugs when a directory
+      moves. The only stored state is the sparse override
+      (`settings: project.<ws>.<name>.kind|checks|preview`), written only when set.
+      *Site*: new `src/kinds.rs` — one enum + pure fns (`detect`, `checks_recipe`,
+      `preview_command`, `prompt_layer`, `skill_source`) + tests; nothing else.
 - [ ] **Prompt composition grows the project layer**: role → workspace (AGENT.md) →
       project (kind conventions + contracts: "these exact checks will judge your pass —
       run them first"; "serve under $CLAW_PREVIEW_BASE") → task spec. Producers
@@ -126,14 +145,15 @@ and the skills — one concept rounding up prompts/tools/skills instead of setti
 
 ## P2 — CD: every branch a URL (the request model completes)
 
-- [ ] **Preview supervisor**: `previews` table (`request_id`, `repo`, `port`, `pid`,
-      `status`, `started_at`) + a bridge module owning start/health/stop. Start = build
-      (reuse P1 artifact) then run the binary **from the request's tree** under isola,
-      port from a pool (`CLAW_PREVIEW_PORTS=7800-7899` in `.env`), health = TCP/HTTP
-      probe with a deadline. Stop on deliver/abandon (same seam as tree teardown) and on
-      boot for rows whose pid is gone (recovery, like macro reviews).
-      *Site*: new `src/bridge/preview.rs`, `db/schema.sql`, hooks in
-      `requests/{mod,control}.rs`.
+- [ ] **Preview supervisor — in-memory, no table**: previews are process state and
+      processes die with the server, so the supervisor is a bridge-owned map
+      (`(workspace, repo) → {port, child, kind}`), ports from `CLAW_PREVIEW_PORTS`
+      in `.env`, health = TCP/HTTP probe with a deadline. Stop on deliver/abandon (the
+      tree-teardown seam); boot recovery = the map starts empty and staging relaunches
+      lazily on first hit (the macro-review recovery pattern, simpler: nothing to scan).
+      Start = run the project's kind command **from the request's tree** under isola,
+      reusing the P1b build artifact.
+      *Site*: new `src/bridge/preview.rs` only; hooks in `requests/{mod,control}.rs`.
 - [ ] **How a preview knows what to run**: the project's kind supplies the command
       (rwire-app: `cargo run --release`; node-app: `npm start`; override on the project
       row), with `CLAW_BIND=127.0.0.1:<port>` + `CLAW_PREVIEW_BASE` injected via env.
