@@ -74,15 +74,10 @@ fn bind_addr() -> String {
 
 /// The reverse-proxy resolver claw hands to rwire: a `/preview/<key>/…` request resolves to the
 /// live upstream port for `<key>` (from the preview supervisor), stripping `/preview/<key>` so the
-/// branch app sees a root-relative path. Anything else falls through to claw's own handling.
+/// branch app sees a root-relative path. Anything else falls through to claw's own handling. The
+/// decision lives in [`bridge::preview::resolve_proxy`] so it's covered against a live supervisor.
 fn preview_proxy() -> ProxyResolver {
-    ProxyResolver::new(|path| {
-        let key = path.strip_prefix("/preview/")?.split('/').next()?;
-        if key.is_empty() {
-            return None;
-        }
-        bridge::preview::port_for(key).map(|port| (port, format!("/preview/{key}")))
-    })
+    ProxyResolver::new(bridge::preview::resolve_proxy)
 }
 
 #[main]

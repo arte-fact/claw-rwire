@@ -306,6 +306,19 @@ pub fn port_for(key: &str) -> Option<u16> {
     table().lock().ok().and_then(|t| t.get(key).map(|p| p.port))
 }
 
+/// The reverse-proxy decision for one request path: a `/preview/<key>/…` whose key is running
+/// resolves to `(upstream port, "/preview/<key>")` — the prefix rwire strips before forwarding.
+/// An unknown key or any non-preview path resolves to `None`, so the request falls through to
+/// claw's own handling. This is the closure `main.rs` hands to rwire's `ProxyResolver`.
+#[must_use]
+pub fn resolve_proxy(path: &str) -> Option<(u16, String)> {
+    let key = path.strip_prefix("/preview/")?.split('/').next()?;
+    if key.is_empty() {
+        return None;
+    }
+    port_for(key).map(|port| (port, uri_for(key)))
+}
+
 /// A free port in the pool: in the `CLAW_PREVIEW_PORTS` range, not held by a live preview, and
 /// actually bindable (catches a leaked listener from a prior run). `None` if the pool is exhausted.
 fn free_port() -> Option<u16> {
@@ -506,6 +519,17 @@ mod tests {
             TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok(),
             "port {port} should answer while the preview runs"
         );
+
+        // The proxy resolver (claw's actual wiring) points a `/preview/<key>/…` request at this
+        // live port with the prefix to strip, and refuses unknown keys / non-preview paths — the
+        // rwire side (integration test) proves a `Some` then forwards+strips correctly.
+        assert_eq!(
+            resolve_proxy(&format!("/preview/{key}/dashboard")),
+            Some((port, uri_for(&key))),
+            "a live key routes to its port with the prefix to strip"
+        );
+        assert_eq!(resolve_proxy("/preview/ws-nope/x"), None, "unknown key");
+        assert_eq!(resolve_proxy("/w/studio"), None, "non-preview path");
 
         stop(&key);
         std::thread::sleep(Duration::from_millis(600));
