@@ -119,8 +119,12 @@
       wire endpoint, asset URLs, and `Link::route` become prefix-aware, so every rwire
       app is mountable under a dynamic URI natively. Ships upstream (framework), adopted
       by the preview supervisor via env (`CLAW_BASE_PATH=/preview/<short>`).
-      Non-rwire apps stay second-class under path proxying (absolute asset paths break):
-      agents hit `localhost:<port>` directly; pretty URIs are the paved road's reward.
+      **The base-path contract**: the supervisor always exports the mount point
+      (`CLAW_PREVIEW_BASE=/preview/<short>`) alongside the port; rwire honors it natively
+      (base_path upstream), and most other stacks map it to their own knob (Vite `base`,
+      Next `basePath`, CRA `PUBLIC_URL`, …) — the template/STANDARDS instruct agents to
+      wire it, so honoring the env var is reviewable work, not infrastructure. Truly
+      path-hostile apps fall back to `localhost:<port>` for agent access.
 - [ ] **Agents propose and visit preview links**: the preview URI is injected into the
       producer/validator prompts for the request (debug loop: start preview → fetch the
       URI → see the real failure → fix); a jailed same-origin `visit` tool (GET, capped
