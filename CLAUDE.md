@@ -66,6 +66,16 @@ with `Link::to(…)`, never raw `<a href>` (full reload). One routing model only
 tokens (`St::BgApp`, `St::TextMuted`, …), never hardcoded hex. Width-spanning elements in a
 flex-centered parent need `St::WFull` or they collapse to ~0.
 
+## Sandbox (P0)
+
+Agent `bash` + machine checks run inside per-lane [isola](../isola) sandboxes when
+`CLAW_SANDBOX=isola` is set (runtime-detected — no cargo feature; the `isola` binary must be
+on PATH). Naming: `claw-<ws>` canonical, `claw-<ws>-<req8>` per request lane; created on
+demand with minimal envs (`rust git nodejs` — never the operator's user-layer configs),
+destroyed with the lane. Host-side stays: harness git, the DB, the server, file tools
+(reads/writes ride the workspace jail). Integration test:
+`CLAW_TEST_SANDBOX=it CLAW_TEST_MOUNT=/tmp/claw-it cargo test -- --ignored isola_`.
+
 ## Layout
 
 - `src/db/` — central registry DB (schema + open). Format-compatible with rust-claw's

@@ -141,6 +141,9 @@ pub(super) fn deliver(conn: &Connection, shared: &rwire::SharedServerState, requ
     // touched repos keep theirs — the passes stay browsable behind the merge.
     let touched: std::collections::HashSet<&str> =
         repos.iter().map(|repo| repo.repo.as_str()).collect();
+    // The lane's sandbox dies with the lane (P0): whatever a run left behind — a dev
+    // server, a hung build — is killed by the rootfs teardown, never orphaned on the host.
+    crate::sandbox::destroy(&crate::sandbox::name_for(&tree));
     for err in gitops::remove_request_tree(&root, &tree) {
         log_line(format!("requests: teardown {}: {err}", request.id));
     }

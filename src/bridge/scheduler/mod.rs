@@ -272,8 +272,8 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
         let checks_cmd =
             db::settings::get_or(conn, &super::files::checks_key(&task.workspace_id), "");
         if !checks_cmd.trim().is_empty() {
-            let out = crate::tools::exec::run(
-                &workspace_dir,
+            let out = crate::tools::exec::run_in(
+                &super::exec_strategy_for(&workspace_dir),
                 &checks_cmd,
                 Duration::from_secs(CHECKS_TIMEOUT_SECS),
             );

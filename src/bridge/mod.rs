@@ -1017,23 +1017,18 @@ pub(super) fn warm_context_cache(inference: &resolution::ResolvedInference) {
 /// workspace work by definition) — the workspace file tools. Chat (concierge) runs pass
 /// `false`, so an unconfigured concierge stays web-only and delegates rather than writing
 /// files. Each source is wrapped in a [`FilteredToolbox`] so only enabled tools are callable.
-/// The execution strategy for a workspace's `bash` tool, from the resolved [`SandboxMode`]. In
-/// `Isola` mode the sandbox name is the workspace dir's final component (= the workspace id) and
-/// the mount is the workspace dir itself; otherwise host execution in that dir.
-fn exec_strategy_for(workspace: &Path) -> crate::tools::ExecStrategy {
+/// The execution strategy for a run's `bash` (and machine checks), from the resolved
+/// [`SandboxMode`]. In `Isola` mode the sandbox is named per lane ([`crate::sandbox::name_for`]:
+/// `claw-<ws>` canonical, `claw-<ws>-<req8>` for a request tree) and the mount is the lane root
+/// itself — every lane gets its own sandbox, torn down with the tree.
+pub(crate) fn exec_strategy_for(workspace: &Path) -> crate::tools::ExecStrategy {
     use crate::sandbox::SandboxMode;
     use crate::tools::ExecStrategy;
     match SandboxMode::resolve(boot::env("CLAW_SANDBOX").ok().as_deref()).effective() {
-        SandboxMode::Isola => {
-            let sandbox = workspace
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "claw".to_owned());
-            ExecStrategy::Isola {
-                sandbox,
-                mount: workspace.to_path_buf(),
-            }
-        }
+        SandboxMode::Isola => ExecStrategy::Isola {
+            sandbox: crate::sandbox::name_for(workspace),
+            mount: workspace.to_path_buf(),
+        },
         SandboxMode::Host => ExecStrategy::Host {
             root: workspace.to_path_buf(),
         },

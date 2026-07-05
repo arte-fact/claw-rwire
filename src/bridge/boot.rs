@@ -173,8 +173,8 @@ pub(super) fn log_sandbox_mode() {
             log_line("sandbox: isola mode — agent commands run inside the workspace sandbox");
         }
         SandboxMode::Isola => log_line(
-            "sandbox: CLAW_SANDBOX=isola requested but isola support isn't compiled in \
-             (build with --features sandbox on Linux); running commands on the host",
+            "sandbox: CLAW_SANDBOX=isola requested but the isola binary isn't available \
+             (install it on PATH; Linux only); running commands on the host",
         ),
     }
 }

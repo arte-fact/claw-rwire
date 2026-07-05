@@ -1,13 +1,17 @@
-//! Sandbox mode for agent command execution (R6). `Host` runs `bash` directly in the workspace
-//! dir (today's behaviour); `Isola` runs it inside the workspace's rootless [isola] sandbox so a
-//! stray command can't touch the host beyond the bind-mounted workspace.
+//! Sandbox mode + lifecycle for agent command execution (R6/P0). `Host` runs `bash` directly
+//! in the workspace dir; `Isola` runs it inside a per-lane rootless [isola] sandbox so a
+//! stray command can't touch the host beyond the bind-mounted lane.
 //!
-//! Resolved from the `CLAW_SANDBOX` env (via the bridge's env helper). [`SandboxMode::resolve`] is
-//! a pure string → mode map; whether isola is actually compiled in for this build/platform is the
-//! separate [`SandboxMode::isola_available`] check, so the bridge can fall back to `Host` (and log
-//! once) when `isola` is requested on a host/build that lacks it.
+//! Integration is **CLI-driven** (`isola create/status/exec/destroy` as subprocesses): the
+//! CLI is isola's stable interface, exit codes propagate, and a warm exec costs ~15 ms.
+//! Sandboxes are created on demand at first `bash` (worker thread — first provision takes
+//! minutes, cached after) with [`AGENT_ENVS`] only: self-contained toolchains, never the
+//! operator's user-layer configs (ssh-keys, claude-config, git-config).
 //!
-//! [isola]: https://github.com/ (first-party `../isola`)
+//! [isola]: first-party `../isola`
+
+use std::path::Path;
+use std::process::Command;
 
 /// Where an agent's `bash` commands run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -15,7 +19,7 @@ pub enum SandboxMode {
     /// Spawn `bash` on the host, in the workspace dir. The default and pre-R6 behaviour.
     #[default]
     Host,
-    /// Run `bash` inside the workspace's isola sandbox.
+    /// Run `bash` inside the lane's isola sandbox.
     Isola,
 }
 
@@ -30,11 +34,19 @@ impl SandboxMode {
         }
     }
 
-    /// Whether isola-backed execution is compiled in for this build and platform. When this is
-    /// false, a resolved [`SandboxMode::Isola`] must degrade to `Host` (the engine can't sandbox).
+    /// Whether isola-backed execution is available: Linux with the `isola` binary on PATH.
+    /// Probed once per process. When false, a resolved [`SandboxMode::Isola`] must degrade
+    /// to `Host` (the engine can't sandbox).
     #[must_use]
-    pub const fn isola_available() -> bool {
-        cfg!(all(feature = "sandbox", target_os = "linux"))
+    pub fn isola_available() -> bool {
+        static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *AVAILABLE.get_or_init(|| {
+            cfg!(target_os = "linux")
+                && Command::new("isola")
+                    .arg("--help")
+                    .output()
+                    .is_ok_and(|out| out.status.success())
+        })
     }
 
     /// The effective mode: the resolved mode, demoted to `Host` when isola isn't available.
@@ -45,6 +57,86 @@ impl SandboxMode {
             other => other,
         }
     }
+}
+
+/// Environments provisioned into agent sandboxes: self-contained toolchains installed into
+/// the rootfs. Deliberately excludes every user-layer plugin — an agent sandbox must never
+/// inherit the operator's ssh keys, API configs, or git identity.
+const AGENT_ENVS: &[&str] = &["rust", "git", "nodejs"];
+
+/// Sandbox name for a run rooted at `dir`, derived from the data-dir layout: a canonical
+/// workspace (`…/workspaces/<ws>`) gets `claw-<ws>`; a request lane (`…/trees/<ws>/<req8>`)
+/// gets `claw-<ws>-<req8>` — its own sandbox, so lane teardown kills lane processes without
+/// touching the workspace's. Anything else falls back to the final path component.
+#[must_use]
+pub fn name_for(dir: &Path) -> String {
+    let comps: Vec<&str> = dir
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    if let Some(i) = comps.iter().rposition(|c| *c == "trees")
+        && comps.len() > i + 2
+    {
+        return format!("claw-{}-{}", comps[i + 1], comps[i + 2]);
+    }
+    if let Some(i) = comps.iter().rposition(|c| *c == "workspaces")
+        && comps.len() > i + 1
+    {
+        return format!("claw-{}", comps[i + 1]);
+    }
+    format!(
+        "claw-{}",
+        comps
+            .last()
+            .copied()
+            .unwrap_or("workspace")
+            .trim_matches('/')
+    )
+}
+
+/// Ensure `name` exists, creating it with the minimal agent env set on first use. Creation
+/// provisions a rootfs (minutes uncached, seconds cached) — call from worker threads only.
+pub fn ensure(name: &str, mount: &Path) -> Result<(), String> {
+    if exists(name) {
+        return Ok(());
+    }
+    // Unhealthy-but-present (a create that died partway) blocks re-creation — sweep it.
+    // Destroy is idempotent; a never-created sandbox just errors quietly.
+    destroy(name);
+    let mut cmd = Command::new("isola");
+    // --no-cache: the fresh-provision path is the proven one; isola's layered cache has
+    // restore bugs (lost usr-merge links — fixed upstream — and a dpkg-lock provisioning
+    // failure, still open there). Creation cost lands once per lane, on its first bash.
+    cmd.args(["create", "--no-cache"]).arg("-w").arg(mount);
+    for env in AGENT_ENVS {
+        cmd.args(["--env", env]);
+    }
+    cmd.arg(name);
+    match cmd.output() {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let tail: String = stderr.lines().rev().take(3).collect::<Vec<_>>().join(" | ");
+            Err(format!("isola create failed: {tail}"))
+        }
+        Err(err) => Err(format!("isola create: {err}")),
+    }
+}
+
+/// Whether the sandbox exists and is healthy (`isola status` exits 0).
+#[must_use]
+pub fn exists(name: &str) -> bool {
+    Command::new("isola")
+        .args(["status", name])
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+/// Best-effort destroy: kills everything running inside and deletes the rootfs. Idempotent —
+/// a missing sandbox (never created, or already torn down) is fine. The teardown seam for
+/// lanes (deliver/abandon) and workspaces (admin delete): no orphaned writer survives it.
+pub fn destroy(name: &str) {
+    let _ = Command::new("isola").args(["destroy", name]).output();
 }
 
 #[cfg(test)]
@@ -71,14 +163,20 @@ mod tests {
     }
 
     #[test]
-    fn effective_demotes_isola_when_unavailable() {
-        // With the `sandbox` feature off, isola isn't available → Isola demotes to Host.
-        let effective = SandboxMode::Isola.effective();
-        if SandboxMode::isola_available() {
-            assert_eq!(effective, SandboxMode::Isola);
-        } else {
-            assert_eq!(effective, SandboxMode::Host);
-        }
+    fn host_stays_host() {
         assert_eq!(SandboxMode::Host.effective(), SandboxMode::Host);
+    }
+
+    #[test]
+    fn names_canonical_workspaces_and_lanes_apart() {
+        let ws = Path::new("/data/claw-data/workspaces/studio");
+        assert_eq!(name_for(ws), "claw-studio");
+        let lane = Path::new("/data/claw-data/trees/studio/ab12cd34");
+        assert_eq!(name_for(lane), "claw-studio-ab12cd34");
+        // A lane's project subdir still resolves to the lane, not the project.
+        let sub = Path::new("/data/claw-data/trees/studio/ab12cd34/projects/empire");
+        assert_eq!(name_for(sub), "claw-studio-ab12cd34");
+        let odd = Path::new("/somewhere/else");
+        assert_eq!(name_for(odd), "claw-else");
     }
 }

@@ -32,21 +32,17 @@ pub enum ExecStrategy {
 /// timeout the command is killed and a note returned.
 #[must_use]
 pub fn bash_in(strategy: &ExecStrategy, command: &str) -> String {
+    run_in(strategy, command, BASH_TIMEOUT)
+}
+
+/// [`bash_in`] with a caller-chosen wall-clock cap — the machine-check and CI runners need a
+/// longer leash than interactive `bash` (P0: every harness-run command goes through the
+/// strategy; nothing calls the host path directly when the lane is sandboxed).
+#[must_use]
+pub fn run_in(strategy: &ExecStrategy, command: &str, timeout: Duration) -> String {
     match strategy {
-        ExecStrategy::Host { root } => run(root, command, BASH_TIMEOUT),
-        ExecStrategy::Isola { sandbox, mount } => {
-            #[cfg(feature = "sandbox")]
-            {
-                run_isola(sandbox, mount, command, BASH_TIMEOUT)
-            }
-            // Without the feature compiled in this arm is unreachable in practice (the bridge
-            // demotes Isola→Host), but keep it host-safe so the code builds either way.
-            #[cfg(not(feature = "sandbox"))]
-            {
-                let _ = sandbox;
-                run(mount, command, BASH_TIMEOUT)
-            }
-        }
+        ExecStrategy::Host { root } => run(root, command, timeout),
+        ExecStrategy::Isola { sandbox, mount } => run_isola(sandbox, mount, command, timeout),
     }
 }
 
@@ -167,37 +163,46 @@ fn cleanup(out_path: &Path, err_path: &Path) {
     let _ = std::fs::remove_file(err_path);
 }
 
-/// Run `command` inside the workspace's isola sandbox as the sandbox user, returning the same
-/// `exit <code>\n<output>` shape as the host path. The wall-clock cap is enforced *inside* the
-/// sandbox with `timeout`, so an over-running command is reaped by the sandbox itself (exit 124)
-/// — no host-side child to kill. A missing/unhealthy sandbox is reported rather than silently
-/// run on the host (which would defeat the isolation).
-#[cfg(feature = "sandbox")]
+/// Run `command` inside the lane's isola sandbox as the sandbox user, returning the same
+/// `exit <code>\n<output>` shape as the host path. CLI-driven (`isola exec` subprocess): exit
+/// codes propagate, output is captured from the pipes, and the wall-clock cap is enforced
+/// *inside* the sandbox with `timeout` (exit 124 → note) — no host-side child to kill. The
+/// sandbox is created on demand with the minimal agent env set; first provision takes minutes
+/// (cached after), billed to the first `bash` of the lane.
 fn run_isola(sandbox: &str, mount: &Path, command: &str, timeout: Duration) -> String {
-    use isola::sandbox::backend::create_backend;
-    let backend = create_backend();
-    if !backend.is_healthy(sandbox) {
-        return format!(
-            "error: sandbox {sandbox:?} is not ready — create it first (`isola create {sandbox}`); \
-             command not run"
-        );
+    if let Err(err) = crate::sandbox::ensure(sandbox, mount) {
+        return format!("error: sandbox {sandbox:?} unavailable: {err}; command not run");
     }
     let secs = timeout.as_secs().max(1);
     // `timeout -k 5` sends TERM at the cap, then KILL 5s later if the command ignores it.
     let wrapped = format!("timeout -k 5 {secs} bash -lc {}", single_quote(command));
-    let argv = vec!["bash".to_owned(), "-lc".to_owned(), wrapped];
-    match backend.exec_command_captured(sandbox, &argv, Some(mount), Vec::new()) {
-        Ok((124, output)) => {
-            let body = truncate_output(&output);
-            if body.is_empty() {
-                format!("timed out after {secs}s — command killed")
-            } else {
-                format!("timed out after {secs}s — command killed\n{body}")
+    let output = Command::new("isola")
+        .arg("exec")
+        .arg("-w")
+        .arg(mount)
+        .arg(sandbox)
+        .args(["/bin/bash", "-lc", &wrapped])
+        .stdin(Stdio::null())
+        .output();
+    match output {
+        Ok(out) => {
+            let code = out.status.code().unwrap_or(-1);
+            let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !stderr.trim().is_empty() {
+                if !combined.is_empty() && !combined.ends_with('\n') {
+                    combined.push('\n');
+                }
+                combined.push_str(stderr.trim_end());
             }
-        }
-        Ok((code, output)) => {
-            let body = truncate_output(&output);
-            if body.is_empty() {
+            let body = truncate_output(&combined);
+            if code == 124 {
+                if body.is_empty() {
+                    format!("timed out after {secs}s — command killed")
+                } else {
+                    format!("timed out after {secs}s — command killed\n{body}")
+                }
+            } else if body.is_empty() {
                 format!("exit {code}")
             } else {
                 format!("exit {code}\n{body}")
@@ -208,8 +213,7 @@ fn run_isola(sandbox: &str, mount: &Path, command: &str, timeout: Duration) -> S
 }
 
 /// Cap captured output the same way the host path does (the host path truncates as it reads from
-/// files; isola hands back one string, so cap it here).
-#[cfg(feature = "sandbox")]
+/// files; the subprocess hands back one string, so cap it here).
 fn truncate_output(output: &str) -> String {
     let trimmed = output.trim_end();
     if trimmed.chars().count() > MAX_OUTPUT {
@@ -221,8 +225,7 @@ fn truncate_output(output: &str) -> String {
 }
 
 /// POSIX single-quote a string for safe embedding in a `bash -lc` payload: wrap in `'…'`,
-/// rewriting any embedded `'` as `'\''`.
-#[cfg(feature = "sandbox")]
+/// rewriting any embedded `'` as `'\\''`.
 fn single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -290,11 +293,9 @@ mod tests {
         assert!(out.starts_with("timed out after 1s"), "got: {out}");
     }
 
-    // Gated integration test (T6). Needs a host with `isola setup-host` run and a sandbox named by
-    // CLAW_TEST_SANDBOX whose mount is CLAW_TEST_MOUNT. Run with:
-    //   CLAW_TEST_SANDBOX=it CLAW_TEST_MOUNT=/tmp/claw-it \
-    //     cargo test --features sandbox -- --ignored isola_
-    #[cfg(feature = "sandbox")]
+    // Gated integration test (T6/P0). Needs a host with `isola setup-host` run and a sandbox
+    // named by CLAW_TEST_SANDBOX whose mount is CLAW_TEST_MOUNT. Run with:
+    //   CLAW_TEST_SANDBOX=it CLAW_TEST_MOUNT=/tmp/claw-it cargo test -- --ignored isola_
     #[test]
     #[ignore = "requires a provisioned isola host + CLAW_TEST_SANDBOX/CLAW_TEST_MOUNT"]
     fn isola_runs_in_the_sandbox_isolates_writes_and_reaps() {
@@ -325,6 +326,14 @@ mod tests {
         assert!(
             !probe.exists(),
             "a $HOME write inside the sandbox must not escape to the host"
+        );
+
+        // The host filesystem simply isn't there: an absolute host path (the symlink
+        // episode's read probe) resolves to nothing inside the mount namespace.
+        let read = bash_in(&strategy, "ls /home/artefact 2>&1; true");
+        assert!(
+            read.contains("No such file") || read.contains("cannot access"),
+            "the host home must be invisible inside the sandbox, got: {read}"
         );
 
         // The wall-clock cap reaps an over-running command (in-sandbox `timeout`).

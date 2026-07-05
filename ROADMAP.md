@@ -48,36 +48,45 @@
 
 ## P0 — isola on (the safety floor for everything below)
 
-- [ ] **Enable**: release built `--features sandbox`; `CLAW_SANDBOX=isola` in `.env`.
-      *Site*: build script/ops + `src/sandbox.rs` (`SandboxMode::resolve`).
-      *Acceptance*: boot log prints `sandbox: isola mode`; a task's `bash` transcript
-      shows sandbox execution; `cargo build --release` docs updated (CLAUDE.md gains the
-      feature flag note).
-- [ ] **Lane mounts audit**: G4 tasks run in `trees/<ws>/<req-short>`, not the canonical
-      workspace — the strategy's `mount` must be the **lane root** (`task_root`) and the
-      sandbox name must not collide across lanes of one workspace.
-      *Site*: wherever `ExecStrategy` is constructed (`bridge/mod.rs build_toolbox` →
-      `CoderToolbox`); audit `src/sandbox.rs` lifecycle (who creates/destroys sandboxes;
-      per-workspace vs per-lane identity).
-      *Acceptance*: real-git + sandbox test — a request-lane bash writes in its tree,
-      cannot read the canonical workspace or another lane.
-- [ ] **Checks/CI route through ExecStrategy**: `launch_validator`'s machine-check call
-      uses `exec::run` directly (host, always) — switch to the task's strategy; same for
-      P1 runners.
-      *Site*: `scheduler/mod.rs` (checks call), `tools/exec.rs` (expose a strategy-aware
-      entry with caller-chosen timeout).
-- [ ] **Teardown kills processes** (harvested L5): abandon/stop/restart tears the lane's
-      sandbox down, killing everything in it — closes the orphan-writer resurrection
-      under `trees/` (the process-group kill we deferred, now free via the sandbox).
-      *Site*: `requests/control.rs abandon`, `bridge/tasks.rs stop/restart`,
-      `gitops::remove_request_tree` call sites.
-      *Acceptance*: abandon mid-`cargo build` leaves no surviving child; `trees/` stays
-      deleted.
-- [ ] **Escape regression**: the symlink episode's probe as a test — sandboxed bash
-      reading through `projects/<link>` → outside fails; feature-gated
-      (`#[cfg(feature = "sandbox")]`), run in the P0 live-verify.
-- [ ] **Host allowlist documented**: what deliberately stays host-side (harness git, DB,
-      the server itself) and why — one section in this doc, referenced from CLAUDE.md.
+> **Shipped 2026-07-05** (claw + 3 upstream isola fixes). The plan's one deviation, for
+> the better: the lost `feat/exec-command-captured` isola lib branch was NOT rebuilt —
+> integration is **CLI-driven** (`isola create/status/exec/destroy` subprocesses; ~15 ms
+> warm exec, exit codes propagate) — so the `sandbox` cargo feature dissolved into runtime
+> detection (`isola` on PATH). One build, no feature matrix.
+
+- [x] **Enable**: `CLAW_SANDBOX=isola` in `.env`; runtime-detected binary (no cargo
+      feature). Boot log prints `sandbox: isola mode`. CLAUDE.md documents the setup.
+- [x] **Lane mounts + naming**: `sandbox::name_for` — `claw-<ws>` canonical,
+      `claw-<ws>-<req8>` per lane, mount = the lane root; sandboxes created on demand at
+      first `bash` (`--no-cache --env rust,git,nodejs` — minimal, self-contained, never
+      the operator's ssh-keys/claude-config/git-config; ~3 min once per lane, billed to
+      the first command). Unit-tested naming; live integration test green.
+- [x] **Checks route through ExecStrategy**: `exec::run_in(strategy, cmd, timeout)`;
+      `launch_validator`'s machine checks now sandbox with the lane.
+- [x] **Teardown kills processes** (harvested L5): deliver/abandon destroy the lane's
+      sandbox before removing the tree (admin workspace-delete already did); whatever a
+      run left behind dies with the rootfs.
+- [x] **Escape regression**: gated integration test (`cargo test -- --ignored isola_`,
+      auto-creates its sandbox) — workspace write-back visible, `$HOME` write does not
+      escape, absolute host paths invisible, in-sandbox `timeout` reaps. Green 2026-07-05
+      (187 s incl. fresh provision).
+- [x] **Host allowlist documented** (below).
+- [ ] Upstream follow-up (isola): repair the layered provision cache — restores lost the
+      usr-merge symlinks (fixed: `ff6dd81`) and cached creates still fail on dpkg locks,
+      so claw creates `--no-cache` for now; fixing the cache turns 3-min lane setup into
+      ~20 s. Also: sandbox git identity is inherited from the host (`fcc287a` made it
+      order-safe) — consider a neutral identity for agent sandboxes.
+
+### Host allowlist (what deliberately stays host-side)
+
+- **Harness git** (sweep, branches, worktrees, delivery merges): claw's own code with a
+  hermetic env — sandboxing it would need the data dir mounted, defeating the boundary.
+- **The DB + server**: claw itself is the trust anchor.
+- **File tools** (`read`/`write`/`edit`/`list`/`find`): host-side behind the workspace
+  jail (lexical + canonicalization layers, symlink-guarded) — they never execute content.
+- **Web/MCP tools**: network egress by design; no filesystem writes outside the jail.
+- Everything an agent *executes* (`bash`, machine checks, P1 CI, P2 previews) goes
+  through `ExecStrategy` and sandboxes with the lane.
 
 ## P1 — Projects become first-class (the unit CI/CD binds to)
 
