@@ -204,6 +204,22 @@ Commits `b73b43b` (core), `860408f` (structured results), `b1542ca` (macro gate)
 > walkthrough of a real rwire preview waits on a previewable project (none registered live) and a
 > reliable agent trigger — arriving with P2c develop-staging (auto-starts on delivery, no composer-send)
 > and the tracked headless-driver fix.
+>
+> **P2c shipped 2026-07-05** (claw `29b2779`, tests `27a2493`). Previews become first-class across the
+> loop. **Develop staging**: `refresh_staging` (re)starts a long-lived preview per touched web project
+> on delivery — keyed `<ws>-staging-<name>`, in a background thread so a cold build never blocks the
+> delivery worker; `start_for_lane`/`start_staging` share a core `start()`. **`visit` tool**: a jailed
+> host-side GET to the branch's `127.0.0.1:<pool-port>` (capped body, CRLF/space-sanitized path), on the
+> producer, validator, AND macro-review toolboxes. **Prompt injection**: `preview_hint` (gated to
+> previewable lanes) feeds the producer prompt, the validator diff block, and the macro brief the
+> same-origin URL + live status. **Surfaces**: a status-aware "Preview this branch ↗" header link (real
+> new-tab nav — the preview is a separate app behind the proxy) and a green card pulse, both off
+> `port_for`. **Verified**: deterministic — `visit` round-trip + no-preview + path-sanitize unit tests,
+> `staging_short`/`preview_hint` unit tests, and the ignored end-to-end test extended to bring up
+> develop staging on its own pooled port and route it via `resolve_proxy`; 326 tests green, deployed
+> live. Still deferred (unchanged blocker): the human *browser* click-through of a live preview needs a
+> registered web project (none live) — reachable now via a delivery→staging path once a web project
+> exists — and the tracked headless-driver fix (`#65`).
 
 - [x] **Preview supervisor — in-memory, no table**: bridge-owned `OnceLock<Mutex<HashMap>>` keyed
       `<ws>-<short>`, `{port, child, strategy, id}`, ports from `CLAW_PREVIEW_PORTS` (default
@@ -239,20 +255,26 @@ Commits `b73b43b` (core), `860408f` (structured results), `b1542ca` (macro gate)
       Next `basePath`, CRA `PUBLIC_URL`, …) — the template/STANDARDS instruct agents to
       wire it, so honoring the env var is reviewable work, not infrastructure. Truly
       path-hostile apps fall back to `localhost:<port>` for agent access.
-- [ ] **Agents propose and visit preview links**: the preview URI is injected into the
-      producer/validator prompts for the request (debug loop: start preview → fetch the
-      URI → see the real failure → fix); a jailed same-origin `visit` tool (GET, capped
-      body) lets reviewers exercise the running branch; chat receipts + request page
-      render the link. *Endgame (P3+)*: rwire's wire protocol is machine-readable — a
-      future tool drives the preview's UI structurally over the websocket, no browser.
-- [ ] **Develop staging**: one long-lived preview per web project tracking `develop`,
-      restarted on delivery (hook in `deliver()` after merge). Named
-      `<project>.staging.…` under the same routing.
-- [ ] **Surfaces**: Preview link on the request page header (status-aware: validating →
-      "preview this branch"); the **macro-review prompt gets the URL** — the reviewer
-      (agent with `fetch`-like tool? at minimum the human) exercises the running branch
-      before Deliver; preview state shown on the request card.
-      *Site*: `ui/request_page.rs`, `requests/control.rs launch_validation` brief.
+- [x] **Agents propose and visit preview links**: `preview_hint` (gated to previewable
+      lanes) injects the same-origin URI + live status into the producer prompt, the
+      validator's diff block, and the macro-review brief (debug loop: start preview → fetch
+      the URI → see the real failure → fix). A jailed same-origin `visit` tool (host-side
+      GET to `127.0.0.1:<pool-port>`, capped body, CRLF/space-sanitized path) rides the
+      producer, validator, AND macro-review toolboxes so reviewers exercise the running
+      branch. *Endgame (P3+)*: rwire's wire protocol is machine-readable — a future tool
+      drives the preview's UI structurally over the websocket, no browser.
+- [x] **Develop staging**: one long-lived preview per touched web project tracking
+      `develop`, keyed `<ws>-staging-<name>`, (re)started by `refresh_staging` after the
+      merge in `deliver()` — in a **background thread** so a cold `cargo` build never blocks
+      the delivery worker. `start_for_lane`/`start_staging` share a core `start()`; non-web
+      repos are silently skipped. (Lazy-start-on-first-hit deferred: the proxy resolver is a
+      sync hot-path with no workspace context — eager-on-delivery is the clean mechanism.)
+- [x] **Surfaces**: a status-aware "Preview this branch ↗" link on the request page header
+      (a real new-tab navigation — the preview is a separate app behind the proxy, not a
+      claw route) when a preview is live; the macro-review brief carries the URL (the human
+      or the `visit`-armed reviewer exercises the branch before Deliver); a green "preview"
+      pulse on the request card. Both driven off `port_for`.
+      *Site*: `ui/request_page.rs`, `ui/workspace_tasks/mod.rs`, `requests/control.rs`.
 - [ ] Backlog (harvested L5, matters more once CD auto-restarts staging on delivery):
       working-tree-less delivery merge (`merge-tree` + `commit-tree` + `update-ref`) —
       closes the delivery-vs-dirty-canonical race for good.
