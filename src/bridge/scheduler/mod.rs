@@ -17,6 +17,7 @@ use crate::db::{self, task_runs, workspaces};
 use crate::state::{ActivityKind, App, ProgressCtx, RunRole};
 use crate::tools::{
     ChecksToolbox, CompositeToolbox, PreviewToolbox, RepoToolbox, Toolbox, ValidatorToolbox,
+    VisitToolbox,
 };
 use crate::workspace;
 
@@ -255,6 +256,11 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             condensed.as_deref(),
             prior,
         );
+        // Preview capability (P2c): a previewable branch tells the producer where its live server
+        // lives and that `preview`/`visit` exist — the debug loop, surfaced.
+        if let Some(hint) = super::preview::preview_hint(conn, &task.workspace_id, &workspace_dir) {
+            messages.push(agent::ChatMessage::text(agent::Role::User, hint));
+        }
         // Steer delivery (R4): queued operator messages ride this pass boundary as trailing
         // user turns — the agent reads them alongside the spec/feedback it was launched with.
         for body in consume_steers(conn, &inference.agent_id, &task.workspace_id) {
@@ -273,19 +279,21 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             data_dir(),
         );
         // The `preview` tool (P2): start/restart this branch's live server and get the URL back —
-        // the debug loop as a tool call.
+        // the debug loop as a tool call. Paired with `visit` — fetch the running branch to check it.
         let preview = PreviewToolbox::new(
             task.workspace_id.clone(),
             workspace_dir.clone(),
             super::exec_strategy_for(&workspace_dir),
             data_dir(),
         );
+        let visit = VisitToolbox::new(task.workspace_id.clone(), workspace_dir.clone());
         // Read-only git surface, unconditionally (it can't mutate): repo_status/log/diff,
         // anchored to this task so since:"task-start" resolves via its recorded bases.
         let toolbox: Box<dyn Toolbox> = Box::new(CompositeToolbox::new(vec![
             base,
             Box::new(checks),
             Box::new(preview),
+            Box::new(visit),
             Box::new(RepoToolbox::for_task(
                 workspace_dir,
                 data_dir(),
@@ -341,6 +349,11 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
         if let Some(summary) = recorded_checks_summary(conn, &task.id) {
             diff = Some(format!("{}\n\n{summary}", diff.unwrap_or_default()));
         }
+        // Preview capability (P2c): tell the reviewer where the running branch is and that `visit`
+        // can fetch it — a claim like "the page renders" is checkable, not just readable.
+        if let Some(hint) = super::preview::preview_hint(conn, &task.workspace_id, &workspace_dir) {
+            diff = Some(format!("{}\n\n{hint}", diff.unwrap_or_default()));
+        }
         let mut messages = super::replay::validator_thread(
             &system_prompt,
             &task.spec,
@@ -384,12 +397,16 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             super::exec_strategy_for(&workspace_dir),
             data_dir(),
         );
+        // The reviewer can `visit` the running branch too (read-only GET) — exercise the app the
+        // pass claims to have fixed, not just read its diff.
+        let visit = VisitToolbox::new(task.workspace_id.clone(), workspace_dir.clone());
         // Reviewers get the read-only git surface too — a claim like "all tests pass" is
         // checked against what actually changed (repo_diff since task-start), not prose.
         let toolbox: Box<dyn Toolbox> = Box::new(CompositeToolbox::new(vec![
             Box::new(ValidatorToolbox),
             coder_tools,
             Box::new(checks_tool),
+            Box::new(visit),
             Box::new(RepoToolbox::for_task(
                 workspace_dir,
                 data_dir(),

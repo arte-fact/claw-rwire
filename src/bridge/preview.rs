@@ -1,8 +1,9 @@
-//! The preview supervisor (P2): a running server per request branch, reachable at a pooled local
-//! port. In-memory and process-only — previews die with the server, so there is **no table**; the
-//! map starts empty on boot and staging relaunches lazily on first hit. Start runs the project's
-//! kind preview command (rwire-app: `cargo run`; node-app: `npm start`; or a per-project override)
-//! from the request's lane under the lane's exec strategy, reusing the P1b build artifact.
+//! The preview supervisor (P2): a running server per request branch (and a long-lived develop
+//! staging preview per web project), reachable at a pooled local port. In-memory and process-only —
+//! previews die with the server, so there is **no table**; the map starts empty on boot and
+//! develop-staging is re-launched on the next delivery. Start runs the project's kind preview command
+//! (rwire-app: `cargo run`; node-app: `npm start`; or a per-project override) from the lane (or the
+//! canonical root, for staging) under its exec strategy, reusing the P1b build artifact.
 //!
 //! Stopping a preview is deliberate. An isola preview is an `isola exec` host process that *parents*
 //! the in-sandbox server across a PID namespace, so reaping that handle does not reap the server (it
@@ -55,7 +56,7 @@ fn table() -> &'static Mutex<HashMap<String, Preview>> {
 /// command (per-project `preview` override, else the kind default) and spawns it with
 /// `CLAW_BIND`/`CLAW_PREVIEW_BASE`/`CLAW_PREVIEW_ID` in the environment. `Err` only when the target
 /// isn't previewable or the spawn itself fails. The port/key the proxy needs live in the map
-/// (queried via a dedicated accessor when P2b lands), not returned here.
+/// (read via [`port_for`]/[`resolve_proxy`]), not returned here.
 pub fn start_for_lane(
     conn: &Connection,
     workspace_id: &str,
@@ -63,8 +64,72 @@ pub fn start_for_lane(
     strategy: &ExecStrategy,
     target: Option<&str>,
 ) -> Result<String, String> {
-    let (repo, command) = resolve_target(conn, workspace_id, lane_root, target)?;
-    let key = key_for(workspace_id, short_of(lane_root));
+    start(
+        conn,
+        workspace_id,
+        &short_of(lane_root),
+        lane_root,
+        strategy,
+        target,
+    )
+}
+
+/// Start (or restart) the long-lived develop-staging preview for one web `project` from its
+/// canonical `root`, keyed `<ws>-staging-<name>` so each web project gets a stable URL that tracks
+/// `develop`. Called after a delivery merges to `develop`. `Err` (ignored by the caller) when the
+/// project isn't previewable — a plain repo has no staging.
+pub fn start_staging(
+    conn: &Connection,
+    workspace_id: &str,
+    root: &Path,
+    strategy: &ExecStrategy,
+    project: &str,
+) -> Result<String, String> {
+    start(
+        conn,
+        workspace_id,
+        &staging_short(project),
+        root,
+        strategy,
+        Some(project),
+    )
+}
+
+/// Refresh develop-staging for every repo a delivery touched, in the **background** — a cold
+/// `cargo run` must never block the delivery worker (the health-probe waits up to 90s). Opens its own
+/// registry connection and resolves the canonical exec strategy off the workspace root; each repo
+/// that isn't a web app is silently skipped (no staging for a plain repo).
+pub fn refresh_staging(workspace_id: &str, root: &Path, repos: &[String], data_dir: PathBuf) {
+    let workspace_id = workspace_id.to_owned();
+    let root = root.to_path_buf();
+    let repos = repos.to_vec();
+    std::thread::spawn(move || {
+        let Ok(conn) = crate::db::open(&data_dir.join("central.db")) else {
+            return;
+        };
+        let strategy = crate::bridge::exec_strategy_for(&root);
+        for repo in &repos {
+            if let Ok(detail) = start_staging(&conn, &workspace_id, &root, &strategy, repo) {
+                crate::bridge::log_line(format!(
+                    "preview: staging {workspace_id}/{repo}: {detail}"
+                ));
+            }
+        }
+    });
+}
+
+/// The core start: resolve the target repo + command from `root`, allocate/reuse the pooled port for
+/// `<ws>-<short>`, kill any prior process for the key, spawn under `strategy`, health-probe, record.
+fn start(
+    conn: &Connection,
+    workspace_id: &str,
+    short: &str,
+    root: &Path,
+    strategy: &ExecStrategy,
+    target: Option<&str>,
+) -> Result<String, String> {
+    let (repo, command) = resolve_target(conn, workspace_id, root, target)?;
+    let key = key_for(workspace_id, short);
     let id = key.clone();
     // The mount point the proxy serves this preview at — also what a base-path-aware app reads
     // from `CLAW_PREVIEW_BASE` to prefix its own URLs. Works direct (localhost:<port>) too, since
@@ -287,6 +352,24 @@ fn short_of_request(request_id: &str) -> String {
     request_id.chars().take(8).collect()
 }
 
+/// The staging short for a project: `staging-<bare-name>` (the last path segment, so `projects/site`
+/// and `site` agree). Kept `/`-free so it stays a single `/preview/<key>` path segment.
+fn staging_short(project: &str) -> String {
+    let bare = project
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(project);
+    format!("staging-{bare}")
+}
+
+/// The branch preview key for a request id (`<ws>-<short8>`), for the view layer, which has the
+/// request id but not its lane path. Agrees with [`lane_key`] on the request's own tree.
+#[must_use]
+pub fn request_key(workspace_id: &str, request_id: &str) -> String {
+    key_for(workspace_id, short_of_request(request_id))
+}
+
 /// The supervisor / proxy key for a (workspace, short): globally unique, URL-safe.
 #[must_use]
 pub fn key_for(workspace: &str, short: impl AsRef<str>) -> String {
@@ -297,6 +380,32 @@ pub fn key_for(workspace: &str, short: impl AsRef<str>) -> String {
 #[must_use]
 pub fn uri_for(key: &str) -> String {
     format!("/preview/{key}")
+}
+
+/// The branch preview key for a request lane (`<ws>-<short>`) — what the `preview`/`visit` tools and
+/// the request page address. The producer and validator share it: both work the same lane tree.
+#[must_use]
+pub fn lane_key(workspace_id: &str, lane_root: &Path) -> String {
+    key_for(workspace_id, short_of(lane_root))
+}
+
+/// A labeled preview block for an agent prompt, or `None` when the lane holds no previewable project
+/// (a plain repo has no server, so the hint would be noise). States the branch's same-origin URL and
+/// whether it is live right now, and points at the `preview`/`visit` tools.
+pub fn preview_hint(conn: &Connection, workspace_id: &str, lane_root: &Path) -> Option<String> {
+    resolve_target(conn, workspace_id, lane_root, None).ok()?;
+    let key = lane_key(workspace_id, lane_root);
+    let uri = uri_for(&key);
+    let status = if port_for(&key).is_some() {
+        "It is running now"
+    } else {
+        "It is not running yet — start it with the `preview` tool"
+    };
+    Some(format!(
+        "Live preview: this branch is served same-origin at {uri}/ . {status}. Use the `preview` \
+         tool to start or restart the server and `visit` to fetch a page (confirm a route serves, \
+         reproduce a bug, check a fix) — no browser needed."
+    ))
 }
 
 /// The live upstream port for a preview key, or `None` if nothing is running there — the map

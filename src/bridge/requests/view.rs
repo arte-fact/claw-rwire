@@ -162,6 +162,13 @@ fn build_detail(conn: &Connection, request_id: &str) -> Option<RequestDetail> {
         })
         .collect();
     let (checks, checks_ok) = request_checks_summary(conn, request_id);
+    // The branch's live preview, if one is running (P2c): a same-origin link the operator clicks to
+    // see the running branch before Deliver. Empty when nothing is up on its pooled port.
+    let preview_key = crate::bridge::preview::request_key(&request.workspace_id, request_id);
+    let preview_uri = match crate::bridge::preview::port_for(&preview_key) {
+        Some(_) => format!("{}/", crate::bridge::preview::uri_for(&preview_key)),
+        None => String::new(),
+    };
     let repos = db::requests::repos_for(conn, &request.id).unwrap_or_default();
     let (diff_stat, diff_patch) = global_diff(&root, &repos);
     let repos = repos
@@ -194,6 +201,7 @@ fn build_detail(conn: &Connection, request_id: &str) -> Option<RequestDetail> {
         validation: request.validation.unwrap_or_default(),
         checks,
         checks_ok,
+        preview_uri,
         has_remote,
         asked_at: stamp(&request.created_at),
         updated_at: stamp(&request.updated_at),
@@ -271,6 +279,11 @@ fn card_view(conn: &Connection, request: &Request, active_ids: &[String]) -> Req
         String::new()
     };
     let repos = db::requests::repos_for(conn, &request.id).unwrap_or_default();
+    let preview_live = crate::bridge::preview::port_for(&crate::bridge::preview::request_key(
+        &request.workspace_id,
+        &request.id,
+    ))
+    .is_some();
     RequestCardView {
         id: request.id.clone(),
         title: request.title.clone(),
@@ -280,6 +293,7 @@ fn card_view(conn: &Connection, request: &Request, active_ids: &[String]) -> Req
         done,
         total,
         branch: request.branch.clone().unwrap_or_default(),
+        preview_live,
     }
 }
 

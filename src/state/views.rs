@@ -796,6 +796,8 @@ pub struct RequestCardView {
     pub total: i64,
     /// `req/<short>-<slug>` once minted (empty while planning).
     pub branch: String,
+    /// Whether a live preview is running for this branch (P2c) — the card's "live" dot.
+    pub preview_live: bool,
 }
 
 /// The project page (P1): a projection over a directory, its derived kind, and the requests
@@ -853,6 +855,9 @@ pub struct RequestDetail {
     /// no task ran checks. `checks_ok` is the gate signal (`None` = nothing checked).
     pub checks: String,
     pub checks_ok: Option<bool>,
+    /// The branch's same-origin preview URL (`/preview/<key>/`) when a live preview is running for
+    /// this request, else empty — the request page's "preview this branch" link (P2c).
+    pub preview_uri: String,
     /// Whether any touched repo has a remote — shows the (explicit, gated) Push control.
     pub has_remote: bool,
     /// `MM-DD HH:MM` stamps for the history panel: asked at / last status change.

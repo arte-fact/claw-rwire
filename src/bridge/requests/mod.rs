@@ -168,6 +168,16 @@ pub(super) fn deliver(conn: &Connection, shared: &rwire::SharedServerState, requ
     if let Err(err) = db::requests::set_status(conn, &request.id, RequestStatus::Delivered) {
         return log_line(format!("requests: mark delivered {}: {err}", request.id));
     }
+    // Develop advanced — refresh each touched web project's staging preview so
+    // `/preview/<ws>-staging-<project>` tracks `develop` (P2c). Background: a cold build must not
+    // block the delivery; a non-web repo is simply skipped.
+    let touched_repos: Vec<String> = repos.iter().map(|repo| repo.repo.clone()).collect();
+    crate::bridge::preview::refresh_staging(
+        &request.workspace_id,
+        &root,
+        &touched_repos,
+        data_dir(),
+    );
     let tasks_done = db::tasks::count_for_request(conn, &request.id).unwrap_or(0);
     let receipt = if repos.is_empty() {
         format!(

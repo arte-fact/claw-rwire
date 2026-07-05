@@ -2,9 +2,10 @@
 //! status + branch, the ask verbatim, the task timeline with per-task diff activity, the
 //! repos it touched (branch point → merge), and the global diff against the branch point.
 
-use rwire::{El, ElementBuilder, Link, St, el, handler, renderer};
+use rwire::{At, El, ElementBuilder, Link, St, el, handler, renderer};
 use rwire_components::{
-    Badge, BadgeFill, BadgeIntent, BadgeShape, Breadcrumb, Button, ButtonSize, Text,
+    Badge, BadgeFill, BadgeIntent, BadgeShape, Breadcrumb, Button, ButtonSize, StatusDot,
+    StatusDotIntent, Text,
 };
 
 use crate::bridge::{self, Command};
@@ -119,10 +120,45 @@ fn header(app: &App, detail: &RequestDetail) -> ElementBuilder {
                 .text(&detail.branch),
         );
     }
+    if let Some(link) = preview_link(detail) {
+        row.push(link);
+    }
     row.push(controls(detail));
     el(El::Div)
         .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::FlexWrap])
         .append(row)
+}
+
+/// A live-preview link, shown only when a preview is running for this branch (P2c). It's a full
+/// navigation (new tab) to the same-origin `/preview/<key>/` — a separate app served through the
+/// proxy, not a claw route, so it can't be a client-routed `Link`.
+fn preview_link(detail: &RequestDetail) -> Option<ElementBuilder> {
+    if detail.preview_uri.is_empty() {
+        return None;
+    }
+    Some(
+        el(El::A)
+            .at_str(At::Href, &detail.preview_uri)
+            .at_str(At::Target, "_blank")
+            .at_str(At::Rel, "noopener")
+            .st([
+                St::TextXs,
+                St::TextAccent,
+                St::NoUnderline,
+                St::CursorPointer,
+                St::DisplayFlex,
+                St::ItemsCenter,
+                St::GapXs,
+            ])
+            .hover([St::Underline])
+            .append([
+                StatusDot::new()
+                    .intent(StatusDotIntent::Success)
+                    .pulse(true)
+                    .build(),
+                el(El::Span).text("Preview this branch ↗"),
+            ]),
+    )
 }
 
 /// The user's words, verbatim — what the request is ultimately judged against.

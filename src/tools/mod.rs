@@ -12,6 +12,7 @@ mod planning;
 mod preview;
 mod repo;
 mod validator;
+mod visit;
 
 pub use checks::ChecksToolbox;
 pub use coder::CoderToolbox;
@@ -21,6 +22,7 @@ pub use planning::PlanningToolbox;
 pub use preview::PreviewToolbox;
 pub use repo::RepoToolbox;
 pub use validator::{VERDICT, ValidatorToolbox, parse_verdict, parse_verdict_prose};
+pub use visit::VisitToolbox;
 
 /// The workspace tool names, in display order — the static half of the selectable catalog.
 /// They operate on the agent's workspace (`coder` module), so they're only offered when the

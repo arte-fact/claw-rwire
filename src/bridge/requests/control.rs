@@ -11,7 +11,7 @@ use crate::db::{
     requests::{Request, RequestStatus},
 };
 use crate::gitops;
-use crate::tools::{CompositeToolbox, RepoToolbox, Toolbox, ValidatorToolbox};
+use crate::tools::{CompositeToolbox, RepoToolbox, Toolbox, ValidatorToolbox, VisitToolbox};
 use crate::workspace;
 
 use super::super::{Command, build_toolbox, data_dir, log_line, send};
@@ -95,11 +95,18 @@ fn launch_validation(conn: &Connection, request: &Request, nudge: bool) {
         workspace::standards_layer(&workspace_dir),
     );
     let diff = branch_diff(conn, request, &workspace_dir);
+    // Preview capability (P2c): a previewable request lets the final reviewer `visit` the running
+    // branch before signing off — click through the change, don't just read the diff.
+    let preview_block =
+        match super::super::preview::preview_hint(conn, &request.workspace_id, &workspace_dir) {
+            Some(hint) => format!("\n\n{hint}"),
+            None => String::new(),
+        };
     let brief = format!(
         "A delegated request has finished all its tasks; you are the final reviewer before \
          delivery. Judge the WHOLE change against the user's original ask, verbatim — not \
          the tasks' claims.\n\nThe ask (the contract):\n{}\n\nWhat changed on the request \
-         branch (against its branch point, per repo):\n{}\n\nInspect further if needed \
+         branch (against its branch point, per repo):\n{}{}\n\nInspect further if needed \
          (`read`/`list`/`find`, `bash` for builds/tests, `repo_diff`/`repo_log`). Then call \
          the `verdict` tool: pass = deliver (merge to develop); revise or reject = hold it \
          for the user, with concrete reasons.",
@@ -109,6 +116,7 @@ fn launch_validation(conn: &Connection, request: &Request, nudge: bool) {
         } else {
             diff
         },
+        preview_block,
     );
     let brief = if nudge {
         format!(
@@ -137,9 +145,11 @@ fn launch_validation(conn: &Connection, request: &Request, nudge: bool) {
         Some(workspace_dir.clone()),
         false,
     );
+    let visit = VisitToolbox::new(request.workspace_id.clone(), workspace_dir.clone());
     let toolbox: Box<dyn Toolbox> = Box::new(CompositeToolbox::new(vec![
         Box::new(ValidatorToolbox),
         checks,
+        Box::new(visit),
         Box::new(RepoToolbox::for_workspace(workspace_dir)),
     ]));
     let request_id = request.id.clone();

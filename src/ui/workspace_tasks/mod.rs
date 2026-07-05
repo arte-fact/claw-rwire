@@ -194,6 +194,19 @@ fn requests_section(app: &App, workspace_id: &str) -> ElementBuilder {
                     .text(&request.branch),
             );
         }
+        if request.preview_live {
+            // A live preview is up for this branch (P2c) — a green pulse invites a click-through
+            // (the link itself lives on the request page header).
+            meta.push(
+                el(El::Div)
+                    .st([St::DisplayFlex, St::ItemsCenter, St::GapXs, St::MinW0])
+                    .append([StatusDot::new()
+                        .intent(StatusDotIntent::Success)
+                        .pulse(true)
+                        .label("preview")
+                        .build()]),
+            );
+        }
         // The live line: the request's currently running task, straight off the lane.
         if let Some(task) = app
             .tasks
