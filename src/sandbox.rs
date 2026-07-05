@@ -124,10 +124,10 @@ pub fn ensure(name: &str, mount: &Path) -> Result<(), String> {
     // Destroy is idempotent; a never-created sandbox just errors quietly.
     destroy(name);
     let mut cmd = Command::new("isola");
-    // --no-cache: the fresh-provision path is the proven one; isola's layered cache has
-    // restore bugs (lost usr-merge links — fixed upstream — and a dpkg-lock provisioning
-    // failure, still open there). Creation cost lands once per lane, on its first bash.
-    cmd.args(["create", "--no-cache"]).arg("-w").arg(mount);
+    // The snapshot cache (isola, reworked 2026-07-05) makes this ~20 s after the first
+    // full provision of the env combo; a corrupt cache self-heals upstream (sanity-check,
+    // discard, fall through to full provisioning).
+    cmd.arg("create").arg("-w").arg(mount);
     for env in AGENT_ENVS {
         cmd.args(["--env", env]);
     }

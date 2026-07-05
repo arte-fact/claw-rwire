@@ -76,11 +76,17 @@
       serializes per name so the racing first bash waits out the remainder, not the full
       build) and the request's origin chat gets a 🧰 one-liner — a 3-minute first bash
       must never read as a hang.
-- [ ] Upstream follow-up (isola): repair the layered provision cache — restores lost the
-      usr-merge symlinks (fixed: `ff6dd81`) and cached creates still fail on dpkg locks,
-      so claw creates `--no-cache` for now; fixing the cache turns 3-min lane setup into
-      ~20 s. Also: sandbox git identity is inherited from the host (`fcc287a` made it
-      order-safe) — consider a neutral identity for agent sandboxes.
+- [x] **Isola cache reworked upstream** (operator-directed, 2026-07-05): the layered
+      find-newer diff cache was retired outright (−655 lines; unfixable by patching — it
+      shipped base layers without /var/lib/dpkg or the usr-merge links) in favour of the
+      snapshot cache as the ONE path, self-healing (sanity-check on extract; a bad
+      tarball is discarded and the create falls through to full provisioning), with the
+      capture moved to /var/tmp — the namespace tmpfs over /tmp had been silently
+      evaporating every capture. Lane sandbox creation: **3 min → 22 s** (first-ever
+      env-combo create still pays one full provision). claw dropped --no-cache; the
+      integration test runs in 25 s incl. creation. isola: `f7586ff`, `31cf2da`.
+      Still open there: a neutral git identity for agent sandboxes (host identity is
+      inherited).
 
 ### Host allowlist (what deliberately stays host-side)
 
