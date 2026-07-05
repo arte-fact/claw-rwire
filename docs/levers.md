@@ -1,5 +1,9 @@
 # Levers: workflow improvements from the Empire e2e (2026-07-04)
 
+> **COMPLETE — historical record.** L1–L4, L6, M2, M3 shipped and live-verified. Open
+> boxes (Critic model ops, L5 mechanical debts, L6 laters) are harvested into the active
+> roadmap: **`docs/platform.md`**. New work goes there, not here.
+
 > Born from the from-scratch end-to-end (docs/requests.md complete, the Empire game
 > delivered): every lever below is a friction we *watched* cost wall-clock, tokens, or
 > review quality. Ranked by impact; each phase ends gate-green, ticked with a commit.
@@ -16,8 +20,7 @@ nits consumed full produce⇄review cycles.
       run by the harness after each successful producer pass, its capped output injected
       into the validator prompt — lint/build/test verdicts come from machines, judgment
       from the reviewer
-- [ ] Ops (manual): put Critic on a stronger model than the producers — the resolution
-      system already supports per-agent models; this is configuration, not code
+- [x] harvested → platform.md P1 (ops box)
 
 ### L2 — structure has no gate
 The Empire game shipped as one 3,386-line `main.rs`; nothing objected.
@@ -38,10 +41,8 @@ M3 sat at five failing tests mid-iteration with no signal until it recovered.
       and the reviewer's headline feedback
 
 ### L5 — mechanical debts (later)
-- [ ] Working-tree-less delivery merge (`merge-tree` + `commit-tree` + `update-ref`) —
-      closes the delivery-vs-dirty-canonical race
-- [ ] Abandon kills in-flight workers (process-group kill) — closes the orphan-writer
-      resurrection under `trees/`
+- [x] harvested → platform.md backlog
+- [x] harvested → platform.md P0 (sandbox teardown is the natural process-group kill)
 
 ### L6 — error-handling audit (2026-07-04, from the failed-Deliver incident)
 The app HAS an error channel (`App.error` via `surface()`) — but only chat + Files rendered

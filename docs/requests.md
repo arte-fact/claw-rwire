@@ -1,5 +1,9 @@
 # Requests: the unit above tasks (git-backed)
 
+> **COMPLETE — historical record.** G0–G4 all shipped and live-verified (2026-07-03/04).
+> The one open box (jailed `clone` tool) is harvested into the active roadmap:
+> **`docs/platform.md` P3**. New work goes there, not here.
+
 > Status: **decided 2026-07-03** (decision record at the end) — ready for G0. Born from the concierge's
 > own harness review (no rollback, no diff review) + the observation that plan → tasks →
 > validation already *behaves* like one unit without being one.
@@ -182,7 +186,7 @@ stays with the harness, and the real safety net is fencing bash-git.
       exec-transport vectors (`-c`, `--git-dir`, `--upload-pack`, `ext::`) blocked
 - [x] Agent bash is credential-hermetic: no git prompts, no global config (credential
       helpers), no ssh-agent — public clone/fetch works, pushes find no ambient identity
-- [ ] `clone` as a dedicated jailed tool — deferred until a real workflow needs it
+- [x] harvested → platform.md P3 (the rwire template's pinned framework clone is the real workflow)
 
 ### G1 — the Request entity — ✅ shipped 2026-07-03
 - [x] `requests` + `request_repos` tables; `tasks.request_id` migration
