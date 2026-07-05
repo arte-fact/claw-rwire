@@ -171,7 +171,7 @@ pub fn active_requests(
              OR (status = 'validating' AND EXISTS (
                    SELECT 1 FROM tasks t WHERE t.request_id = requests.id
                       AND t.status IN ('pending','running','awaiting'))))
-          ORDER BY created_at LIMIT ?2"
+          ORDER BY created_at, rowid LIMIT ?2"
     ))?;
     let rows = stmt.query_map(params![workspace_id, limit as i64], from_row)?;
     rows.collect()
@@ -181,7 +181,7 @@ pub fn active_requests(
 pub fn open_for_workspace(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Vec<Request>> {
     let mut stmt = conn.prepare(&format!(
         "{SELECT} WHERE workspace_id = ?1 AND status IN ('planning','executing','validating')
-          ORDER BY created_at"
+          ORDER BY created_at, rowid"
     ))?;
     let rows = stmt.query_map(params![workspace_id], from_row)?;
     rows.collect()
