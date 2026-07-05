@@ -71,6 +71,11 @@
       escape, absolute host paths invisible, in-sandbox `timeout` reaps. Green 2026-07-05
       (187 s incl. fresh provision).
 - [x] **Host allowlist documented** (below).
+- [x] **Provisioning is announced, not silent** (drift): a fresh lane's sandbox warms on
+      a background thread at task launch (overlapping the first LLM turn; ensure()
+      serializes per name so the racing first bash waits out the remainder, not the full
+      build) and the request's origin chat gets a 🧰 one-liner — a 3-minute first bash
+      must never read as a hang.
 - [ ] Upstream follow-up (isola): repair the layered provision cache — restores lost the
       usr-merge symlinks (fixed: `ff6dd81`) and cached creates still fail on dpkg locks,
       so claw creates `--no-cache` for now; fixing the cache turns 3-min lane setup into

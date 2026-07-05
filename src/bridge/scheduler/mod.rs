@@ -104,6 +104,17 @@ fn start(conn: &rusqlite::Connection, shared: &SharedServerState, task: Task) {
     super::tasks::project_if_active(conn, shared, &task.workspace_id);
     super::tasks::refresh_detail_if_open(conn, shared, &task.id);
     activity(shared, &task, ActivityKind::Started, String::new());
+    // First run in a fresh lane: provision its sandbox in the background (overlapping the
+    // LLM turn) and say so — a silent 3-minute first `bash` reads as a hang (P0 drift).
+    if let crate::tools::ExecStrategy::Isola { sandbox, mount } = super::exec_strategy_for(&root)
+        && crate::sandbox::warm(&sandbox, &mount, log_line)
+    {
+        log_line(format!(
+            "sandbox: provisioning {sandbox} for task {}",
+            task.id
+        ));
+        notify_sandbox_provisioning(conn, &task);
+    }
     // Record each repo's pre-task HEAD at the task's first launch (G0) — the bases a
     // restart resets to. Failures are logged, never blocking the launch: a git-less
     // environment degrades to the pre-G0 behaviour.
@@ -111,6 +122,19 @@ fn start(conn: &rusqlite::Connection, shared: &SharedServerState, task: Task) {
         log_line(format!("gitops: snapshot {}: {err}", task.id));
     }
     launch_current(conn, &task);
+}
+
+/// The user-visible line for a lane's first run: the origin chat for a request-bound task
+/// (where delivery receipts already land), the workspace chat via the task's own thread
+/// otherwise — nobody should read a slow first `bash` as a hang.
+fn notify_sandbox_provisioning(conn: &rusqlite::Connection, task: &Task) {
+    let body = "🧰 First run in this lane — provisioning an isolated sandbox (~3 min) \
+                before commands execute. Later runs reuse it instantly.";
+    if let Some(request_id) = &task.request_id
+        && let Ok(Some(request)) = crate::db::requests::get(conn, request_id)
+    {
+        super::requests::ping(conn, &request, body);
+    }
 }
 
 /// Launch the task's **current step's** producer/stage run on a worker thread (self-posting

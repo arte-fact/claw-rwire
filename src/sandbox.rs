@@ -94,9 +94,29 @@ pub fn name_for(dir: &Path) -> String {
     )
 }
 
+/// Per-name creation lock: a background warm and a worker's first `bash` may race to
+/// create the same sandbox — the loser must wait for the winner, not collide with it
+/// (a concurrent create fails "already exists" and the sweep would destroy the one in
+/// progress).
+fn creation_lock(name: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    let mut map = LOCKS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.entry(name.to_owned()).or_default().clone()
+}
+
 /// Ensure `name` exists, creating it with the minimal agent env set on first use. Creation
-/// provisions a rootfs (minutes uncached, seconds cached) — call from worker threads only.
+/// provisions a rootfs (minutes — call from worker/background threads only); racing callers
+/// serialize per name, so a second caller just waits and finds the sandbox ready.
 pub fn ensure(name: &str, mount: &Path) -> Result<(), String> {
+    let lock = creation_lock(name);
+    let _guard = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if exists(name) {
         return Ok(());
     }
@@ -121,6 +141,28 @@ pub fn ensure(name: &str, mount: &Path) -> Result<(), String> {
         }
         Err(err) => Err(format!("isola create: {err}")),
     }
+}
+
+/// If `name` doesn't exist yet, start provisioning it on a background thread and return
+/// `true` — the caller informs the user, the provisioning overlaps the run's first LLM
+/// turn, and the first `bash` (whose [`ensure`] serializes on the same per-name lock)
+/// finds it ready or waits out the remainder instead of the full build.
+pub fn warm(name: &str, mount: &Path, log: impl Fn(String) + Send + 'static) -> bool {
+    if !SandboxMode::isola_available() || exists(name) {
+        return false;
+    }
+    let (name, mount) = (name.to_owned(), mount.to_path_buf());
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        match ensure(&name, &mount) {
+            Ok(()) => log(format!(
+                "sandbox: {name} provisioned in {}s",
+                started.elapsed().as_secs()
+            )),
+            Err(err) => log(format!("sandbox: warming {name} failed: {err}")),
+        }
+    });
+    true
 }
 
 /// Whether the sandbox exists and is healthy (`isola status` exits 0).
