@@ -162,6 +162,17 @@ pub enum Command {
     LoadRequestDetail {
         request_id: String,
     },
+    /// Project a project's page (`/w/:wid/projects/:pid` opening, P1).
+    LoadProjectDetail {
+        workspace: String,
+        project: String,
+    },
+    /// Set (or clear, with an empty slug) a project's kind override (P1).
+    SetProjectKind {
+        workspace: String,
+        project: String,
+        slug: String,
+    },
     /// The request-level macro review's verdict came back (G3, worker → bridge).
     RequestValidated {
         request_id: String,
@@ -596,6 +607,14 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadRequestDetail { request_id } => {
             requests::load_detail(conn, shared, &request_id)
         }
+        Command::LoadProjectDetail { workspace, project } => {
+            requests::view::load_project_detail(conn, shared, &workspace, &project)
+        }
+        Command::SetProjectKind {
+            workspace,
+            project,
+            slug,
+        } => requests::view::set_project_kind(conn, shared, &workspace, &project, &slug),
         Command::RequestValidated {
             request_id,
             decision,
@@ -850,13 +869,27 @@ fn run_system_prompt(
     agent_prompt: Option<String>,
     memory: Option<String>,
 ) -> String {
+    run_system_prompt_with_project(base, workspace_dir, agent_name, agent_prompt, None, memory)
+}
+
+/// [`run_system_prompt`] plus the project layer (P1): kind conventions + machine contracts
+/// for the specific repo a task works in. Task/planning runs resolve it from the task's
+/// target project; chat turns (concierge, not project-scoped) pass `None`.
+fn run_system_prompt_with_project(
+    base: &str,
+    workspace_dir: Option<&Path>,
+    agent_name: &str,
+    agent_prompt: Option<String>,
+    project: Option<String>,
+    memory: Option<String>,
+) -> String {
     if let Some(dir) = workspace_dir
         && let Err(err) = workspace::scaffold(dir, agent_name)
     {
         log_line(format!("bridge: workspace scaffold failed: {err}"));
     }
     let brief = workspace_dir.and_then(workspace::read_agent_md);
-    workspace::compose_system_prompt(base, agent_prompt, brief, memory)
+    workspace::compose_system_prompt(base, agent_prompt, brief, project, memory)
 }
 
 /// `settings` keys for the editable role preambles (Phase E configurability).

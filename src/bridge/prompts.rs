@@ -90,6 +90,7 @@ pub fn load(
         &role,
         persona.clone(),
         brief.clone(),
+        None,
         memory.as_deref().map(super::wrap_memory),
     );
     let memory_meta = if !memory_applies {

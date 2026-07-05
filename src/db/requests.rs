@@ -220,6 +220,18 @@ pub fn repos_for(conn: &Connection, request_id: &str) -> rusqlite::Result<Vec<Re
     rows.collect()
 }
 
+/// Requests that touched a given repo (`projects/<name>` or `''` for the meta-repo), newest
+/// first — the project page's changelog in ask-language (P1). Derived from `request_repos`;
+/// no project table.
+pub fn requests_touching(conn: &Connection, repo: &str) -> rusqlite::Result<Vec<Request>> {
+    let mut stmt = conn.prepare(&format!(
+        "{SELECT} WHERE id IN (SELECT request_id FROM request_repos WHERE repo = ?1)
+          ORDER BY created_at DESC, id DESC"
+    ))?;
+    let rows = stmt.query_map(params![repo], from_row)?;
+    rows.collect()
+}
+
 /// Stamp a repo's delivery merge commit.
 pub fn set_repo_merge(
     conn: &Connection,

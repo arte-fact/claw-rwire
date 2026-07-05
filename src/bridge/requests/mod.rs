@@ -4,7 +4,7 @@
 //! (the macro review against the ask verbatim is G3).
 
 pub(crate) mod control;
-mod view;
+pub(crate) mod view;
 pub(crate) use view::{load_detail, pass_diff, rail_views};
 
 use rusqlite::Connection;

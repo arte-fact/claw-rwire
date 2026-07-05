@@ -784,6 +784,28 @@ pub struct RequestCardView {
     pub branch: String,
 }
 
+/// The project page (P1): a projection over a directory, its derived kind, and the requests
+/// that touched it — no project table. `kind_slug` is the effective kind (override or
+/// detected); `requests` is the changelog in ask-language.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProjectDetail {
+    pub workspace_id: String,
+    pub name: String,
+    /// The effective kind's slug (`rwire-app`/`rust-bin`/…) — override if set, else detected.
+    pub kind_slug: String,
+    /// Whether the kind came from an operator override (vs detection) — shown in settings.
+    pub kind_overridden: bool,
+    pub requests: Vec<ProjectRequestEntry>,
+}
+
+/// One row of a project's request history.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProjectRequestEntry {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+}
+
 /// The request page (`/w/:wid/requests/:rid`): the whole story in one scroll.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RequestDetail {

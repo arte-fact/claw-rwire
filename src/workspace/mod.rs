@@ -144,23 +144,32 @@ pub fn standards_layer(workspace: &Path) -> Option<String> {
 
 /// Compose the run's layered system prompt, blank-line-separated, skipping empty layers:
 /// the global `base`, then the agent's identity `agent_prompt` ("who am I", per-agent),
-/// then the workspace `agent_md` project brief ("what we build", shared), then the agent's
-/// rolling `memory` ("what's happened so far", Phase D). Identity precedes project context so
-/// the persona frames the brief; memory comes last as accumulated background.
+/// then the workspace `agent_md` project brief ("what we build", shared), then the `project`
+/// layer (kind conventions + machine contracts, P1), then the agent's rolling `memory`
+/// ("what's happened so far", Phase D). Identity precedes project context so the persona
+/// frames the brief; the project layer narrows the shared brief to the repo in hand; memory
+/// comes last as accumulated background.
 #[must_use]
 pub fn compose_system_prompt(
     base: &str,
     agent_prompt: Option<String>,
     agent_md: Option<String>,
+    project: Option<String>,
     memory: Option<String>,
 ) -> String {
-    [Some(base.to_owned()), agent_prompt, agent_md, memory]
-        .into_iter()
-        .flatten()
-        .map(|layer| layer.trim().to_owned())
-        .filter(|layer| !layer.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    [
+        Some(base.to_owned()),
+        agent_prompt,
+        agent_md,
+        project,
+        memory,
+    ]
+    .into_iter()
+    .flatten()
+    .map(|layer| layer.trim().to_owned())
+    .filter(|layer| !layer.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n\n")
 }
 
 #[cfg(test)]
@@ -230,9 +239,12 @@ mod tests {
 
     #[test]
     fn compose_joins_the_present_layers_in_identity_then_context_order() {
-        assert_eq!(compose_system_prompt("base", None, None, None), "base");
         assert_eq!(
-            compose_system_prompt("base", None, Some("brief".to_owned()), None),
+            compose_system_prompt("base", None, None, None, None),
+            "base"
+        );
+        assert_eq!(
+            compose_system_prompt("base", None, Some("brief".to_owned()), None, None),
             "base\n\nbrief"
         );
         assert_eq!(
@@ -240,18 +252,36 @@ mod tests {
                 "base",
                 Some("persona".to_owned()),
                 Some("brief".to_owned()),
+                None,
                 None
             ),
             "base\n\npersona\n\nbrief"
         );
+        // The project layer sits between the workspace brief and memory.
+        assert_eq!(
+            compose_system_prompt(
+                "base",
+                None,
+                Some("brief".to_owned()),
+                Some("project".to_owned()),
+                Some("memory".to_owned())
+            ),
+            "base\n\nbrief\n\nproject\n\nmemory"
+        );
         // Memory is appended last, after the brief.
         assert_eq!(
-            compose_system_prompt("base", None, None, Some("memory".to_owned())),
+            compose_system_prompt("base", None, None, None, Some("memory".to_owned())),
             "base\n\nmemory"
         );
         // Empty layers (and an empty base) drop out rather than leaving blank gaps.
         assert_eq!(
-            compose_system_prompt("", Some("   ".to_owned()), Some("brief".to_owned()), None),
+            compose_system_prompt(
+                "",
+                Some("   ".to_owned()),
+                Some("brief".to_owned()),
+                None,
+                None
+            ),
             "brief"
         );
     }

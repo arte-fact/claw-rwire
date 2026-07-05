@@ -4,6 +4,7 @@
 //! agent's turn in the workspace dir and posts `Command::TaskFinished` back, which the
 //! (DB-owning) bridge thread persists and projects.
 
+use std::path::Path;
 use std::time::Duration;
 
 use rwire::{ChangeSet, SharedServerState};
@@ -17,7 +18,7 @@ use crate::state::{ActivityKind, App, ProgressCtx, RunRole};
 use crate::tools::{CompositeToolbox, RepoToolbox, Toolbox, ValidatorToolbox};
 use crate::workspace;
 
-use super::{Command, build_toolbox, data_dir, log_line, memory, run_system_prompt, send};
+use super::{Command, build_toolbox, data_dir, log_line, memory, send};
 
 mod verdicts;
 pub use verdicts::human_verdict;
@@ -137,6 +138,27 @@ fn notify_sandbox_provisioning(conn: &rusqlite::Connection, task: &Task) {
     }
 }
 
+/// The project layer for a task's run (P1): the kind conventions + machine contracts for the
+/// repo it works in. The target project is the first non-meta repo the request touched, else
+/// the first `projects/<name>` named in the spec; `None` (no layer) when neither resolves or
+/// the kind has no guidance.
+fn project_layer(conn: &rusqlite::Connection, task: &Task, workspace_dir: &Path) -> Option<String> {
+    let project = task
+        .request_id
+        .as_deref()
+        .and_then(|id| db::requests::repos_for(conn, id).ok())
+        .and_then(|repos| {
+            repos
+                .into_iter()
+                .find(|r| !r.repo.is_empty())
+                .map(|r| r.repo.trim_start_matches("projects/").to_owned())
+        })
+        .or_else(|| crate::kinds::project_in_spec(&task.spec))?;
+    let dir = workspace_dir.join("projects").join(&project);
+    let kind = crate::kinds::kind_for(conn, &task.workspace_id, &project, &dir);
+    kind.prompt_layer()
+}
+
 /// Launch the task's **current step's** producer/stage run on a worker thread (self-posting
 /// `TaskFinished`). The run role is `Producer` for a loop step (its validator runs next) or
 /// `Stage` for a plain step. The agent runs with the step's role preamble + chained context.
@@ -216,11 +238,12 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
         // big-context model's memory doesn't bloat every run row.
         let snapshot = memory_fill.as_deref().map(memory::snapshot);
         let memory_text = memory_fill.map(|text| memory::wrap_workspace_memory(&text));
-        let system_prompt = run_system_prompt(
+        let system_prompt = super::run_system_prompt_with_project(
             &preamble,
             Some(&workspace_dir),
             &inference.agent_name,
             inference.agent_prompt.clone(),
+            project_layer(conn, task, &workspace_dir),
             memory_text,
         );
         let mut messages = super::replay::producer_thread(
@@ -276,11 +299,12 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
         // review memory breeds anchoring and rubber-stamping. Its loop continuity comes from
         // the replayed thread below. The one curated exception (R5): the workspace's
         // STANDARDS.md memo — rules, not a work log.
-        let system_prompt = run_system_prompt(
+        let system_prompt = super::run_system_prompt_with_project(
             &preamble,
             Some(&workspace_dir),
             &inference.agent_name,
             inference.agent_prompt.clone(),
+            project_layer(conn, task, &workspace_dir),
             workspace::standards_layer(&workspace_dir),
         );
         let files = workspace::list_files(&workspace_dir, 200);

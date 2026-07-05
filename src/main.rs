@@ -10,6 +10,7 @@ mod diff;
 mod env_file;
 mod gitops;
 mod id;
+mod kinds;
 mod mcp;
 mod sandbox;
 mod schedule;

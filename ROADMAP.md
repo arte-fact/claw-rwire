@@ -106,7 +106,7 @@ project today is a directory with no identity. **Kind is the paved-road bundle**
 the CI recipe, the preview recipe + base-path knob, the prompt layer, the tool profile,
 and the skills — one concept rounding up prompts/tools/skills instead of settings sprawl.
 
-- [ ] **Projects are derived, never registered**: identity = the directory `repos()`
+- [x] **Projects are derived, never registered** (2026-07-05): identity = the directory `repos()`
       already lists; **kind = a pure function** over its files (rwire dep in Cargo.toml →
       `rwire-app`; Cargo.toml → `rust-bin`; package.json → `node-app`; else `other`),
       computed on read — no table, no registration hooks, no sync bugs when a directory
@@ -114,14 +114,14 @@ and the skills — one concept rounding up prompts/tools/skills instead of setti
       (`settings: project.<ws>.<name>.kind|checks|preview`), written only when set.
       *Site*: new `src/kinds.rs` — one enum + pure fns (`detect`, `checks_recipe`,
       `preview_command`, `prompt_layer`, `skill_source`) + tests; nothing else.
-- [ ] **Prompt composition grows the project layer**: role → workspace (AGENT.md) →
+- [x] **Prompt composition grows the project layer** (2026-07-05): role → workspace (AGENT.md) →
       project (kind conventions + contracts: "these exact checks will judge your pass —
       run them first"; "serve under $CLAW_PREVIEW_BASE") → task spec. Producers
       pre-empting CI is the cheapest review round.
       *Site*: `run_system_prompt` composition, `scheduler/mod.rs` launches (the task's
       touched/target project resolved from the spec's `projects/<name>` paths or the
       request's `request_repos`).
-- [ ] **Project page + strip**: `/w/:wid/projects/:name` — develop CI status, staging /
+- [~] **Project page + strip** (page shipped 2026-07-05; strip pending): `/w/:wid/projects/:name` — develop CI status, staging /
       preview links, request history (from `request_repos`), kind + overrides settings;
       Projects strip on the Work tab beside Requests; breadcrumb-integrated (workspace ›
       project). *Site*: `ui/project_page.rs`, `workspace_tasks/mod.rs`.

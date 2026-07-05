@@ -44,6 +44,62 @@ pub(crate) fn pass_diff(root: &std::path::Path, commits_json: Option<&str>) -> S
     }
 }
 
+/// Project the project page (`Command::LoadProjectDetail`, P1): the derived kind + the
+/// requests that touched the project — no project table, computed on read.
+pub(crate) fn load_project_detail(
+    conn: &Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    project: &str,
+) {
+    let dir = crate::workspace::dir_for(&data_dir(), workspace)
+        .join("projects")
+        .join(project);
+    let kind = crate::kinds::kind_for(conn, workspace, project, &dir);
+    let overridden = db::settings::get(conn, &crate::kinds::kind_key(workspace, project))
+        .ok()
+        .flatten()
+        .is_some_and(|slug| crate::kinds::ProjectKind::from_slug(&slug).is_some());
+    let requests = db::requests::requests_touching(conn, &format!("projects/{project}"))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| crate::state::ProjectRequestEntry {
+            id: r.id,
+            title: r.title,
+            status: r.status.as_str().to_owned(),
+        })
+        .collect();
+    let detail = crate::state::ProjectDetail {
+        workspace_id: workspace.to_owned(),
+        name: project.to_owned(),
+        kind_slug: kind.slug().to_owned(),
+        kind_overridden: overridden,
+        requests,
+    };
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_PROJECT_DETAIL]),
+        move |app| app.project_detail = Some(detail),
+    );
+}
+
+/// Set (or clear) a project's kind override (P1), then re-project the page. An empty slug
+/// clears the override — detection takes over again.
+pub(crate) fn set_project_kind(
+    conn: &Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    project: &str,
+    slug: &str,
+) {
+    let key = crate::kinds::kind_key(workspace, project);
+    let _ = if slug.trim().is_empty() {
+        db::settings::set(conn, &key, "")
+    } else {
+        db::settings::set(conn, &key, slug.trim())
+    };
+    load_project_detail(conn, shared, workspace, project);
+}
+
 /// Project the request page (`Command::LoadRequestDetail`).
 pub(crate) fn load_detail(conn: &Connection, shared: &SharedServerState, request_id: &str) {
     let detail = build_detail(conn, request_id);

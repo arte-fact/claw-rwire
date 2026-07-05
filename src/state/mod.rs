@@ -94,6 +94,8 @@ pub struct App {
     pub task_detail: Option<TaskDetail>,
     /// The request page (`/w/:wid/requests/:rid`) currently open, or `None` (G2).
     pub request_detail: Option<RequestDetail>,
+    /// The project page (`/w/:wid/projects/:pid`) currently open, or `None` (P1).
+    pub project_detail: Option<ProjectDetail>,
     /// The active workspace's open requests — the board's Requests rail (G2).
     pub requests: Vec<RequestCardView>,
     /// The agent whose thread page (`/w/:wid/agent/:aid`) is open, or `None` — so background

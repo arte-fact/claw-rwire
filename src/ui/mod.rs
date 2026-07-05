@@ -15,6 +15,7 @@ mod dashboard;
 mod files;
 mod logs;
 mod memory;
+mod project_page;
 mod prompts;
 mod request_page;
 mod run_chain;
@@ -83,6 +84,10 @@ pub fn routes() -> Router {
         .page("/w/:wid/requests/:rid", |p| {
             // The request page (G2): the ask's whole story — plan, tasks, diffs, delivery.
             view(workspace::shell(wid(p), WsTab::Tasks, request_page::page()))
+        })
+        .page("/w/:wid/projects/:pid", |p| {
+            // The project page (P1): kind, request history, overrides — the durable axis.
+            view(workspace::shell(wid(p), WsTab::Tasks, project_page::page()))
         })
         .page("/w/:wid/workflow", |p| {
             view(workspace::shell(
@@ -667,6 +672,15 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
     {
         bridge::send(Command::LoadRequestDetail {
             request_id: rid.to_owned(),
+        });
+    }
+    // The project page (P1): project its derived kind + request history on entry.
+    if let Some(params) = RoutePattern::new("/w/:wid/projects/:pid").matches(path)
+        && let (Some(wid), Some(pid)) = (params.get("wid"), params.get("pid"))
+    {
+        bridge::send(Command::LoadProjectDetail {
+            workspace: wid.to_owned(),
+            project: pid.to_owned(),
         });
     }
     if let Some(params) = RoutePattern::new("/w/:wid/tasks/:tid").matches(path) {
