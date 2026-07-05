@@ -66,6 +66,10 @@ pub(super) fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
     );
     project_chat_memory(conn, shared);
     project_memory_overview(conn, shared);
+    // Last, once endpoints and chats are settled: re-dispatch any concierge turn a restart
+    // interrupted (the user's message sits unanswered otherwise). Spawns worker threads, so
+    // it must run after the app state above is projected.
+    super::chat_turn::recover_pending_turns(conn, shared);
 }
 
 /// First-boot bootstrap: when no endpoint exists yet, seed a `default` endpoint +

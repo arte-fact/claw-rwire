@@ -244,9 +244,8 @@ and the skills — one concept rounding up prompts/tools/skills instead of setti
 - Output-only requests confuse the macro review (found in the P0 live e2e): an empty
   branch diff reads as "the work never happened" — when the diff is empty, feed the
   tasks' final outputs into the validation brief.
-- Chat turns have no boot recovery: a restart mid-concierge-turn loses the user's message
-  silently (two observed 2026-07-05). Same recovery family as macro reviews (P0) —
-  relaunch turns for inbound messages newer than the last outbound.
+- [x] Chat-turn boot recovery (2026-07-05): a restart mid-concierge-turn re-dispatches
+  any chat whose last message is still inbound — the macro-review recovery's sibling.
 
 - Working-tree-less delivery merge (see P2 last box).
 - Background error surfacing (L6): scheduler/gitops errors reach a visible surface

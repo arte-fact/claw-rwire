@@ -208,6 +208,41 @@ pub fn model_turns_after(
     rows.collect()
 }
 
+/// Active chats whose most recent message is inbound (`direction='in'`) — a user turn the
+/// concierge never answered. On a clean run this is empty (a reply or a tool row always
+/// follows); a non-empty result means a worker thread died mid-turn (a restart), and boot
+/// recovery re-dispatches these. Ordered oldest-first so recovery replays in arrival order.
+pub fn chats_awaiting_reply(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT g.id FROM messaging_groups g
+           JOIN web_messages m ON m.id = (
+               SELECT MAX(m2.id) FROM web_messages m2 WHERE m2.messaging_group_id = g.id
+           )
+          WHERE g.channel_type = ?1 AND g.archived_at IS NULL AND m.direction = 'in'
+          ORDER BY m.id ASC",
+    )?;
+    let rows = stmt.query_map([WEB], |row| row.get::<_, String>(0))?;
+    rows.collect()
+}
+
+/// The body of the chat's most recent **inbound** message — the user turn boot recovery
+/// replays (echo path) or resumes (the native path re-reads it from the transcript). `None`
+/// when the latest message isn't inbound (a reply already landed — nothing to recover).
+pub fn last_user_text(conn: &Connection, chat_id: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT body, direction FROM web_messages
+          WHERE messaging_group_id = ?1
+          ORDER BY id DESC LIMIT 1",
+        rusqlite::params![chat_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .map(|(body, direction)| (direction == "in").then_some(body))
+    .or_else(|err| match err {
+        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+        other => Err(other),
+    })
+}
+
 pub fn append_message(
     conn: &Connection,
     chat_id: &str,
@@ -405,6 +440,28 @@ mod tests {
             )
             .expect("count");
         assert_eq!(leftover, 0);
+    }
+
+    #[test]
+    fn awaiting_reply_finds_only_unanswered_inbound_turns() {
+        let conn = db::open_in_memory().expect("open");
+        create_chat(&conn, "answered", "a").expect("create");
+        create_chat(&conn, "pending", "b").expect("create");
+        create_chat(&conn, "empty", "c").expect("create");
+        // answered: user then agent — a reply landed, nothing to recover.
+        append_message(&conn, "answered", MessageRole::User, "hi").expect("u");
+        append_message(&conn, "answered", MessageRole::Agent, "hello").expect("a");
+        // pending: user with no reply after — a turn died mid-flight.
+        append_message(&conn, "pending", MessageRole::User, "do the thing").expect("u");
+
+        let awaiting = chats_awaiting_reply(&conn).expect("query");
+        assert_eq!(awaiting, vec!["pending".to_owned()]);
+        assert_eq!(
+            last_user_text(&conn, "pending").expect("text").as_deref(),
+            Some("do the thing")
+        );
+        assert_eq!(last_user_text(&conn, "answered").expect("text"), None);
+        assert_eq!(last_user_text(&conn, "empty").expect("text"), None);
     }
 
     #[test]

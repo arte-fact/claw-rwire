@@ -27,7 +27,30 @@ pub(super) fn submit(
         return;
     }
     let _ = chat::title_if_default(conn, chat_id, &first_line_title(text));
+    dispatch(conn, shared, chat_id, text);
+}
 
+/// Boot recovery: a concierge turn runs on a worker thread that dies with the process, so a
+/// restart mid-turn leaves the user's message with no reply (observed live — two turns lost
+/// across a day's deploys). Re-dispatch every chat whose last message is still inbound; the
+/// message is already persisted, so this dispatches without re-appending. The macro-review
+/// recovery's missing sibling ([`super::requests::control::recover_validations`]).
+pub(super) fn recover_pending_turns(conn: &rusqlite::Connection, shared: &SharedServerState) {
+    for chat_id in chat::chats_awaiting_reply(conn).unwrap_or_default() {
+        let Some(text) = chat::last_user_text(conn, &chat_id).unwrap_or_default() else {
+            continue;
+        };
+        log_line(format!(
+            "chat: re-dispatching {chat_id} — a turn was interrupted by a restart"
+        ));
+        dispatch(conn, shared, &chat_id, &text);
+    }
+}
+
+/// Resolve the chat's endpoint and run the turn (native worker or echo fallback). The user
+/// message must already be persisted — both [`submit`] and [`recover_pending_turns`] append
+/// (or find) it first, so the transcript the turn reads is complete.
+fn dispatch(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str, text: &str) {
     match resolution::resolve_for_chat(conn, chat_id, |key| std::env::var(key).ok()) {
         Ok(inference) => dispatch_native(conn, shared, chat_id, inference),
         Err(_) => reply_echo(conn, shared, chat_id, text),
