@@ -44,6 +44,41 @@ pub(crate) fn pass_diff(root: &std::path::Path, commits_json: Option<&str>) -> S
     }
 }
 
+/// The workspace's project cards for the Work tab's Projects strip (P1): every `projects/*`
+/// repo `gitops::repos` lists, with its derived kind and open-request count. Derived on read.
+pub(crate) fn project_cards(
+    conn: &Connection,
+    workspace: &str,
+) -> Vec<crate::state::ProjectCardView> {
+    let root = crate::workspace::dir_for(&data_dir(), workspace);
+    gitops::repos(&root)
+        .into_iter()
+        .filter(|repo| !repo.is_empty())
+        .map(|repo| {
+            let name = repo.trim_start_matches("projects/").to_owned();
+            let dir = root.join("projects").join(&name);
+            let kind = crate::kinds::kind_for(conn, workspace, &name, &dir);
+            let open_requests = db::requests::requests_touching(conn, &repo)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| {
+                    matches!(
+                        r.status,
+                        RequestStatus::Planning
+                            | RequestStatus::Executing
+                            | RequestStatus::Validating
+                    )
+                })
+                .count();
+            crate::state::ProjectCardView {
+                name,
+                kind_slug: kind.slug().to_owned(),
+                open_requests,
+            }
+        })
+        .collect()
+}
+
 /// Project the project page (`Command::LoadProjectDetail`, P1): the derived kind + the
 /// requests that touched the project — no project table, computed on read.
 pub(crate) fn load_project_detail(

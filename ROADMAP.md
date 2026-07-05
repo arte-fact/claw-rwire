@@ -121,7 +121,7 @@ and the skills — one concept rounding up prompts/tools/skills instead of setti
       *Site*: `run_system_prompt` composition, `scheduler/mod.rs` launches (the task's
       touched/target project resolved from the spec's `projects/<name>` paths or the
       request's `request_repos`).
-- [~] **Project page + strip** (page shipped 2026-07-05; strip pending): `/w/:wid/projects/:name` — develop CI status, staging /
+- [x] **Project page + strip** (2026-07-05): `/w/:wid/projects/:name` — develop CI status, staging /
       preview links, request history (from `request_repos`), kind + overrides settings;
       Projects strip on the Work tab beside Requests; breadcrumb-integrated (workspace ›
       project). *Site*: `ui/project_page.rs`, `workspace_tasks/mod.rs`.

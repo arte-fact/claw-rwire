@@ -56,6 +56,7 @@ pub fn tasks(app: &App) -> ElementBuilder {
         .append([
             needs_you(app, &workspace.id),
             requests_section(app, &workspace.id),
+            projects_section(app, &workspace.id),
             el(El::Div)
                 .st([St::TextXs, St::TextLow, St::TextUppercase])
                 .text("Board · free-standing tasks"),
@@ -250,6 +251,58 @@ fn request_badge(status: &str) -> ElementBuilder {
         .fill(BadgeFill::Outline)
         .text(status.to_owned())
         .build()
+}
+
+/// The Projects strip (P1): the durable axis below the in-flight Requests rail — every
+/// `projects/*` repo with its kind and open-request count, each a link to its project page.
+fn projects_section(app: &App, workspace_id: &str) -> ElementBuilder {
+    if app.projects.is_empty() {
+        return el(El::Div).st([St::DisplayNone]);
+    }
+    let mut children = vec![
+        el(El::Div)
+            .st([St::TextXs, St::TextLow, St::TextUppercase])
+            .text(&format!("Projects · {}", app.projects.len())),
+    ];
+    children.extend(app.projects.iter().map(|project| {
+        let open = if project.open_requests > 0 {
+            format!("{} open", project.open_requests)
+        } else {
+            "quiet".to_owned()
+        };
+        el(El::Div)
+            .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::PySm])
+            .append([
+                rwire::Link::route(&format!("/w/{workspace_id}/projects/{}", project.name))
+                    .st([
+                        St::MinW0,
+                        St::Flex1,
+                        St::Truncate,
+                        St::TextSm,
+                        St::TextHigh,
+                        St::FontSemibold,
+                    ])
+                    .hover([St::TextAccent])
+                    .text(&project.name),
+                Badge::new()
+                    .intent(BadgeIntent::Primary)
+                    .shape(BadgeShape::Square)
+                    .fill(BadgeFill::Outline)
+                    .text(project.kind_slug.clone())
+                    .build(),
+                el(El::Span).st([St::TextXs, St::TextLow]).text(&open),
+            ])
+    }));
+    el(El::Div)
+        .st([
+            St::DisplayFlex,
+            St::FlexCol,
+            St::GapSm,
+            St::BorderDefault,
+            St::BgSurface,
+            St::PSm,
+        ])
+        .append(children)
 }
 
 /// A banner shown while the workspace has a task in flight (running/awaiting): the pipeline editor

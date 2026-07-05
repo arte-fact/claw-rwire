@@ -250,16 +250,19 @@ pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: 
     let views = lane_views(conn, workspace);
     let columns = columns_for(conn, workspace);
     let requests = super::requests::rail_views(conn, workspace);
+    let projects = super::requests::view::project_cards(conn, workspace);
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
             App::FIELD_TASKS,
             App::FIELD_PIPELINE_COLUMNS,
             App::FIELD_REQUESTS,
+            App::FIELD_PROJECTS,
         ]),
         move |app| {
             app.tasks = views;
             app.pipeline_columns = columns;
             app.requests = requests;
+            app.projects = projects;
         },
     );
 }

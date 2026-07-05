@@ -806,6 +806,15 @@ pub struct ProjectRequestEntry {
     pub status: String,
 }
 
+/// A project card in the Work tab's Projects strip (P1) — the durable axis beside the
+/// in-flight Requests rail. Derived: name + kind + how many open requests touch it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProjectCardView {
+    pub name: String,
+    pub kind_slug: String,
+    pub open_requests: usize,
+}
+
 /// The request page (`/w/:wid/requests/:rid`): the whole story in one scroll.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RequestDetail {
