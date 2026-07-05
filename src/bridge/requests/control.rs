@@ -239,6 +239,30 @@ pub(crate) fn on_validated(
     let summary = format!("{decision} — {}", crate::text::first_line_capped(note, 200));
     let _ = db::requests::set_validation(conn, request_id, &summary);
     if decision == "pass" {
+        // The macro gate sees CI (P1b): red machine checks block auto-delivery even when the
+        // model reviewer passes — the reviewer judges intent, the machines judge correctness,
+        // and both must be green to deliver unattended. The operator can still Deliver anyway
+        // on the request page (recorded here as the override trail).
+        let checks = super::view::request_checks(conn, request_id);
+        if !crate::ci::all_green(&checks) {
+            let names = crate::ci::failed_names(&checks).join(", ");
+            let _ = db::requests::set_validation(
+                conn,
+                request_id,
+                &format!("{summary}\n(auto-delivery held — machine checks red: {names})"),
+            );
+            ping(
+                conn,
+                &request,
+                &format!(
+                    "⚠️ Review passed but **machine checks are red** ({names}) for **{}** — \
+                     auto-delivery held. Push a fix, or Deliver anyway on the request page.",
+                    request.title
+                ),
+            );
+            refresh(conn, shared, &request);
+            return;
+        }
         super::deliver(conn, shared, &request);
     } else {
         ping(

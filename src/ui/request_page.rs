@@ -332,7 +332,14 @@ fn controls(detail: &RequestDetail) -> ElementBuilder {
     let mut buttons: Vec<ElementBuilder> = Vec::new();
     match detail.status.as_str() {
         "validating" => {
-            buttons.push(control(Button::primary("Deliver"), deliver(), id));
+            // Red machine checks (P1b): auto-delivery is held, and the button says so — a
+            // Deliver here is an explicit human override of the red gate.
+            let deliver_label = if detail.checks_ok == Some(false) {
+                "Deliver anyway"
+            } else {
+                "Deliver"
+            };
+            buttons.push(control(Button::primary(deliver_label), deliver(), id));
             buttons.push(control(Button::secondary("Abandon"), abandon(), id));
         }
         "planning" | "executing" => {
