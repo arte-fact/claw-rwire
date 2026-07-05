@@ -99,12 +99,19 @@
 - Everything an agent *executes* (`bash`, machine checks, P1 CI, P2 previews) goes
   through `ExecStrategy` and sandboxes with the lane.
 
-## P1 — Projects become first-class (the unit CI/CD binds to)
+## P1 — Projects become first-class (the unit CI/CD binds to) — SHIPPED 2026-07-05
 
 The Request promotion, one level down: everything P1b–P3 needs is per-project, but a
 project today is a directory with no identity. **Kind is the paved-road bundle**: it binds
 the CI recipe, the preview recipe + base-path knob, the prompt layer, the tool profile,
 and the skills — one concept rounding up prompts/tools/skills instead of settings sprawl.
+
+**Live-verified** (studio/empire, real instance): the project page renders the
+breadcrumb (Studio › empire), the derived kind (`rust-bin`, correctly detected — Cargo.toml,
+no rwire dep), the request-history changelog (10 requests, status-badged, client-routed), and
+the Projects strip on the Work tab. Override round-trip proven: pinning `rwire-app` flips the
+badge to `rwire-app · operator override`; clearing returns it to `rust-bin · detected`.
+Commits `2951e36` (kinds + prompt layer + page), `ce40094` (strip).
 
 - [x] **Projects are derived, never registered** (2026-07-05): identity = the directory `repos()`
       already lists; **kind = a pure function** over its files (rwire dep in Cargo.toml →
