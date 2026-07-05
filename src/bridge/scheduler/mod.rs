@@ -15,7 +15,7 @@ use crate::db::resolution::{self, ResolvedInference};
 use crate::db::tasks::{self, Task, TaskStatus};
 use crate::db::{self, task_runs, workspaces};
 use crate::state::{ActivityKind, App, ProgressCtx, RunRole};
-use crate::tools::{CompositeToolbox, RepoToolbox, Toolbox, ValidatorToolbox};
+use crate::tools::{ChecksToolbox, CompositeToolbox, RepoToolbox, Toolbox, ValidatorToolbox};
 use crate::workspace;
 
 use super::{Command, build_toolbox, data_dir, log_line, memory, send};
@@ -262,10 +262,19 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             ));
         }
         let base = build_toolbox(inference.tools.clone(), Some(workspace_dir.clone()), true);
+        // The `checks` tool (P1b): the harness's own per-repo CI, so a producer can pre-empt the
+        // review by running the exact checks that will judge its pass.
+        let checks = ChecksToolbox::new(
+            task.workspace_id.clone(),
+            workspace_dir.clone(),
+            super::exec_strategy_for(&workspace_dir),
+            data_dir(),
+        );
         // Read-only git surface, unconditionally (it can't mutate): repo_status/log/diff,
         // anchored to this task so since:"task-start" resolves via its recorded bases.
         let toolbox: Box<dyn Toolbox> = Box::new(CompositeToolbox::new(vec![
             base,
+            Box::new(checks),
             Box::new(RepoToolbox::for_task(
                 workspace_dir,
                 data_dir(),
@@ -346,7 +355,7 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
         // (cargo build), getting "no tool named bash", and passing anyway. `list`/`find` let it
         // discover and grep files without shelling out. No `write`/`edit`, so it verifies without
         // rewriting the deliverable.
-        let checks = build_toolbox(
+        let coder_tools = build_toolbox(
             Some(vec![
                 "read".to_owned(),
                 "list".to_owned(),
@@ -356,11 +365,20 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             Some(workspace_dir.clone()),
             false,
         );
+        // The `checks` tool (P1b): the reviewer confirms "builds and tests clean" with the
+        // harness's exact per-repo recipe, not an ad-hoc `bash` guess — one source of truth.
+        let checks_tool = ChecksToolbox::new(
+            task.workspace_id.clone(),
+            workspace_dir.clone(),
+            super::exec_strategy_for(&workspace_dir),
+            data_dir(),
+        );
         // Reviewers get the read-only git surface too — a claim like "all tests pass" is
         // checked against what actually changed (repo_diff since task-start), not prose.
         let toolbox: Box<dyn Toolbox> = Box::new(CompositeToolbox::new(vec![
             Box::new(ValidatorToolbox),
-            checks,
+            coder_tools,
+            Box::new(checks_tool),
             Box::new(RepoToolbox::for_task(
                 workspace_dir,
                 data_dir(),

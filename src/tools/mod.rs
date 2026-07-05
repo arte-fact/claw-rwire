@@ -3,6 +3,7 @@
 //! SMS tools all become implementors; today's sources are the web MCP server and the
 //! workspace coder tools (`coder`).
 
+mod checks;
 mod coder;
 mod concierge;
 pub(crate) mod exec;
@@ -11,6 +12,7 @@ mod planning;
 mod repo;
 mod validator;
 
+pub use checks::ChecksToolbox;
 pub use coder::CoderToolbox;
 pub use concierge::{ConciergeToolbox, Delegate};
 pub use exec::ExecStrategy;
