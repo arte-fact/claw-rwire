@@ -67,14 +67,11 @@ impl Toolbox for PreviewToolbox {
         let target = serde_json::from_str::<serde_json::Value>(arguments)
             .ok()
             .and_then(|v| v.get("project").and_then(|p| p.as_str()).map(str::to_owned));
-        // No proxy base in the agent debug loop — the harness reaches the preview directly on its
-        // host port; the same-origin `/preview/<short>` path arrives with the proxy (P2b).
         match crate::bridge::preview::start_for_lane(
             &conn,
             &self.workspace_id,
             &self.root,
             &self.exec,
-            "",
             target.as_deref(),
         ) {
             // Whether up or still building, the process is spawned — report and let the agent

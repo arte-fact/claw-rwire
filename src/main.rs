@@ -26,7 +26,7 @@ use std::error::Error;
 use async_std::main;
 use rwire::capsule_gen::CapsuleConfig;
 use rwire::theme::{RadiusScale, Theme};
-use rwire::{Server, theme};
+use rwire::{ProxyResolver, Server, ServerConfig, theme};
 use rwire_themes::palettes;
 
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8080";
@@ -72,6 +72,19 @@ fn bind_addr() -> String {
     std::env::var(BIND_ADDR_ENV).unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_owned())
 }
 
+/// The reverse-proxy resolver claw hands to rwire: a `/preview/<key>/…` request resolves to the
+/// live upstream port for `<key>` (from the preview supervisor), stripping `/preview/<key>` so the
+/// branch app sees a root-relative path. Anything else falls through to claw's own handling.
+fn preview_proxy() -> ProxyResolver {
+    ProxyResolver::new(|path| {
+        let key = path.strip_prefix("/preview/")?.split('/').next()?;
+        if key.is_empty() {
+            return None;
+        }
+        bridge::preview::port_for(key).map(|port| (port, format!("/preview/{key}")))
+    })
+}
+
 #[main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_file::load();
@@ -97,6 +110,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .auth(&creds.user, &creds.password)
         .auth_brand("claw")
         .capsule_config(CapsuleConfig::new().pwa(pwa_config()))
+        // Same-origin preview proxy (P2): `/preview/<key>/…` forwards to the branch's pooled port,
+        // behind claw's own auth gate — agent-built servers never face the internet raw.
+        .config(ServerConfig::new().proxy(preview_proxy()))
         .theme(app_theme());
 
     // Dev convenience: a stable session token (CLAW_DEV_SESSION) survives server restarts, so a

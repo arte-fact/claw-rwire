@@ -61,12 +61,15 @@ pub fn start_for_lane(
     workspace_id: &str,
     lane_root: &Path,
     strategy: &ExecStrategy,
-    base: &str,
     target: Option<&str>,
 ) -> Result<String, String> {
     let (repo, command) = resolve_target(conn, workspace_id, lane_root, target)?;
     let key = key_for(workspace_id, short_of(lane_root));
     let id = key.clone();
+    // The mount point the proxy serves this preview at — also what a base-path-aware app reads
+    // from `CLAW_PREVIEW_BASE` to prefix its own URLs. Works direct (localhost:<port>) too, since
+    // an rwire app accepts its WebSocket on any path.
+    let base = uri_for(&key);
 
     // Reuse the port for a stable key (restart) so the proxy path stays valid; else allocate.
     let existing_port = table()
@@ -90,7 +93,7 @@ pub fn start_for_lane(
     }
 
     let log = log_path(&key);
-    let run = start_command(&id, port, base, &repo, &command);
+    let run = start_command(&id, port, &base, &repo, &command);
     let child = exec::spawn_in(strategy, &run, &log)
         .map_err(|e| format!("preview failed to start: {e}"))?;
 
@@ -108,15 +111,17 @@ pub fn start_for_lane(
         );
     }
 
-    let uri = format!("http://127.0.0.1:{port}");
+    // The same-origin proxy path is the shareable URL ("every branch a URL"); the direct host port
+    // is what a server-side tool reaches without the proxy.
     if ready {
         Ok(format!(
-            "Preview for {repo} is up at {uri} (running `{command}`)."
+            "Preview for {repo} is up at {base}/ (also http://127.0.0.1:{port} for direct access), \
+             running `{command}`."
         ))
     } else {
         Ok(format!(
-            "Preview for {repo} is still starting on {uri} (running `{command}`); it may still be \
-             building. Recent output:\n{}",
+            "Preview for {repo} is still starting at {base}/ (http://127.0.0.1:{port}) running \
+             `{command}`; it may still be building. Recent output:\n{}",
             log_tail(&log)
         ))
     }
@@ -286,6 +291,19 @@ fn short_of_request(request_id: &str) -> String {
 #[must_use]
 pub fn key_for(workspace: &str, short: impl AsRef<str>) -> String {
     format!("{workspace}-{}", short.as_ref())
+}
+
+/// The same-origin mount path a preview is proxied at (`/preview/<key>`).
+#[must_use]
+pub fn uri_for(key: &str) -> String {
+    format!("/preview/{key}")
+}
+
+/// The live upstream port for a preview key, or `None` if nothing is running there — the map
+/// lookup the proxy resolver consults for every `/preview/<key>/…` request.
+#[must_use]
+pub fn port_for(key: &str) -> Option<u16> {
+    table().lock().ok().and_then(|t| t.get(key).map(|p| p.port))
 }
 
 /// A free port in the pool: in the `CLAW_PREVIEW_PORTS` range, not held by a live preview, and
@@ -472,8 +490,8 @@ mod tests {
         .unwrap();
 
         let strategy = ExecStrategy::Host { root: lane.clone() };
-        let detail = start_for_lane(&conn, "ws", &lane, &strategy, "", Some("site"))
-            .expect("preview starts");
+        let detail =
+            start_for_lane(&conn, "ws", &lane, &strategy, Some("site")).expect("preview starts");
         assert!(detail.contains("is up at"), "should come up: {detail}");
 
         let key = key_for("ws", short_of(&lane));
