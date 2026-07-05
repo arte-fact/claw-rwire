@@ -84,6 +84,24 @@ impl ProjectKind {
         }
     }
 
+    /// The command that starts this kind's preview server (P2), run from the project dir with
+    /// `CLAW_BIND=127.0.0.1:<port>` and `CLAW_PREVIEW_BASE` in the environment. `Some` only where
+    /// the kind reliably implies a long-running server: an rwire app *is* one binary on one port,
+    /// and a Node app typically serves. A plain `RustBin` may be a library or a one-shot CLI
+    /// (`cargo run` errors on a lib), and Docs/Other aren't servers — those rely on the per-project
+    /// `preview` override when they do serve, mirroring the `checks` escape hatch.
+    #[must_use]
+    pub fn preview_command(self) -> Option<&'static str> {
+        match self {
+            // Debug, not `--release`: the P1b checks build the debug profile, so `cargo run`
+            // reuses that warm `target/` and starts in seconds — a `--release` preview would be a
+            // separate from-scratch build. A preview is a dev artifact; fast startup wins.
+            Self::RwireApp => Some("cargo run"),
+            Self::NodeApp => Some("npm start"),
+            Self::RustBin | Self::Docs | Self::Other => None,
+        }
+    }
+
     /// The system-prompt layer for a producer working in a project of this kind: its
     /// conventions plus the machine contracts the producer should pre-empt (running the
     /// checks itself is the cheapest review round). `None` for kinds with no guidance.
@@ -271,6 +289,15 @@ mod tests {
         assert!(ProjectKind::NodeApp.checks().is_empty());
         assert!(ProjectKind::Docs.checks().is_empty());
         assert!(ProjectKind::Other.checks().is_empty());
+    }
+
+    #[test]
+    fn only_server_kinds_carry_a_default_preview() {
+        assert_eq!(ProjectKind::RwireApp.preview_command(), Some("cargo run"));
+        assert_eq!(ProjectKind::NodeApp.preview_command(), Some("npm start"));
+        assert!(ProjectKind::RustBin.preview_command().is_none());
+        assert!(ProjectKind::Docs.preview_command().is_none());
+        assert!(ProjectKind::Other.preview_command().is_none());
     }
 
     #[test]

@@ -26,6 +26,7 @@ pub(crate) use live::{clear_live_turn, live_progress, push_activity};
 mod memory;
 mod notify;
 mod orchestrate;
+pub(crate) mod preview;
 mod prompts;
 mod replay;
 mod requests;

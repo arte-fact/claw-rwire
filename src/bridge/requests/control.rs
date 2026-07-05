@@ -320,6 +320,8 @@ pub(crate) fn abandon(conn: &Connection, shared: &SharedServerState, request_id:
     // The tree goes first (G4): a branch checked out in a worktree can't be deleted. Its
     // sandbox goes with it (P0) — abandon kills the lane's in-flight processes.
     let tree = gitops::tree_root(&data_dir(), &request.workspace_id, request_id);
+    // Stop this branch's preview before the sandbox that hosts it is destroyed (P2).
+    crate::bridge::preview::stop_request(&request.workspace_id, request_id);
     crate::sandbox::destroy(&crate::sandbox::name_for(&tree));
     let mut errors = gitops::remove_request_tree(&root, &tree);
     // Then `-D` the branch everywhere it exists — touched repos and composed-but-untouched

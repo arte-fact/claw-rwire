@@ -9,6 +9,7 @@ mod concierge;
 pub(crate) mod exec;
 mod git_screen;
 mod planning;
+mod preview;
 mod repo;
 mod validator;
 
@@ -17,6 +18,7 @@ pub use coder::CoderToolbox;
 pub use concierge::{ConciergeToolbox, Delegate};
 pub use exec::ExecStrategy;
 pub use planning::PlanningToolbox;
+pub use preview::PreviewToolbox;
 pub use repo::RepoToolbox;
 pub use validator::{VERDICT, ValidatorToolbox, parse_verdict, parse_verdict_prose};
 

@@ -277,8 +277,9 @@ pub fn delete_workspace(conn: &rusqlite::Connection, shared: &SharedServerState,
     if let Err(err) = workspaces::delete(conn, id) {
         return surface_error(shared, format!("delete workspace: {err}"));
     }
-    // Destroy the workspace's isola sandbox, if any (R6 T5; best-effort) — before removing
-    // the dir, so the rootfs doesn't leak. Idempotent: "not found" is fine.
+    // Stop any previews under this workspace (P2), then destroy its isola sandbox, if any (R6 T5;
+    // best-effort) — before removing the dir, so the rootfs doesn't leak. Idempotent.
+    super::preview::stop_workspace(id);
     let dir = workspace::dir_for(&super::data_dir(), id);
     crate::sandbox::destroy(&crate::sandbox::name_for(&dir));
     if let Err(err) = std::fs::remove_dir_all(&dir)

@@ -143,6 +143,8 @@ pub(super) fn deliver(conn: &Connection, shared: &rwire::SharedServerState, requ
         repos.iter().map(|repo| repo.repo.as_str()).collect();
     // The lane's sandbox dies with the lane (P0): whatever a run left behind — a dev
     // server, a hung build — is killed by the rootfs teardown, never orphaned on the host.
+    // Stop the branch preview first so its port frees promptly (P2).
+    crate::bridge::preview::stop_request(&request.workspace_id, &request.id);
     crate::sandbox::destroy(&crate::sandbox::name_for(&tree));
     for err in gitops::remove_request_tree(&root, &tree) {
         log_line(format!("requests: teardown {}: {err}", request.id));

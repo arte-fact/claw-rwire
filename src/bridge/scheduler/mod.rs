@@ -15,7 +15,9 @@ use crate::db::resolution::{self, ResolvedInference};
 use crate::db::tasks::{self, Task, TaskStatus};
 use crate::db::{self, task_runs, workspaces};
 use crate::state::{ActivityKind, App, ProgressCtx, RunRole};
-use crate::tools::{ChecksToolbox, CompositeToolbox, RepoToolbox, Toolbox, ValidatorToolbox};
+use crate::tools::{
+    ChecksToolbox, CompositeToolbox, PreviewToolbox, RepoToolbox, Toolbox, ValidatorToolbox,
+};
 use crate::workspace;
 
 use super::{Command, build_toolbox, data_dir, log_line, memory, send};
@@ -270,11 +272,20 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             super::exec_strategy_for(&workspace_dir),
             data_dir(),
         );
+        // The `preview` tool (P2): start/restart this branch's live server and get the URL back —
+        // the debug loop as a tool call.
+        let preview = PreviewToolbox::new(
+            task.workspace_id.clone(),
+            workspace_dir.clone(),
+            super::exec_strategy_for(&workspace_dir),
+            data_dir(),
+        );
         // Read-only git surface, unconditionally (it can't mutate): repo_status/log/diff,
         // anchored to this task so since:"task-start" resolves via its recorded bases.
         let toolbox: Box<dyn Toolbox> = Box::new(CompositeToolbox::new(vec![
             base,
             Box::new(checks),
+            Box::new(preview),
             Box::new(RepoToolbox::for_task(
                 workspace_dir,
                 data_dir(),

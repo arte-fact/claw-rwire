@@ -5,8 +5,9 @@
 //! writes to a full pipe buffer would deadlock (the child blocks on write, never exits, so
 //! the poll never sees it finish). Files have no such backpressure.
 
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -46,18 +47,11 @@ pub fn run_in(strategy: &ExecStrategy, command: &str, timeout: Duration) -> Stri
     }
 }
 
-pub(crate) fn run(workspace: &Path, command: &str, timeout: Duration) -> String {
-    let (out_path, err_path) = temp_paths();
-    let (out_file, err_file) = match (
-        std::fs::File::create(&out_path),
-        std::fs::File::create(&err_path),
-    ) {
-        (Ok(o), Ok(e)) => (o, e),
-        _ => return "error: bash could not create its output buffers".to_owned(),
-    };
-
-    let spawned = Command::new("bash")
-        .arg("-c")
+/// A `bash -c` in `workspace` with the git-hermetic environment (no prompts, no global config,
+/// no ssh-agent) — the shared spine of the blocking [`run`] and the long-lived [`spawn_in`].
+fn host_command(workspace: &Path, command: &str) -> Command {
+    let mut cmd = Command::new("bash");
+    cmd.arg("-c")
         .arg(command)
         .current_dir(workspace)
         // Credential hygiene: agent git must never prompt or borrow the host user's
@@ -68,7 +62,56 @@ pub(crate) fn run(workspace: &Path, command: &str, timeout: Duration) -> String 
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
-        .env_remove("SSH_AUTH_SOCK")
+        .env_remove("SSH_AUTH_SOCK");
+    cmd
+}
+
+/// Spawn `command` under the strategy as a **long-lived** child — no wait, no timeout — with its
+/// combined output redirected to `log`. The preview supervisor (P2) holds the returned [`Child`]
+/// for the server's lifetime and stops it out of band.
+///
+/// Host: `bash` in `root`, placed in its own process group so the whole tree (a `cargo run`
+/// wrapper *and* the binary it spawns) is killable by group. Isola: an `isola exec` host process
+/// that parents the in-sandbox server — reaping *this* process does not reap the namespaced child
+/// (it reparents), so the supervisor stops an isola preview with an in-sandbox marker sweep, not by
+/// killing this handle. The lane sandbox is ensured (created on demand) first.
+pub fn spawn_in(strategy: &ExecStrategy, command: &str, log: &Path) -> std::io::Result<Child> {
+    let out = std::fs::File::create(log)?;
+    let err = out.try_clone()?;
+    match strategy {
+        ExecStrategy::Host { root } => host_command(root, command)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(out))
+            .stderr(Stdio::from(err))
+            .process_group(0)
+            .spawn(),
+        ExecStrategy::Isola { sandbox, mount } => {
+            crate::sandbox::ensure(sandbox, mount).map_err(std::io::Error::other)?;
+            Command::new("isola")
+                .arg("exec")
+                .arg("-w")
+                .arg(mount)
+                .arg(sandbox)
+                .args(["/bin/bash", "-lc", command])
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(out))
+                .stderr(Stdio::from(err))
+                .spawn()
+        }
+    }
+}
+
+pub(crate) fn run(workspace: &Path, command: &str, timeout: Duration) -> String {
+    let (out_path, err_path) = temp_paths();
+    let (out_file, err_file) = match (
+        std::fs::File::create(&out_path),
+        std::fs::File::create(&err_path),
+    ) {
+        (Ok(o), Ok(e)) => (o, e),
+        _ => return "error: bash could not create its output buffers".to_owned(),
+    };
+
+    let spawned = host_command(workspace, command)
         .stdin(Stdio::null())
         .stdout(out_file)
         .stderr(err_file)
