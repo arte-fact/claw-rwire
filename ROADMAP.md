@@ -138,7 +138,7 @@ Commits `2951e36` (kinds + prompt layer + page), `ce40094` (strip).
 Kind now binds the CI recipe (the P1 promise realised). Machine judgement moved from a single
 workspace command run at review time to per-repo CI at producer-finish, with fail-fast on red.
 Commits `b73b43b` (core), `860408f` (structured results), `b1542ca` (macro gate), `477701f`
-(checks tool).
+(checks tool). **Live-verified**: a projects/ci-smoke smoke task ran Plan→Build→Review→delivered — the harness ran fmt/clippy/test in the isola lane, recorded task_runs.checks all-green, rendered the badge strip, and the green gate auto-delivered.
 
 - [x] **Per-repo detection replaces the global command** (2026-07-05): after each successful
       producer pass, every repo the pass committed is judged by its **kind's** recipe
