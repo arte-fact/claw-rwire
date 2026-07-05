@@ -184,6 +184,26 @@ Commits `b73b43b` (core), `860408f` (structured results), `b1542ca` (macro gate)
 > port); the release binary is deployed live (isola mode, health green) with `preview` in every
 > producer toolbox. Live *agent-UI* exercise deferred to P2b's `/preview/<short>/` URL — a plain
 > GET surface, far more reliable than a WS composer-send (headless-driver flakiness, tracked).
+>
+> **P2b shipped 2026-07-05** (rwire `0bcea47`, claw `6ca455d`+`6ee06d9`; FIFO tie-break fix
+> `db1073b` en route). The same-origin URL, landed as two upstream rwire primitives + thin claw
+> wiring. **Proxy** (`ServerConfig::proxy(ProxyResolver)`): a path→`(port, prefix)` closure consulted
+> *after* the auth gate — proxied upstreams inherit claw's login — that rewrites the request line to
+> strip `/preview/<key>` and bidirectionally streams the raw `TcpStream` to `127.0.0.1:<port>`; a WS
+> upgrade rides through untouched (the pump is byte-agnostic). **Base-path** (`CapsuleConfig::base_path`
+> / `ServerWithRoot::base_path`): a *client-runtime* concern — an injected `const BASE` prefixes the
+> capsule's WS URL + history while the client still speaks root-relative routes, so a prefix-stripping
+> proxy means zero server-side path changes; PWA head suppressed under a base, injection charset-
+> sanitized. Claw's `main.rs` registers `preview::resolve_proxy` (key→live port via the supervisor);
+> the supervisor derives the mount base itself and injects `CLAW_PREVIEW_BASE`. **Verified**:
+> deterministic all the way through — rwire integration test (a matched path forwards with prefix
+> stripped, unmatched paths hit the app) + claw end-to-end test (real preview in the map → the actual
+> resolver returns its port + prefix, unknown/non-preview → None) + base-path/rewrite unit tests; the
+> release binary is deployed live with the proxy behind the auth gate (curl-confirmed: logged-out
+> `/preview/*` → login form, unknown key → app fall-through, no hang). The end-user *browser*
+> walkthrough of a real rwire preview waits on a previewable project (none registered live) and a
+> reliable agent trigger — arriving with P2c develop-staging (auto-starts on delivery, no composer-send)
+> and the tracked headless-driver fix.
 
 - [x] **Preview supervisor — in-memory, no table**: bridge-owned `OnceLock<Mutex<HashMap>>` keyed
       `<ws>-<short>`, `{port, child, strategy, id}`, ports from `CLAW_PREVIEW_PORTS` (default
@@ -197,17 +217,22 @@ Commits `b73b43b` (core), `860408f` (structured results), `b1542ca` (macro gate)
 - [x] **`preview` tool**: composed into the producer toolbox; starts/restarts the branch preview
       (optional `project` arg picks one of several) and returns the URL — the debug loop as a tool
       call. `exec::spawn_in` added (long-lived, held `Child`, own process group on host).
-- [ ] **Routing — DECIDED (operator, 2026-07-05): integrated dynamic URIs.** The claw
+- [x] **Routing — DECIDED (operator, 2026-07-05): integrated dynamic URIs.** The claw
       server proxies `/preview/<req-short>/…` (and `/staging/<project>/…`) to the pooled
       ports itself — same origin, so previews inherit claw's **auth gate** (agent-written
       servers never face the internet raw), no nginx writes, no DNS/TLS work, and one URI
-      vocabulary shared by the UI, the chat, and the agents.
-      *Site*: a proxy route in the rwire server layer (or claw-side handler) streaming to
-      `127.0.0.1:<port>`; websocket pass-through included (rwire previews ARE websockets).
-- [ ] **rwire base-path support** (the prerequisite we own): `Server::base_path()` —
-      wire endpoint, asset URLs, and `Link::route` become prefix-aware, so every rwire
-      app is mountable under a dynamic URI natively. Ships upstream (framework), adopted
-      by the preview supervisor via env (`CLAW_BASE_PATH=/preview/<short>`).
+      vocabulary shared by the UI, the chat, and the agents. Shipped as rwire
+      `ServerConfig::proxy(ProxyResolver)` (resolver consulted after the auth gate; request
+      line rewritten to strip the prefix; raw-`TcpStream` bidirectional pump — WS pass-through
+      free); claw registers `preview::resolve_proxy`. Forward+strip covered by an rwire
+      integration test, the claw resolver by an end-to-end test against a live supervisor entry.
+- [x] **rwire base-path support** (the prerequisite we own): `CapsuleConfig::base_path()` /
+      `ServerWithRoot::base_path()` — a **client-runtime** concern (thanks to the proxy's
+      prefix-strip, server-side routing is untouched): an injected `const BASE` makes the
+      capsule's WS URL + browser history prefix-aware while the client speaks root-relative
+      routes. Ships upstream (framework); works proxied *and* direct (`localhost:<port>`), since
+      an rwire app accepts its WS on any path. PWA head suppressed under a base; injection
+      charset-sanitized against quote-breakout.
       **The base-path contract**: the supervisor always exports the mount point
       (`CLAW_PREVIEW_BASE=/preview/<short>`) alongside the port; rwire honors it natively
       (base_path upstream), and most other stacks map it to their own knob (Vite `base`,
