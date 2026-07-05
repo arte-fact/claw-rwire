@@ -592,3 +592,33 @@ fn sweep_reasserts_project_ignore_lines_a_scaffolder_clobbered() {
         "the dependency tree must never enter the index: {tracked}"
     );
 }
+
+#[test]
+fn symlinked_project_dirs_are_not_workspace_property() {
+    // The live escape: an agent symlinked an external repo into projects/. The jail
+    // already refused writes; the repo scan must refuse to LIST it (no sweep, no init,
+    // no composition) — external checkouts are never claw's to commit.
+    let root = scratch("symlink-escape");
+    ensure_meta_repo(&root).expect("meta");
+    let external = scratch("symlink-escape-external");
+    ensure_project_repo(&external).expect("external repo");
+    let ext_head = head(&external).expect("head");
+    std::fs::create_dir_all(root.join("projects")).expect("projects");
+    std::os::unix::fs::symlink(&external, root.join("projects/linked")).expect("plant");
+    std::os::unix::fs::symlink(&external, root.join("projects/linked-nonrepo-target"))
+        .expect("plant2");
+
+    assert!(
+        !repos(&root).iter().any(|r| r.contains("linked")),
+        "symlinked dirs must not be listed as repos"
+    );
+    write(&root, "docs/note.md", "sweep me");
+    let (commits, errors) = commit_pass(&root, None, "pass", "t", "r", None);
+    assert_eq!(errors, Vec::<String>::new(), "no jail noise from symlinks");
+    assert!(commits.iter().all(|c| !c.repo.contains("linked")));
+    assert_eq!(
+        head(&external).expect("head"),
+        ext_head,
+        "external repo untouched"
+    );
+}

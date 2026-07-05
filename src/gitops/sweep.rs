@@ -101,7 +101,17 @@ pub fn repos(root: &Path) -> Vec<String> {
     };
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
-        .filter(|entry| entry.path().is_dir() && is_repo(&entry.path()))
+        // Symlinked entries are NOT workspace property (the live escape: an agent
+        // symlinked the operator's real framework checkout into projects/ — the jail
+        // rejected every write, but listing it made each sweep try). file_type() reads
+        // the link itself, never what it points at.
+        .filter(|entry| {
+            entry
+                .file_type()
+                .map(|kind| kind.is_dir() && !kind.is_symlink())
+                .unwrap_or(false)
+        })
+        .filter(|entry| is_repo(&entry.path()))
         .filter_map(|entry| entry.file_name().into_string().ok())
         .collect();
     names.sort();
@@ -122,7 +132,14 @@ pub fn ensure_workspace_repos(root: &Path) -> Vec<String> {
     };
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
-        if path.is_dir()
+        // Never init through a symlink: `path.is_dir()` follows links, so without this a
+        // planted `projects/<x> -> /anywhere` would get `git init` run in the target.
+        let symlink = entry
+            .file_type()
+            .map(|kind| kind.is_symlink())
+            .unwrap_or(true);
+        if !symlink
+            && path.is_dir()
             && !is_repo(&path)
             && let Err(err) = ensure_project_repo(&path)
         {
