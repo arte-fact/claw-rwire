@@ -112,8 +112,13 @@ impl ProjectKind {
                 "This is an **rwire** project. Build the UI in Rust with the `el(...)` \
                  builder and `rwire_components`; never hand-roll HTML/CSS or reach for JS. \
                  Use semantic `St` style tokens, `#[renderer]`/`#[handler]` for reactive \
-                 regions, and check `rwire_components` before hand-rolling a widget. It \
-                 serves under `$CLAW_PREVIEW_BASE` when set."
+                 regions, and check `rwire_components` before hand-rolling a widget. When it \
+                 serves, read `$CLAW_BIND` (the bind address) and `$CLAW_PREVIEW_BASE` (the \
+                 mount prefix) from the environment and pass BOTH to the builder — \
+                 `Server::bind(&bind)?.base_path(&base)…` — just as you read `$CLAW_BIND` for \
+                 the port, defaulting the base to `\"\"` when unset (a no-op). Without \
+                 `.base_path`, the preview's live WebSocket connects to root instead of the \
+                 same-origin proxy and the app 404s."
             }
             Self::RustBin => {
                 "This is a Rust project. Keep it warning-clean and tested: your pass will \
@@ -259,11 +264,17 @@ mod tests {
 
     #[test]
     fn prompt_layer_matches_the_kind() {
+        let rwire = ProjectKind::RwireApp.prompt_layer().unwrap();
+        assert!(rwire.contains("rwire"));
+        // The rwire layer must actively tell the producer to wire the mount prefix, not just
+        // mention it — parallel to reading the bind port (P2 base-path auto-wire).
         assert!(
-            ProjectKind::RwireApp
-                .prompt_layer()
-                .unwrap()
-                .contains("rwire")
+            rwire.contains("base_path"),
+            "names the builder knob: {rwire}"
+        );
+        assert!(
+            rwire.contains("CLAW_PREVIEW_BASE") && rwire.contains("CLAW_BIND"),
+            "wires both env vars: {rwire}"
         );
         assert!(
             ProjectKind::RustBin
