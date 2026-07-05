@@ -60,7 +60,34 @@
 - [ ] **Host allowlist documented**: what deliberately stays host-side (harness git, DB,
       the server itself) and why — one section in this doc, referenced from CLAUDE.md.
 
-## P1 — CI: machines judge before models (completes L1/M2)
+## P1 — Projects become first-class (the unit CI/CD binds to)
+
+The Request promotion, one level down: everything P1b–P3 needs is per-project, but a
+project today is a directory with no identity. **Kind is the paved-road bundle**: it binds
+the CI recipe, the preview recipe + base-path knob, the prompt layer, the tool profile,
+and the skills — one concept rounding up prompts/tools/skills instead of settings sprawl.
+
+- [ ] `projects` table: workspace_id, name (repo rel), **kind** (`rwire-app` | `rust-bin`
+      | `node-app` | `docs` | `other`), created_at; registered at repo birth/clone/adopt,
+      kind auto-detected (Cargo.toml, rwire dep, package.json), operator-overridable.
+      *Site*: `db/projects.rs`, hooks in `gitops::sweep` birth + adoption + P3 clone tool.
+- [ ] `ProjectKind` registry (code, not config): per kind — checks recipe, preview
+      command + base-path mapping, prompt layer text, default skills. *Site*: new
+      `src/kinds.rs`; the settings keys from the old P1/P2 drafts become overrides on the
+      project row, not the primary mechanism.
+- [ ] **Prompt composition grows the project layer**: role → workspace (AGENT.md) →
+      project (kind conventions + contracts: "these exact checks will judge your pass —
+      run them first"; "serve under $CLAW_PREVIEW_BASE") → task spec. Producers
+      pre-empting CI is the cheapest review round.
+      *Site*: `run_system_prompt` composition, `scheduler/mod.rs` launches (the task's
+      touched/target project resolved from the spec's `projects/<name>` paths or the
+      request's `request_repos`).
+- [ ] **Project page + strip**: `/w/:wid/projects/:name` — develop CI status, staging /
+      preview links, request history (from `request_repos`), kind + overrides settings;
+      Projects strip on the Work tab beside Requests; breadcrumb-integrated (workspace ›
+      project). *Site*: `ui/project_page.rs`, `workspace_tasks/mod.rs`.
+
+## P1b — CI: machines judge before models (completes L1/M2)
 
 - [ ] **Per-repo detection replaces the global command**: after each successful producer
       pass, for every repo the pass touched (from `pass_commits`), a `Cargo.toml` at the
@@ -91,6 +118,9 @@
       (`<tree>/.claw-target` shared across the request's passes) so iteration builds are
       incremental.
       *Site*: `src/ci.rs`; verify tree teardown removes it.
+- [ ] **`checks` tool**: producers/validators run the project's own CI suite on demand —
+      the same runner the harness uses, one source of truth for machine judgement.
+      *Site*: `tools/` new tool over `src/ci.rs`, in producer + validator profiles.
 - [ ] Ops (harvested L1): put Critic on a stronger model than the producers — two fields
       on the System page; do it when picking the next model lineup.
 
@@ -104,10 +134,11 @@
       boot for rows whose pid is gone (recovery, like macro reviews).
       *Site*: new `src/bridge/preview.rs`, `db/schema.sql`, hooks in
       `requests/{mod,control}.rs`.
-- [ ] **How a preview knows what to run** — *decision (recommended)*: a `Preview` line in
-      the project's `AGENT.md`-style metadata is too loose; use a per-repo setting
-      (`workspace.<id>.preview.<repo>` = command, default for rwire apps in P3:
-      `cargo run --release`) with `CLAW_BIND=127.0.0.1:<port>` injected via env.
+- [ ] **How a preview knows what to run**: the project's kind supplies the command
+      (rwire-app: `cargo run --release`; node-app: `npm start`; override on the project
+      row), with `CLAW_BIND=127.0.0.1:<port>` + `CLAW_PREVIEW_BASE` injected via env.
+- [ ] **`preview` tool**: a producer starts/restarts its project's preview mid-task and
+      gets the URI back — the debug loop as a tool call, not an improvised bash server.
 - [ ] **Routing — DECIDED (operator, 2026-07-05): integrated dynamic URIs.** The claw
       server proxies `/preview/<req-short>/…` (and `/staging/<project>/…`) to the pooled
       ports itself — same origin, so previews inherit claw's **auth gate** (agent-written
@@ -143,7 +174,7 @@
       working-tree-less delivery merge (`merge-tree` + `commit-tree` + `update-ref`) —
       closes the delivery-vs-dirty-canonical race for good.
 
-## P3 — rwire specialization: the paved road
+## P3 — rwire specialization: the flagship kind
 
 - [ ] **Jailed `clone` tool** (harvested G0.5 — the real workflow arrived): a dedicated
       tool cloning a URL or local path into `projects/<name>` with the hermetic git env,
@@ -151,8 +182,8 @@
       the "agents improvise clones via bash" era.
       *Site*: `tools/repo.rs` (alongside repo_status/log/diff), concierge + producer
       toolboxes.
-- [ ] **Workspace template "rwire app"**: dashboard create gains a template select;
-      instantiation = scaffold skeleton (`Cargo.toml` with the framework as a **pinned
+- [ ] **Workspace template "rwire app"** = create workspace + register an `rwire-app`
+      kind project (P1 machinery); instantiation = scaffold skeleton (`Cargo.toml` with the framework as a **pinned
       sovereign clone** at `projects/rwire` + path dep, `src/main.rs` hello-app),
       `STANDARDS.md` rwire section (St tokens, components-first, no raw attrs, no
       hand-rolled chips), CI defaults on, preview command preset.
