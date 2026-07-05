@@ -353,13 +353,19 @@ fn short_of_request(request_id: &str) -> String {
 }
 
 /// The staging short for a project: `staging-<bare-name>` (the last path segment, so `projects/site`
-/// and `site` agree). Kept `/`-free so it stays a single `/preview/<key>` path segment.
+/// and `site` agree). Kept `/`-free so it stays a single `/preview/<key>` path segment; the meta
+/// repo (`.`/empty) folds to `staging-root`.
 fn staging_short(project: &str) -> String {
     let bare = project
         .trim_end_matches('/')
         .rsplit('/')
         .next()
         .unwrap_or(project);
+    let bare = if bare.is_empty() || bare == "." {
+        "root"
+    } else {
+        bare
+    };
     format!("staging-{bare}")
 }
 
@@ -556,6 +562,28 @@ mod tests {
     }
 
     #[test]
+    fn staging_short_takes_the_bare_project_name() {
+        assert_eq!(staging_short("projects/site"), "staging-site");
+        assert_eq!(staging_short("site"), "staging-site");
+        // The meta repo (`.`/empty) folds to a clean, slash-free key segment.
+        assert_eq!(staging_short("."), "staging-root");
+        assert_eq!(staging_short(""), "staging-root");
+        // A staging key stays a single `/preview/<key>` path segment.
+        assert!(!key_for("ws", staging_short("projects/site")).contains('/'));
+    }
+
+    #[test]
+    fn preview_hint_is_none_without_a_previewable_project() {
+        let conn = crate::db::open_in_memory().expect("db");
+        // An empty (non-git) dir holds no repos, so nothing is previewable → no hint (not noise).
+        let empty = std::env::temp_dir().join(format!("claw-hint-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&empty);
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(preview_hint(&conn, "ws", &empty).is_none());
+        let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    #[test]
     fn command_for_prefers_override_then_kind() {
         let conn = crate::db::open_in_memory().expect("db");
         let dir = std::env::temp_dir().join(format!("claw-prev-{}", std::process::id()));
@@ -639,6 +667,36 @@ mod tests {
         );
         assert_eq!(resolve_proxy("/preview/ws-nope/x"), None, "unknown key");
         assert_eq!(resolve_proxy("/w/studio"), None, "non-preview path");
+
+        // The producer/reviewer hint reflects the live state: the same-origin URL and "running now".
+        let hint = preview_hint(&conn, "ws", &lane).expect("previewable → a hint");
+        assert!(
+            hint.contains(&format!("{}/", uri_for(&key))),
+            "hint names the URL: {hint}"
+        );
+        assert!(
+            hint.contains("running now"),
+            "hint reflects the live preview: {hint}"
+        );
+
+        // Develop staging for the same project starts under its own key, on its own pooled port,
+        // and is routable through the proxy just like the branch preview.
+        let staging = start_staging(&conn, "ws", &lane, &strategy, "site").expect("staging starts");
+        assert!(
+            staging.contains("is up at"),
+            "staging should come up: {staging}"
+        );
+        let staging_key = key_for("ws", staging_short("site"));
+        let staging_port = port_for(&staging_key).expect("staging recorded in the map");
+        assert_ne!(
+            staging_port, port,
+            "staging gets a port distinct from the branch preview"
+        );
+        assert_eq!(
+            resolve_proxy(&format!("/preview/{staging_key}/")),
+            Some((staging_port, uri_for(&staging_key)))
+        );
+        stop(&staging_key);
 
         stop(&key);
         std::thread::sleep(Duration::from_millis(600));
