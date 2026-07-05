@@ -314,22 +314,12 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             task_runs::list_for_task_attempt(conn, &task.id, task.attempt).unwrap_or_default();
         // What the task actually changed (G2): the reviewer judges the diff, not the prose.
         let mut diff = review_diff(conn, &task.id, &workspace_dir);
-        // Machine checks before model review (L1): the workspace's configured command runs
-        // in the lane; its capped output rides the prompt — lint/build/test verdicts come
-        // from machines, judgment from the reviewer.
-        let checks_cmd =
-            db::settings::get_or(conn, &super::files::checks_key(&task.workspace_id), "");
-        if !checks_cmd.trim().is_empty() {
-            let out = crate::tools::exec::run_in(
-                &super::exec_strategy_for(&workspace_dir),
-                &checks_cmd,
-                Duration::from_secs(CHECKS_TIMEOUT_SECS),
-            );
-            let capped: String = out.chars().take(CHECKS_CAP_CHARS).collect();
-            diff = Some(format!(
-                "{}\n\nMachine checks (`{checks_cmd}`):\n{capped}",
-                diff.unwrap_or_default()
-            ));
+        // Machine checks before model review (P1b): the per-repo CI already ran when the
+        // producer pass finished — surface its *recorded* results (not a re-run) so the
+        // reviewer judges with the same red/green the fail-fast loop saw. Lint/build/test
+        // verdicts come from machines; judgement from the reviewer.
+        if let Some(summary) = recorded_checks_summary(conn, &task.id) {
+            diff = Some(format!("{}\n\n{summary}", diff.unwrap_or_default()));
         }
         let mut messages = super::replay::validator_thread(
             &system_prompt,
@@ -495,9 +485,79 @@ fn env_lookup(key: &str) -> Option<String> {
 
 /// Cap on the diff injected into a validator prompt — stat + patch; `repo_diff` has the rest.
 const REVIEW_DIFF_CAP_CHARS: usize = 4_000;
-/// Machine checks (L1): wall-clock ceiling and prompt-output cap.
-const CHECKS_TIMEOUT_SECS: u64 = 180;
+/// The recorded CI results injected into a validator prompt (P1b) — cap so a long failure log
+/// doesn't crowd out the diff.
 const CHECKS_CAP_CHARS: usize = 2_000;
+/// Cap on fail-fast producer re-runs per iteration (P1b) — its own budget, separate from the
+/// reviewer's `max_iterations` so machine retries and reviewer retries stay independent.
+const MAX_CHECK_RETRIES: usize = 2;
+
+/// Run the pass's per-repo CI (P1b): the repos it committed, each judged by its kind's recipe
+/// in the task's lane. `pass_commits` is the `[{repo,sha}]` the sweep produced.
+fn run_pass_checks(
+    conn: &rusqlite::Connection,
+    task: &Task,
+    pass_commits: &[serde_json::Value],
+) -> Vec<crate::ci::CheckOutcome> {
+    let repos: Vec<String> = pass_commits
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .get("repo")
+                .and_then(|r| r.as_str())
+                .map(str::to_owned)
+        })
+        .collect();
+    if repos.is_empty() {
+        return Vec::new();
+    }
+    let root = super::requests::task_root(conn, &data_dir(), task);
+    let strategy = super::exec_strategy_for(&root);
+    crate::ci::run_for_repos(conn, &task.workspace_id, &root, &strategy, &repos)
+}
+
+/// The latest producer pass's recorded CI, formatted for the reviewer's prompt (P1b) — a
+/// one-line-per-check verdict plus red tails, capped. `None` when no pass recorded any checks.
+fn recorded_checks_summary(conn: &rusqlite::Connection, task_id: &str) -> Option<String> {
+    let runs = task_runs::list_for_task(conn, task_id).unwrap_or_default();
+    let latest = runs
+        .iter()
+        .rev()
+        .find(|run| run.role == "producer" && run.checks.is_some())?;
+    let outcomes = crate::ci::outcomes_from_json(latest.checks.as_deref());
+    if outcomes.is_empty() {
+        return None;
+    }
+    let mut summary = String::from("Machine checks (ran in the lane after this pass):");
+    for outcome in &outcomes {
+        let mark = if outcome.ok { "✓" } else { "✗" };
+        let where_ = if outcome.repo.is_empty() {
+            outcome.check.clone()
+        } else {
+            format!("{} ({})", outcome.check, outcome.repo)
+        };
+        summary.push_str(&format!("\n{mark} {where_}"));
+        if !outcome.ok && !outcome.tail.is_empty() {
+            summary.push_str(&format!("\n{}", outcome.tail));
+        }
+    }
+    Some(summary.chars().take(CHECKS_CAP_CHARS).collect())
+}
+
+/// This iteration's red-check producer passes so far (P1b) — the fail-fast counter, mirroring
+/// [`verdictless_reviews`]. Counts the just-recorded run, so the first red pass returns 1.
+fn check_retries(conn: &rusqlite::Connection, task: &Task) -> usize {
+    task_runs::list_for_task_attempt(conn, &task.id, task.attempt)
+        .unwrap_or_default()
+        .iter()
+        .filter(|run| {
+            run.role == "producer"
+                && run.position == task.step_position
+                && run.iteration == task.iteration
+                && !crate::ci::json_all_green(run.checks.as_deref())
+        })
+        .count()
+}
 
 /// What the task changed so far — its recorded bases against the (clean, post-commit) tree,
 /// stat + patch per repo, capped. `None` when nothing changed or the workspace has no repos.
@@ -602,11 +662,16 @@ fn verdictless_reviews(
 /// The produced-but-never-reviewed output of an attempt at `position`, if any — a pure
 /// decision, unit-tested. `Some` when the last successful producer/stage run at this step has
 /// no *verdict-bearing* validator run after it (a validator that failed in transit records
-/// `ok = 0` and no verdict — that's not a review, so the work still awaits one).
+/// `ok = 0` and no verdict — that's not a review, so the work still awaits one). A pass whose
+/// machine checks came back **red** is never resumed to review (P1b): it's re-produced, so a
+/// restart mid-fail-fast re-enters the producer rather than skipping to a doomed review.
 fn unreviewed_output(prior: &[crate::db::task_runs::TaskRun], position: i64) -> Option<&str> {
     let produced_at = prior.iter().rposition(|run| {
         run.ok && run.position == position && (run.role == "producer" || run.role == "stage")
     })?;
+    if !crate::ci::json_all_green(prior[produced_at].checks.as_deref()) {
+        return None;
+    }
     let reviewed = prior[produced_at + 1..]
         .iter()
         .any(|run| run.role == "validator" && run.verdict.is_some());
@@ -1029,6 +1094,16 @@ pub fn finished(
         }
     }
 
+    // Machine checks (P1b): after a producer pass commits, each touched repo's kind runs its
+    // CI recipe in the lane — the machine judgement the reviewer and the macro gate see, and
+    // the fail-fast signal below. Validators are read-only and never checked; a pass that
+    // committed nothing has nothing to check.
+    let check_outcomes = if matches!(role, RunRole::Producer) && !pass_commits.is_empty() {
+        run_pass_checks(conn, &task, &pass_commits)
+    } else {
+        Vec::new()
+    };
+
     // Record the run in the chain (context source + audit trail), pass commits included.
     if let Some(run_id) = run_id.as_deref() {
         let transcript = transcript_json(&invocations);
@@ -1036,6 +1111,11 @@ pub fn finished(
             None
         } else {
             serde_json::to_string(&pass_commits).ok()
+        };
+        let checks_json = if check_outcomes.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&check_outcomes).ok()
         };
         let _ = task_runs::append(
             conn,
@@ -1054,6 +1134,7 @@ pub fn finished(
                 attempt: task.attempt,
                 memory: memory.as_deref(),
                 commits: commits_json.as_deref(),
+                checks: checks_json.as_deref(),
             },
         );
     }
@@ -1070,8 +1151,23 @@ pub fn finished(
             _ => retry_or_fail(conn, shared, &task, &output),
         },
         RunRole::Producer => {
+            let red_passes = if ok { check_retries(conn, &task) } else { 0 };
             if !ok {
                 retry_or_fail(conn, shared, &task, &output);
+            } else if !crate::ci::all_green(&check_outcomes) && red_passes <= MAX_CHECK_RETRIES {
+                // Fail fast (P1b): machine checks are red — re-run the producer with the
+                // failure tail (surfaced by `producer_thread` from the recorded checks)
+                // instead of spending a reviewer round on what cargo already caught. Bounded
+                // by its own counter, separate from the reviewer's `max_iterations`. Past the
+                // cap the pass falls through to the normal review (the reviewer sees the red).
+                log_line(format!(
+                    "ci: {} checks red ({}) — re-running the producer (attempt {red_passes})",
+                    task.id,
+                    crate::ci::failed_names(&check_outcomes).join(", "),
+                ));
+                verdicts::relaunch(conn, &task);
+                super::tasks::project_if_active(conn, shared, &task.workspace_id);
+                super::tasks::refresh_detail_if_open(conn, shared, &task.id);
             } else if let Some(step) = &step {
                 let auto = verdicts::workspace_auto_approves(conn, &task.workspace_id);
                 match verdicts::gate_action(step.validator_kind.as_deref(), auto) {

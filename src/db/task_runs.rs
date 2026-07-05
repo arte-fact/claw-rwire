@@ -29,6 +29,9 @@ pub struct TaskRun {
     /// The pass commits the harness made for this run (G2): JSON `[{"repo","sha"}]`, or
     /// `None` — the anchor for per-pass diffs.
     pub commits: Option<String>,
+    /// The pass's CI outcomes (P1b): JSON `[{"repo","check","ok","tail"}]`, or `None` — the
+    /// machine judgement the reviewer and the macro gate see.
+    pub checks: Option<String>,
 }
 
 /// What a run produced, recorded after it finishes.
@@ -49,14 +52,16 @@ pub struct NewRun<'a> {
     pub memory: Option<&'a str>,
     /// The pass commits (JSON `[{"repo","sha"}]`) — producers/stages only.
     pub commits: Option<&'a str>,
+    /// The pass's CI outcomes (JSON `[{"repo","check","ok","tail"}]`) — producer passes only.
+    pub checks: Option<&'a str>,
 }
 
 pub fn append(conn: &Connection, run: &NewRun) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO task_runs
            (id, task_id, position, role, agent_id, output, verdict, feedback, iteration, ok,
-            transcript, attempt, memory_snapshot, commits, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+            transcript, attempt, memory_snapshot, commits, checks, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                  strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         params![
             run.id,
@@ -73,6 +78,7 @@ pub fn append(conn: &Connection, run: &NewRun) -> rusqlite::Result<()> {
             run.attempt,
             run.memory,
             run.commits,
+            run.checks,
         ],
     )?;
     Ok(())
@@ -84,7 +90,7 @@ pub fn append(conn: &Connection, run: &NewRun) -> rusqlite::Result<()> {
 pub fn list_for_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Vec<TaskRun>> {
     let mut stmt = conn.prepare(
         "SELECT id, position, role, agent_id, output, verdict, feedback, iteration, ok, \
-         transcript, attempt, created_at, memory_snapshot, commits
+         transcript, attempt, created_at, memory_snapshot, commits, checks
            FROM task_runs WHERE task_id = ?1 ORDER BY created_at ASC, id ASC",
     )?;
     let rows = stmt.query_map(params![task_id], from_row)?;
@@ -100,7 +106,7 @@ pub fn list_for_task_attempt(
 ) -> rusqlite::Result<Vec<TaskRun>> {
     let mut stmt = conn.prepare(
         "SELECT id, position, role, agent_id, output, verdict, feedback, iteration, ok, \
-         transcript, attempt, created_at, memory_snapshot, commits
+         transcript, attempt, created_at, memory_snapshot, commits, checks
            FROM task_runs WHERE task_id = ?1 AND attempt = ?2 ORDER BY created_at ASC, id ASC",
     )?;
     let rows = stmt.query_map(params![task_id, attempt], from_row)?;
@@ -128,7 +134,7 @@ pub fn recent_by_agent(
     let mut stmt = conn.prepare(
         "SELECT r.id, r.position, r.role, r.agent_id, r.output, r.verdict, r.feedback, \
          r.iteration, r.ok, r.transcript, r.attempt, r.created_at, r.memory_snapshot, \
-         r.commits, r.task_id, t.workspace_id, t.title
+         r.commits, r.checks, r.task_id, t.workspace_id, t.title
            FROM task_runs r JOIN tasks t ON t.id = r.task_id
           WHERE r.agent_id = ?1
           ORDER BY r.created_at DESC, r.id DESC
@@ -137,9 +143,9 @@ pub fn recent_by_agent(
     let rows = stmt.query_map(params![agent_id, limit as i64], |row| {
         Ok(AgentRun {
             run: from_row(row)?,
-            task_id: row.get(14)?,
-            workspace_id: row.get(15)?,
-            task_title: row.get(16)?,
+            task_id: row.get(15)?,
+            workspace_id: row.get(16)?,
+            task_title: row.get(17)?,
         })
     })?;
     rows.collect()
@@ -161,6 +167,7 @@ fn from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskRun> {
         created_at: row.get(11)?,
         memory: row.get(12)?,
         commits: row.get(13)?,
+        checks: row.get(14)?,
     })
 }
 
@@ -210,6 +217,7 @@ mod tests {
                 attempt: 0,
                 memory: None,
                 commits: None,
+                checks: None,
             },
         )
         .expect("r1");
@@ -230,6 +238,7 @@ mod tests {
                 attempt: 0,
                 memory: None,
                 commits: None,
+                checks: None,
             },
         )
         .expect("r2");
@@ -261,6 +270,7 @@ mod tests {
                 attempt: 0,
                 memory: Some("Last task — \"Build\" (done)\nknows the layout"),
                 commits: None,
+                checks: None,
             },
         )
         .expect("r1");
@@ -293,6 +303,7 @@ mod tests {
                 attempt,
                 memory: None,
                 commits: None,
+                checks: None,
             }
         }
         append(&conn, &run("a0", 0)).expect("a0");
@@ -325,6 +336,7 @@ mod tests {
                     attempt: 0,
                     memory: None,
                     commits: None,
+                    checks: None,
                 },
             )
             .expect(id);

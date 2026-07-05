@@ -11,6 +11,14 @@ use rusqlite::Connection;
 
 use crate::db::settings;
 
+/// One machine check in a kind's CI recipe (P1b): a stable `name` (the badge label + the
+/// key results are stored under) and the shell `command` that judges the repo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckSpec {
+    pub name: &'static str,
+    pub command: &'static str,
+}
+
 /// What a project *is*, and therefore how it's checked, previewed, and prompted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectKind {
@@ -49,6 +57,30 @@ impl ProjectKind {
             "docs" => Some(Self::Docs),
             "other" => Some(Self::Other),
             _ => None,
+        }
+    }
+
+    /// The CI recipe a repo of this kind is judged by (P1b) — the machine checks run after a
+    /// producer pass, before the model reviewer. Rust kinds get the cargo trio; non-cargo
+    /// stacks return nothing here and rely on the per-repo `checks` override (the escape hatch).
+    #[must_use]
+    pub fn checks(self) -> &'static [CheckSpec] {
+        match self {
+            Self::RwireApp | Self::RustBin => &[
+                CheckSpec {
+                    name: "fmt",
+                    command: "cargo fmt --check",
+                },
+                CheckSpec {
+                    name: "clippy",
+                    command: "cargo clippy --all-targets -- -D warnings",
+                },
+                CheckSpec {
+                    name: "test",
+                    command: "cargo test",
+                },
+            ],
+            Self::NodeApp | Self::Docs | Self::Other => &[],
         }
     }
 
@@ -222,6 +254,23 @@ mod tests {
                 .contains("clippy")
         );
         assert!(ProjectKind::Docs.prompt_layer().is_none());
+    }
+
+    #[test]
+    fn rust_kinds_carry_the_cargo_recipe_others_none() {
+        let cargo: Vec<&str> = ProjectKind::RustBin
+            .checks()
+            .iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(cargo, ["fmt", "clippy", "test"]);
+        assert_eq!(
+            ProjectKind::RwireApp.checks(),
+            ProjectKind::RustBin.checks()
+        );
+        assert!(ProjectKind::NodeApp.checks().is_empty());
+        assert!(ProjectKind::Docs.checks().is_empty());
+        assert!(ProjectKind::Other.checks().is_empty());
     }
 
     #[test]

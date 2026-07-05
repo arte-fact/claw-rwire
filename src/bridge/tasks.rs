@@ -773,6 +773,7 @@ mod tests {
                 attempt: 0,
                 memory: None,
                 commits: None,
+                checks: None,
             },
         )
         .expect("run");

@@ -5,6 +5,7 @@
 mod agent;
 mod auth;
 mod bridge;
+mod ci;
 mod db;
 mod diff;
 mod env_file;

@@ -80,6 +80,7 @@ fn apply_schema(conn: &Connection) -> Result<(), DbError> {
 /// idempotent, so this runs safely on every open. rust-claw never reads these tables.
 fn migrate(conn: &Connection) -> Result<(), DbError> {
     add_task_run_commits_column(conn).map_err(DbError::Schema)?;
+    add_task_run_checks_column(conn).map_err(DbError::Schema)?;
     add_task_request_column(conn).map_err(DbError::Schema)?;
     add_request_validation_column(conn).map_err(DbError::Schema)?;
     add_workspace_owner_column(conn).map_err(DbError::Schema)?;
@@ -111,6 +112,16 @@ fn add_request_validation_column(conn: &Connection) -> rusqlite::Result<()> {
 /// it. A fresh DB already has it from the schema — "duplicate column" is ignored.
 fn add_task_run_commits_column(conn: &Connection) -> rusqlite::Result<()> {
     match conn.execute("ALTER TABLE task_runs ADD COLUMN commits TEXT", []) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Add `task_runs.checks` (the pass's CI outcomes, P1b) to a DB that predates it. A fresh DB
+/// already has it from the schema — "duplicate column" is ignored.
+fn add_task_run_checks_column(conn: &Connection) -> rusqlite::Result<()> {
+    match conn.execute("ALTER TABLE task_runs ADD COLUMN checks TEXT", []) {
         Ok(_) => Ok(()),
         Err(err) if is_duplicate_column(&err) => Ok(()),
         Err(err) => Err(err),

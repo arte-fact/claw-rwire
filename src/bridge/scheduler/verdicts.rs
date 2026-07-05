@@ -210,6 +210,7 @@ pub(super) fn auto_pass_gate(
                 attempt: task.attempt,
                 memory: None,
                 commits: None,
+                checks: None,
             },
         );
     }
@@ -464,6 +465,7 @@ pub fn human_verdict(
                 attempt: task.attempt,
                 memory: None,
                 commits: None,
+                checks: None,
             },
         );
     }

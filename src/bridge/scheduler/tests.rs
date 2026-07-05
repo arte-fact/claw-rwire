@@ -26,6 +26,7 @@ fn resume_run(
         created_at: String::new(),
         memory: None,
         commits: None,
+        checks: None,
     }
 }
 
@@ -57,6 +58,19 @@ fn unreviewed_output_resumes_only_when_the_work_awaits_a_verdict() {
     assert_eq!(unreviewed_output(&prior, 0), Some("v2"));
     // A different step's output doesn't resume this step.
     assert_eq!(unreviewed_output(&prior, 1), None);
+}
+
+#[test]
+fn unreviewed_output_never_resumes_a_red_check_pass() {
+    // A produced-but-unreviewed pass whose machine checks came back red is re-produced, not
+    // resumed to a doomed review (P1b fail-fast survives a restart).
+    let mut red = resume_run("producer", true, None, "the work");
+    red.checks = Some(r#"[{"repo":"","check":"clippy","ok":false,"tail":"error"}]"#.to_owned());
+    assert_eq!(unreviewed_output(&[red], 0), None);
+    // Green checks on an unreviewed pass still resume to review as before.
+    let mut green = resume_run("producer", true, None, "the work");
+    green.checks = Some(r#"[{"repo":"","check":"clippy","ok":true,"tail":""}]"#.to_owned());
+    assert_eq!(unreviewed_output(&[green], 0), Some("the work"));
 }
 
 #[test]
@@ -288,6 +302,7 @@ fn verdictless_reviews_counts_only_this_iterations_inconclusive_ones() {
             created_at: String::new(),
             memory: None,
             commits: None,
+            checks: None,
         };
     let prior = vec![
         run("producer", 1, 0, None, true),  // producers never count

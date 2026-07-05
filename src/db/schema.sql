@@ -288,6 +288,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   attempt     INTEGER NOT NULL DEFAULT 0,   -- the task.attempt this run belongs to (restart isolation)
   memory_snapshot TEXT,                     -- the memory layer the run launched with (R3.5 M4 provenance)
   commits         TEXT,                     -- the pass commits the harness made (G2): JSON [{"repo","sha"}]
+  checks          TEXT,                     -- the pass's CI outcomes (P1b): JSON [{"repo","check","ok","tail"}]
   created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs ON task_runs(task_id, id);

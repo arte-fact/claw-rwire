@@ -86,6 +86,12 @@ pub(super) fn producer_thread(
             "producer" | "stage" if run.ok => {
                 msgs.extend(replay_run(run, run_idx));
                 run_idx += 1;
+                // Fail-fast feedback (P1b): a pass whose machine checks came back red re-runs
+                // the producer — surface those failures as a user turn so the re-run fixes
+                // them rather than rediscovering the breakage.
+                if let Some(feedback) = crate::ci::red_feedback(run.checks.as_deref()) {
+                    msgs.push(ChatMessage::text(Role::User, feedback));
+                }
             }
             "validator" if run.verdict.as_deref() == Some("revise") => {
                 if let Some(feedback) = run
@@ -256,6 +262,7 @@ mod tests {
             created_at: String::new(),
             memory: None,
             commits: None,
+            checks: None,
         }
     }
 
