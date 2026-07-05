@@ -67,3 +67,10 @@ the app never used.
       nits, each cancelling dependents and demanding a manual restart.
 - [x] Validator prompt spells out the consequences (reject ends the task AND cancels
       dependents; fixable flaws are ALWAYS revise; when in doubt, revise)
+
+### M3 — empire repo bloat (fixed 2026-07-05, ops)
+- [x] Untracked `frontend/node_modules` (3,630 files) from the empire repo on develop —
+      files stay on disk for builds; the sweep's ignore re-assertion keeps them out
+- [x] `git gc`: 4,219 loose objects packed, .git 38M → 18M. Residual: historical
+      commits still carry the blobs (history rewrite deliberately avoided — it would
+      invalidate delivered request/merge SHAs)
