@@ -161,6 +161,7 @@ fn build_detail(conn: &Connection, request_id: &str) -> Option<RequestDetail> {
             is_plan: task.is_plan,
         })
         .collect();
+    let (checks, checks_ok) = request_checks_summary(conn, request_id);
     let repos = db::requests::repos_for(conn, &request.id).unwrap_or_default();
     let (diff_stat, diff_patch) = global_diff(&root, &repos);
     let repos = repos
@@ -191,10 +192,46 @@ fn build_detail(conn: &Connection, request_id: &str) -> Option<RequestDetail> {
         diff_stat,
         diff_patch,
         validation: request.validation.unwrap_or_default(),
+        checks,
+        checks_ok,
         has_remote,
         asked_at: stamp(&request.created_at),
         updated_at: stamp(&request.updated_at),
     })
+}
+
+/// The request's latest machine-check outcomes (P1b): each task's most recent checked producer
+/// pass, unioned — the CI verdict the macro gate and the request page read.
+pub(crate) fn request_checks(conn: &Connection, request_id: &str) -> Vec<crate::ci::CheckOutcome> {
+    let mut outcomes = Vec::new();
+    for task in db::tasks::list_for_request(conn, request_id).unwrap_or_default() {
+        let runs = db::task_runs::list_for_task(conn, &task.id).unwrap_or_default();
+        if let Some(latest) = runs
+            .iter()
+            .rev()
+            .find(|run| run.role == "producer" && run.checks.is_some())
+        {
+            outcomes.extend(crate::ci::outcomes_from_json(latest.checks.as_deref()));
+        }
+    }
+    outcomes
+}
+
+/// The request's CI summary line + gate signal (P1b): `("", None)` when nothing was checked,
+/// `("✓ checks green", Some(true))` when all-green, `("✗ clippy, test", Some(false))` on red.
+fn request_checks_summary(conn: &Connection, request_id: &str) -> (String, Option<bool>) {
+    let outcomes = request_checks(conn, request_id);
+    if outcomes.is_empty() {
+        return (String::new(), None);
+    }
+    if crate::ci::all_green(&outcomes) {
+        (format!("✓ {} checks green", outcomes.len()), Some(true))
+    } else {
+        (
+            format!("✗ {}", crate::ci::failed_names(&outcomes).join(", ")),
+            Some(false),
+        )
+    }
 }
 
 /// The board rail's cards: every open request of the workspace, oldest first.

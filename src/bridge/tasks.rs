@@ -105,6 +105,7 @@ pub(super) fn run_view(
         memory: run.memory.unwrap_or_default(),
         diff: String::new(),
         diff_files: Vec::new(),
+        checks: Vec::new(),
     }
 }
 
@@ -143,9 +144,11 @@ fn build_detail(conn: &rusqlite::Connection, task_id: &str) -> Option<crate::sta
                 // plus the touched files as restore handles (G3).
                 let diff = super::requests::pass_diff(&root, run.commits.as_deref());
                 let files = restorable_files(&root, &task, run.commits.as_deref());
+                let checks = check_badges(run.checks.as_deref());
                 let mut view = run_view(&names, run);
                 view.diff = diff;
                 view.diff_files = files;
+                view.checks = checks;
                 view
             })
             .collect();
@@ -206,6 +209,23 @@ pub fn refresh_detail_if_open(
     );
     // A task lifecycle change may also belong to the agent whose thread is open — keep it live.
     super::agent_thread::refresh_if_open(conn, shared);
+}
+
+/// A run's recorded CI outcomes as badge view-models (P1b), qualifying a project check by its
+/// repo. Empty when the run ran no checks.
+fn check_badges(checks_json: Option<&str>) -> Vec<crate::state::CheckBadgeView> {
+    crate::ci::outcomes_from_json(checks_json)
+        .into_iter()
+        .map(|outcome| crate::state::CheckBadgeView {
+            label: if outcome.repo.is_empty() {
+                outcome.check
+            } else {
+                format!("{} ({})", outcome.check, outcome.repo)
+            },
+            ok: outcome.ok,
+            tail: outcome.tail,
+        })
+        .collect()
 }
 
 /// The files a run's pass commits touched, each addressable for a pre-pass restore (G3).

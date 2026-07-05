@@ -7,7 +7,7 @@
 
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, St, el, handler};
-use rwire_components::Text;
+use rwire_components::{Badge, BadgeFill, BadgeIntent, BadgeShape, Text};
 use serde_json::Value;
 
 use crate::diff::{DiffKind, line_diff};
@@ -127,6 +127,72 @@ pub(crate) fn diff_row(
         None,
         body,
     )
+}
+
+/// A pass's machine checks (P1b) as a badge strip — one square outline badge per check,
+/// green `✓` / red `✗` — the machine verdict at a glance. Red checks with a failure tail add a
+/// disclosure below revealing the tails (the signature the reviewer/operator expands).
+pub(crate) fn checks_row(
+    checks: &[crate::state::CheckBadgeView],
+    key: &str,
+    toggled: &[String],
+) -> ElementBuilder {
+    let badges: Vec<ElementBuilder> = checks
+        .iter()
+        .map(|check| {
+            let intent = if check.ok {
+                BadgeIntent::Success
+            } else {
+                BadgeIntent::Error
+            };
+            let mark = if check.ok { "✓" } else { "✗" };
+            Badge::new()
+                .shape(BadgeShape::Square)
+                .fill(BadgeFill::Outline)
+                .intent(intent)
+                .text(format!("{mark} {}", check.label))
+                .build()
+        })
+        .collect();
+    let strip = el(El::Div)
+        .st([St::DisplayFlex, St::FlexWrap, St::GapXs, St::ItemsCenter])
+        .append(badges);
+    let tails = checks
+        .iter()
+        .filter(|check| !check.ok && !check.tail.is_empty())
+        .map(|check| format!("### {}\n{}", check.label, check.tail))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if tails.is_empty() {
+        return el(El::Div).st([St::PySm]).append([strip]);
+    }
+    let open = toggled.iter().any(|t| t == key);
+    let body = open.then(|| {
+        el(El::Div)
+            .st([
+                St::PSm,
+                St::BgApp,
+                St::OverflowXAuto,
+                St::WhitespacePreWrap,
+                St::BreakWords,
+                St::TextXs,
+                St::TextError,
+            ])
+            .text(&tails)
+    });
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::PySm])
+        .append([
+            strip,
+            disclosure_row(
+                key,
+                open,
+                "checks",
+                "machine checks — failure detail",
+                None,
+                body,
+            ),
+        ])
 }
 
 /// The shared disclosure-row scaffold: a full-width toggle header (caret + name + a truncated
@@ -533,6 +599,7 @@ mod tests {
             memory: String::new(),
             diff: String::new(),
             diff_files: Vec::new(),
+            checks: Vec::new(),
         }
     }
 

@@ -179,6 +179,14 @@ pub(crate) fn run_entry(
             toggled,
         ));
     }
+    if !run.checks.is_empty() {
+        // The machine verdict on this pass (P1b) — a badge strip, red tails behind a disclosure.
+        body.push(crate::ui::run_chain::checks_row(
+            &run.checks,
+            &format!("{key}.checks"),
+            toggled,
+        ));
+    }
     body.extend(run.tools.iter().enumerate().map(|(index, tool)| {
         crate::ui::run_chain::tool_row(tool, &format!("{key}.{index}"), toggled)
     }));

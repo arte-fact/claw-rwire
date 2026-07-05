@@ -462,6 +462,20 @@ pub struct RunView {
     /// The memory layer the run launched with (R3.5 M4 provenance), or empty — the Peek shows
     /// it so "why did it do that?" has an answer.
     pub memory: String,
+    /// The pass's machine-check outcomes (P1b) — a badge row on the run entry; empty for a
+    /// pass that ran no checks (validators, or a pass that committed nothing).
+    pub checks: Vec<CheckBadgeView>,
+}
+
+/// One machine check's outcome for the run entry's badge row (P1b): the label + pass/fail,
+/// with the failure tail riding along for a red check's disclosure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckBadgeView {
+    /// `fmt` for a meta-repo check, `clippy (projects/empire)` for a project check.
+    pub label: String,
+    pub ok: bool,
+    /// The failure tail (empty when green).
+    pub tail: String,
 }
 
 /// A task's detail view: its spec, status, and the full run chain (the audit trail).
@@ -835,6 +849,10 @@ pub struct RequestDetail {
     pub diff_patch: String,
     /// The macro-validation verdict + feedback (G3), empty before validation ran.
     pub validation: String,
+    /// The request's latest CI summary (P1b): `✓ checks green` / `✗ clippy, test`, empty when
+    /// no task ran checks. `checks_ok` is the gate signal (`None` = nothing checked).
+    pub checks: String,
+    pub checks_ok: Option<bool>,
     /// Whether any touched repo has a remote — shows the (explicit, gated) Push control.
     pub has_remote: bool,
     /// `MM-DD HH:MM` stamps for the history panel: asked at / last status change.

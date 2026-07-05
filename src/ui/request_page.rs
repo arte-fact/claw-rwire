@@ -26,6 +26,21 @@ fn body(app: &App) -> ElementBuilder {
     // the git reality on the right (branch, repos, history); phones stack them. The full
     // diff keeps the page's bottom at full width, one disclosure per file.
     let mut story = vec![ask_block(detail)];
+    if !detail.checks.is_empty() {
+        // The machine verdict on the request's latest passes (P1b) — green reassures, red
+        // names the failing checks the macro gate blocks auto-delivery on.
+        let color = if detail.checks_ok == Some(false) {
+            St::TextError
+        } else {
+            St::TextSuccess
+        };
+        story.push(section(
+            "Checks",
+            el(El::Div)
+                .st([St::TextSm, color, St::WhitespacePreWrap, St::BreakWords])
+                .text(&detail.checks),
+        ));
+    }
     if !detail.validation.is_empty() {
         story.push(section(
             "Validation",
