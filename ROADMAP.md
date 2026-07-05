@@ -281,28 +281,41 @@ Commits `b73b43b` (core), `860408f` (structured results), `b1542ca` (macro gate)
 
 ## P3 — rwire specialization: the flagship kind
 
-- [ ] **Jailed `clone` tool** (harvested G0.5 — the real workflow arrived): a dedicated
-      tool cloning a URL or local path into `projects/<name>` with the hermetic git env,
-      depth/pin options, symlink-guarded destination. Feeds the template below and ends
-      the "agents improvise clones via bash" era.
-      *Site*: `tools/repo.rs` (alongside repo_status/log/diff), concierge + producer
-      toolboxes.
-- [ ] **Workspace template "rwire app"** = create workspace + register an `rwire-app`
-      kind project (P1 machinery); instantiation = scaffold skeleton (`Cargo.toml` with the framework as a **pinned
-      sovereign clone** at `projects/rwire` + path dep, `src/main.rs` hello-app),
-      `STANDARDS.md` rwire section (St tokens, components-first, no raw attrs, no
-      hand-rolled chips), CI defaults on, preview command preset.
-      *Site*: `bridge/seed.rs`-style template module + dashboard UI.
-- [ ] **Skill seeding**: copy the framework clone's `SKILL.md` into `skills/rwire.md` at
-      instantiation and on clone re-pin — agents read the guide the operator maintains;
-      the docs-manifest (L3) already advertises it every turn.
-- [ ] **The dogfood loop, explicit**: template `docs/rwire-gaps.md`; validator standards
-      say "framework friction goes in the gaps doc, never worked around by re-styling";
-      operator triages gaps upstream (Breadcrumb/Progress precedent), re-pins the clone.
-- [ ] **Success metric (the P3 live-verify)**: a fresh "build me an X" ask in an
-      rwire-template workspace ships a previewable app with **zero operator touches**
-      between plan approval and Deliver — plan gate and Deliver click stay human by
-      design; everything between is agents + machines.
+> **Template shipped 2026-07-05** (claw `af8c7de`; rwire published to GitHub `b887594`).
+> **Operator decision — the git dep supersedes the sovereign clone:** the scaffolded app declares
+> rwire as a **public GitHub git dep** (`rwire = { git = "https://github.com/arte-fact/rwire",
+> branch = "main" }`) instead of a copied `projects/rwire` clone — an isola lane fetches it
+> anonymously over https (no creds in the sandbox), and there is no clone to keep in sync (the
+> stale-clone problem dissolves). `src/bridge/template.rs` (the justified 5th module, `WorkspaceTemplate`
+> + `scaffold_rwire_app`) scaffolds a previewable `projects/hello` counter wiring the preview
+> contract (`CLAW_BIND` + `CLAW_PREVIEW_BASE` → `.base_path`, committed on `develop`), the bundled
+> rwire `skills/rwire.md` (`include_str!` from `../rwire`), rwire `STANDARDS.md` with the dogfood
+> rule, and `docs/rwire-gaps.md`; kind/CI/preview follow automatically from the git-dep manifest
+> (`RwireApp` detection matches a git-dep line). The dashboard create form gained a Blank / rwire-app
+> `Select`. **Deterministically live-verified (no agent):** the picker scaffolded the tree, the isola
+> lane fetched+compiled rwire from GitHub anonymously (`Compiling rwire … github.com/arte-fact/rwire?branch=main#b887594`),
+> and the git-dep-built binary served with `const BASE='/preview/…'` + a BASE-prefixed WebSocket —
+> the paved road end to end (the verify caught + fixed a skeleton compile bug before it could ship).
+
+- [ ] **Jailed `clone` tool** — **DEFERRED** (operator, 2026-07-05): the git dep removes its rwire
+      use case; add it when agents need to pull *other* repos. *Site (when built)*: `tools/repo.rs`.
+- [x] **Workspace template "rwire app"** (2026-07-05): the dashboard picker creates the workspace and
+      `scaffold_rwire_app` lays the paved road — `projects/hello` skeleton (git-dep `Cargo.toml` +
+      base-path `main.rs`, committed on `develop`), rwire `STANDARDS.md`, CI + preview automatic from
+      the kind. *Site*: `src/bridge/template.rs` + `ui/dashboard.rs` + `admin.rs`. `auto_approve` stays
+      off — the plan gate is human by design.
+- [x] **Skill seeding** (2026-07-05): the framework `SKILL.md` is bundled into claw at build time and
+      written to `skills/rwire.md`; the AGENT.md brief + STANDARDS point agents at it. (Re-pin story
+      simplified: with a git dep tracking `main`, updating the guide is a claw rebuild, not a clone
+      re-pin. The L3 docs-manifest advertises `docs/` only, so surfacing is via the brief pointer.)
+- [x] **The dogfood loop, explicit** (2026-07-05): the template ships `docs/rwire-gaps.md`; the rwire
+      `STANDARDS.md` carries the rule ("framework friction goes in the gaps doc, never worked around
+      by re-styling"). Operator triages gaps upstream (Breadcrumb/Progress precedent) and bumps the
+      pinned rwire.
+- [ ] **Success metric (the P3 live-verify)** — reachable now, awaits a real run: a fresh "build me an
+      X" ask in an rwire-template workspace ships a previewable app with **zero operator touches**
+      between plan approval and Deliver. The deterministic pieces (scaffold → git-dep build → base-path
+      preview) are all green; this box needs one agent-driven request to Deliver.
 
 ## Backlog (harvested, scheduled by pull)
 
