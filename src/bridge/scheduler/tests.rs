@@ -301,3 +301,26 @@ fn verdictless_reviews_counts_only_this_iterations_inconclusive_ones() {
     assert_eq!(super::verdictless_reviews(&prior, 1, 1), 1);
     assert_eq!(super::verdictless_reviews(&prior, 2, 0), 0);
 }
+
+#[test]
+fn agent_rejects_are_bounded_revises_only_humans_end_tasks() {
+    use super::verdicts::{VerdictAction, verdict_action};
+    assert_eq!(verdict_action("pass", false), VerdictAction::Pass);
+    assert_eq!(
+        verdict_action("reject", true),
+        VerdictAction::TerminalReject
+    );
+    assert_eq!(
+        verdict_action("reject", false),
+        VerdictAction::Revise { severe: true },
+        "an agent's reject is severe feedback, not a decision"
+    );
+    assert_eq!(
+        verdict_action("revise", false),
+        VerdictAction::Revise { severe: false }
+    );
+    assert_eq!(
+        verdict_action("gibberish", false),
+        VerdictAction::Revise { severe: false }
+    );
+}

@@ -59,3 +59,11 @@ the app never used.
 - [x] Toast queue (rwire `Toast`): surface()d failures stack bottom-right on every page, capped at 5, per-toast dismiss; App.error stays the admin forms inline channel. Later:
       scheduler/gitops background errors surfaced somewhere visible (Activity feed shows
       lifecycle, not errors); error taxonomy (user-actionable vs telemetry)
+
+### M2 — reject calibration (fixed 2026-07-05)
+- [x] An agent validator's `reject` routes as a **severe revise** (bounded by the loop,
+      feedback prefixed with its severity); only a human's reject — direct or at the
+      exhaust gate — ends a task. Live cost it closes: two terminal rejects over fixable
+      nits, each cancelling dependents and demanding a manual restart.
+- [x] Validator prompt spells out the consequences (reject ends the task AND cancels
+      dependents; fixable flaws are ALWAYS revise; when in doubt, revise)

@@ -57,9 +57,11 @@ giving up. Judge correctness, completeness, and adherence to the workspace's con
 check that the work actually builds: look for evidence the producer ran the project's build and \
 tests and they passed — if there's no such evidence, or it shows failures, that's a `revise`, not \
 a `pass`. Always record your decision by calling the `verdict` tool exactly once: `pass` if it \
-meets the spec, `revise` with concrete, actionable feedback if it needs another pass, or `reject` \
-if it's unrecoverable. State your decision through the tool, never only in prose. Be specific and \
-fair; don't rewrite the work yourself.";
+meets the spec, `revise` with concrete, actionable feedback if it needs another pass, or `reject` ONLY \
+when the task itself is impossible or the work must be thrown away entirely — a reject ends the \
+task and cancels everything depending on it, so a fixable flaw (a wrong name, a missing wire-up, \
+a failing test) is ALWAYS `revise`, never `reject`. When in doubt, revise. State your decision \
+through the tool, never only in prose. Be specific and fair; don't rewrite the work yourself.";
 
 /// Role preamble for an **owner planning turn** — turning a delegated request into task cards.
 /// The owner plans; it does not do the work in this turn.

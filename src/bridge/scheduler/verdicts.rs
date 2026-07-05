@@ -31,8 +31,8 @@ pub(super) fn route_verdict(
             "(the reviewer returned no verdict)".to_owned(),
         )
     });
-    match decision.as_str() {
-        "pass" => match next_action(task.step_position, steps.len(), true) {
+    match verdict_action(&decision, by_human) {
+        VerdictAction::Pass => match next_action(task.step_position, steps.len(), true) {
             Next::Advance(next_position) => advance_to(conn, shared, task, next_position),
             _ => terminal_finish(
                 conn,
@@ -42,8 +42,20 @@ pub(super) fn route_verdict(
                 &super::last_producer_output(conn, &task.id),
             ),
         },
-        "reject" => terminal_finish(conn, shared, task, TaskStatus::Rejected, &feedback),
-        _ => {
+        VerdictAction::TerminalReject => {
+            terminal_finish(conn, shared, task, TaskStatus::Rejected, &feedback)
+        }
+        VerdictAction::Revise { severe } => {
+            // An agent's reject is severe feedback, not a decision (M2 of docs/levers.md):
+            // reviewers miscalibrate — live, two terminal rejects over fixable nits each
+            // cancelled the dependents and demanded a manual restart. It re-enters the
+            // bounded revise loop carrying its severity; only a human ends a task, either
+            // directly (by_human reject) or at the exhaust gate.
+            let feedback = if severe {
+                format!("(the reviewer judged this unsalvageable) {feedback}")
+            } else {
+                feedback
+            };
             // revise: re-run the producer. A human reviewer (gate step, or a person resolving an
             // escalation) is never capped — they decide when to stop; an agent validator is bounded
             // by `max_iterations`, then on-exhaust.
@@ -110,6 +122,24 @@ pub(super) fn route_verdict(
                 park_awaiting(conn, shared, task, Some(&reason));
             }
         }
+    }
+}
+
+/// How a verdict routes — a pure decision, unit-tested. A person's `reject` is terminal;
+/// an agent's `reject` is a severe `revise` (bounded by the loop, ended only by a human).
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum VerdictAction {
+    Pass,
+    TerminalReject,
+    Revise { severe: bool },
+}
+
+pub(super) fn verdict_action(decision: &str, by_human: bool) -> VerdictAction {
+    match decision {
+        "pass" => VerdictAction::Pass,
+        "reject" if by_human => VerdictAction::TerminalReject,
+        "reject" => VerdictAction::Revise { severe: true },
+        _ => VerdictAction::Revise { severe: false },
     }
 }
 
