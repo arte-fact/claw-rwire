@@ -159,19 +159,28 @@ pub fn upsert_agent(
     project_registry(conn, shared);
 }
 
-/// Create a new workspace (the dashboard's create affordance), minting an id.
-pub fn create_workspace(conn: &rusqlite::Connection, shared: &SharedServerState, name: &str) {
+/// Create a new workspace (the dashboard's create affordance), minting an id. When `template`
+/// is `RwireApp`, lay down the paved-road skeleton (framework git dep, previewable hello app,
+/// rwire standards + skill guide) before re-projecting.
+pub fn create_workspace(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    name: &str,
+    template: super::WorkspaceTemplate,
+) {
     let name = name.trim();
     if name.is_empty() {
         return surface_error(shared, "workspace name can't be empty".to_owned());
     }
-    match crate::id::new_id() {
-        Ok(id) => {
-            if let Err(err) = workspaces::create(conn, &id, name) {
-                return surface_error(shared, format!("create workspace: {err}"));
-            }
-        }
+    let id = match crate::id::new_id() {
+        Ok(id) => id,
         Err(err) => return surface_error(shared, format!("create workspace: {err}")),
+    };
+    if let Err(err) = workspaces::create(conn, &id, name) {
+        return surface_error(shared, format!("create workspace: {err}"));
+    }
+    if template == super::WorkspaceTemplate::RwireApp {
+        super::template::scaffold_rwire_app(&super::data_dir(), &id, name);
     }
     project_registry(conn, shared);
 }

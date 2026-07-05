@@ -36,6 +36,8 @@ mod seed;
 mod steer;
 pub(crate) use tasks::status_digest;
 mod tasks;
+mod template;
+pub(crate) use template::WorkspaceTemplate;
 mod workflow;
 
 use crate::agent;
@@ -99,9 +101,11 @@ pub enum Command {
         id: String,
     },
     // ── Workspace management (the workspace Team tab + the dashboard's create) ──
-    /// Create a new workspace named `name` (the dashboard's create affordance).
+    /// Create a new workspace named `name` (the dashboard's create affordance). `template`
+    /// picks the starter — `Blank` (bare scaffold) or `RwireApp` (the paved-road skeleton).
     CreateWorkspace {
         name: String,
+        template: WorkspaceTemplate,
     },
     /// Rename a workspace (its Team tab).
     RenameWorkspace {
@@ -587,7 +591,9 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadAgentPrompt { id } => admin::load_agent_prompt(conn, shared, &id),
         Command::LoadAgentTools { id } => admin::load_agent_tools(conn, shared, &id),
         Command::SetWebAgent { id } => admin::set_web_agent(conn, shared, &id),
-        Command::CreateWorkspace { name } => admin::create_workspace(conn, shared, &name),
+        Command::CreateWorkspace { name, template } => {
+            admin::create_workspace(conn, shared, &name, template)
+        }
         Command::RenameWorkspace { id, name } => admin::rename_workspace(conn, shared, &id, &name),
         Command::SetWorkspaceOwner { id, owner } => {
             admin::set_workspace_owner(conn, shared, &id, owner)

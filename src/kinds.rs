@@ -225,6 +225,19 @@ mod tests {
     }
 
     #[test]
+    fn detects_rwire_via_git_dep() {
+        // The rwire-app template declares the framework as a GitHub git dep, not a path clone.
+        let dir = scratch("rwire-git");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"x\"\n\n[dependencies]\n\
+             rwire = { git = \"https://github.com/arte-fact/rwire\", branch = \"main\" }\n",
+        )
+        .unwrap();
+        assert_eq!(detect(&dir), ProjectKind::RwireApp);
+    }
+
+    #[test]
     fn detects_plain_rust_and_node_and_other() {
         let rust = scratch("rust");
         std::fs::write(rust.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();

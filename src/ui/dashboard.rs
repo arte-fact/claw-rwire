@@ -5,9 +5,9 @@
 use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
-use rwire_components::{Input, Text};
+use rwire_components::{Input, Select, Text};
 
-use crate::bridge::{self, Command};
+use crate::bridge::{self, Command, WorkspaceTemplate};
 use crate::state::{App, WorkspaceView};
 use crate::ui::widgets::{page_header, submit};
 
@@ -38,6 +38,12 @@ fn create_form() -> ElementBuilder {
                 .name("name")
                 .placeholder("New workspace…")
                 .build(),
+            Select::new()
+                .name("template")
+                .option(WorkspaceTemplate::Blank.slug(), "Blank")
+                .option(WorkspaceTemplate::RwireApp.slug(), "rwire app")
+                .value(WorkspaceTemplate::Blank.slug())
+                .build(),
             submit("Create"),
         ])
 }
@@ -46,8 +52,9 @@ fn create_form() -> ElementBuilder {
 fn create(app: &mut App, ctx: &EventContext) {
     let _ = app;
     let name = ctx.field("name").unwrap_or_default().trim().to_owned();
+    let template = WorkspaceTemplate::from_slug(ctx.field("template").unwrap_or_default());
     if !name.is_empty() {
-        bridge::send(Command::CreateWorkspace { name });
+        bridge::send(Command::CreateWorkspace { name, template });
     }
 }
 
