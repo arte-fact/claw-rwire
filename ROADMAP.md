@@ -172,20 +172,31 @@ Commits `b73b43b` (core), `860408f` (structured results), `b1542ca` (macro gate)
 
 ## P2 — CD: every branch a URL (the request model completes)
 
-- [ ] **Preview supervisor — in-memory, no table**: previews are process state and
-      processes die with the server, so the supervisor is a bridge-owned map
-      (`(workspace, repo) → {port, child, kind}`), ports from `CLAW_PREVIEW_PORTS`
-      in `.env`, health = TCP/HTTP probe with a deadline. Stop on deliver/abandon (the
-      tree-teardown seam); boot recovery = the map starts empty and staging relaunches
-      lazily on first hit (the macro-review recovery pattern, simpler: nothing to scan).
-      Start = run the project's kind command **from the request's tree** under isola,
-      reusing the P1b build artifact.
-      *Site*: new `src/bridge/preview.rs` only; hooks in `requests/{mod,control}.rs`.
-- [ ] **How a preview knows what to run**: the project's kind supplies the command
-      (rwire-app: `cargo run --release`; node-app: `npm start`; override on the project
-      row), with `CLAW_BIND=127.0.0.1:<port>` + `CLAW_PREVIEW_BASE` injected via env.
-- [ ] **`preview` tool**: a producer starts/restarts its project's preview mid-task and
-      gets the URI back — the debug loop as a tool call, not an improvised bash server.
+> **P2a shipped 2026-07-05** (`d608fec` supervisor+tool, `9dde87d` amended). One new file
+> `bridge/preview.rs` + `tools/preview.rs`, in-memory table-free supervisor, teardown hooks in
+> `deliver()`/`abandon()`/workspace-delete. Feasibility unlocks proven in exploration: isola
+> shares the host netns (`namespace.rs:147` — no `CLONE_NEWNET`) so an in-sandbox server is
+> reachable at `127.0.0.1:<port>` from the host; a long-lived preview = an `isola exec` held as a
+> background `Child`, stopped by an in-sandbox `/proc/*/environ` sweep on a unique `CLAW_PREVIEW_ID`
+> (the isola-exec host handle can't reap the namespaced server). **Verified**: an ignored
+> integration test drives the whole loop on the host strategy (resolve override → spawn with the
+> injected `CLAW_BIND` → health-probe → the port answers `preview ok` → stop reaps it and frees the
+> port); the release binary is deployed live (isola mode, health green) with `preview` in every
+> producer toolbox. Live *agent-UI* exercise deferred to P2b's `/preview/<short>/` URL — a plain
+> GET surface, far more reliable than a WS composer-send (headless-driver flakiness, tracked).
+
+- [x] **Preview supervisor — in-memory, no table**: bridge-owned `OnceLock<Mutex<HashMap>>` keyed
+      `<ws>-<short>`, `{port, child, strategy, id}`, ports from `CLAW_PREVIEW_PORTS` (default
+      7900-7920), health = TCP connect with a deadline. Stop on deliver/abandon (+ workspace
+      delete); boot recovery = the map starts empty (staging relaunches lazily — P2c). Start runs
+      the kind command from the request's lane under its exec strategy, reusing the P1b artifact.
+- [x] **How a preview knows what to run**: `ProjectKind::preview_command()` (rwire-app: `cargo run`
+      — debug, reusing the P1b build, not a from-scratch `--release`; node-app: `npm start`; else
+      the per-project `project.<ws>.<name>.preview` override), with `CLAW_BIND=127.0.0.1:<port>` +
+      `CLAW_PREVIEW_BASE` + `CLAW_PREVIEW_ID` injected via the command's env exports.
+- [x] **`preview` tool**: composed into the producer toolbox; starts/restarts the branch preview
+      (optional `project` arg picks one of several) and returns the URL — the debug loop as a tool
+      call. `exec::spawn_in` added (long-lived, held `Child`, own process group on host).
 - [ ] **Routing — DECIDED (operator, 2026-07-05): integrated dynamic URIs.** The claw
       server proxies `/preview/<req-short>/…` (and `/staging/<project>/…`) to the pooled
       ports itself — same origin, so previews inherit claw's **auth gate** (agent-written
