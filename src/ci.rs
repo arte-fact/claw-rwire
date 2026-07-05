@@ -297,4 +297,51 @@ mod tests {
             tail: String::new(),
         }
     }
+
+    // End-to-end runner check (runs real cargo — slow, so explicit). Proves the runner drives
+    // the kind recipe, parses exit codes, and captures a red tail. Run with:
+    //   cargo test -- --ignored runs_cargo_checks
+    #[test]
+    #[ignore = "runs cargo (fmt/clippy/test) — slow; run explicitly"]
+    fn runs_cargo_checks_green_then_red() {
+        let conn = crate::db::open_in_memory().expect("db");
+        let dir = std::env::temp_dir().join(format!("claw-ci-run-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"ci_smoke\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+        )
+        .unwrap();
+        // A clean, formatted, clippy-clean crate with a passing test.
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "pub fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    \
+             use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(add(2, 2), 4);\n    \
+             }\n}\n",
+        )
+        .unwrap();
+        let strategy = ExecStrategy::Host { root: dir.clone() };
+        let green = run_for_repos(&conn, "ws", &dir, &strategy, &[String::new()]);
+        assert_eq!(green.len(), 3, "fmt + clippy + test");
+        assert!(all_green(&green), "a clean crate should pass: {green:?}");
+
+        // A `return` where the tail expression suffices — clippy::needless_return, which
+        // `-D warnings` turns into a hard error (red clippy).
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "pub fn add(a: i64, b: i64) -> i64 {\n    return a + b;\n}\n",
+        )
+        .unwrap();
+        let red = run_for_repos(&conn, "ws", &dir, &strategy, &[String::new()]);
+        assert!(
+            !all_green(&red),
+            "clippy -D warnings should catch it: {red:?}"
+        );
+        assert!(
+            red.iter().any(|o| !o.ok && !o.tail.is_empty()),
+            "a red check should capture its failure tail: {red:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
