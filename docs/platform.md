@@ -108,13 +108,25 @@
       the project's `AGENT.md`-style metadata is too loose; use a per-repo setting
       (`workspace.<id>.preview.<repo>` = command, default for rwire apps in P3:
       `cargo run --release`) with `CLAW_BIND=127.0.0.1:<port>` injected via env.
-- [ ] **Routing** — *decision box, needs the operator*: (a) wildcard subdomain
-      `<req-short>.preview.raptors.pizza` → needs DNS wildcard + TLS wildcard on the
-      existing nginx; claw writes an nginx `map` include + `nginx -s reload` (sudoers
-      entry for reload only); (b) built-in TCP/HTTP proxy in the claw server on one port
-      with Host-header routing (no nginx dependency, more code). rwire apps assume a root
-      path ⇒ **no path-prefix routing**. Default recommendation: (a) if the wildcard
-      exists, else (b).
+- [ ] **Routing — DECIDED (operator, 2026-07-05): integrated dynamic URIs.** The claw
+      server proxies `/preview/<req-short>/…` (and `/staging/<project>/…`) to the pooled
+      ports itself — same origin, so previews inherit claw's **auth gate** (agent-written
+      servers never face the internet raw), no nginx writes, no DNS/TLS work, and one URI
+      vocabulary shared by the UI, the chat, and the agents.
+      *Site*: a proxy route in the rwire server layer (or claw-side handler) streaming to
+      `127.0.0.1:<port>`; websocket pass-through included (rwire previews ARE websockets).
+- [ ] **rwire base-path support** (the prerequisite we own): `Server::base_path()` —
+      wire endpoint, asset URLs, and `Link::route` become prefix-aware, so every rwire
+      app is mountable under a dynamic URI natively. Ships upstream (framework), adopted
+      by the preview supervisor via env (`CLAW_BASE_PATH=/preview/<short>`).
+      Non-rwire apps stay second-class under path proxying (absolute asset paths break):
+      agents hit `localhost:<port>` directly; pretty URIs are the paved road's reward.
+- [ ] **Agents propose and visit preview links**: the preview URI is injected into the
+      producer/validator prompts for the request (debug loop: start preview → fetch the
+      URI → see the real failure → fix); a jailed same-origin `visit` tool (GET, capped
+      body) lets reviewers exercise the running branch; chat receipts + request page
+      render the link. *Endgame (P3+)*: rwire's wire protocol is machine-readable — a
+      future tool drives the preview's UI structurally over the websocket, no browser.
 - [ ] **Develop staging**: one long-lived preview per web project tracking `develop`,
       restarted on delivery (hook in `deliver()` after merge). Named
       `<project>.staging.…` under the same routing.
