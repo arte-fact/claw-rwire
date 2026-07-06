@@ -211,6 +211,19 @@ that shapes everything downstream. (Rides on P4a's `ChatEntry`; no rwire depende
       the streaming above makes whatever wait remains legible. *Site*: `db/resolution.rs` (per-role
       model), `bridge/orchestrate.rs`.
 
+### P4e — Integrate rwire's text editor (queued)
+
+The app's editing surfaces — the `AGENT.md` brief, the validator standards, the machine-checks
+command — still render through the app-local `md_editor` (`ui/widgets.rs`) rather than a first-class
+rwire component. rwire ships an editor (`rwire-components`: `code_editor` / `textarea`); adopt it so
+the editors match the rest of the migrated UI (theme-owned aesthetic, no bespoke chrome) and any
+editor hardening flows upstream.
+
+- [ ] **Adopt rwire's editor** in place of `md_editor` for the brief / standards / checks fields
+      (and evaluate it for the composer): the local `md_editor` becomes a thin wrapper over the rwire
+      component, or is retired. Upstream-first — if a gap appears (e.g. autosize, markdown affordance),
+      fix it generically in `../rwire` before adopting. *Site*: `ui/widgets.rs`, `ui/workspace.rs`.
+
 ## P5 — Release topology: develop → main, origin, and the control center
 
 The "make it a place" axis: two branches you can preview, an optional origin you manage in-app, and a
