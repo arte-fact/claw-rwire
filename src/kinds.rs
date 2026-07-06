@@ -84,6 +84,31 @@ impl ProjectKind {
         }
     }
 
+    /// The non-negotiable check floor (P4b): `fmt`·`test`·`build` that always run and gate a pass,
+    /// whatever the `pipeline.yaml` or per-repo override says — an agent can't weaken the gate by
+    /// trimming these away. Only the cargo kinds define one (the commands are always valid on any
+    /// crate); other kinds degrade to "must pass if the kind defines it" — an empty floor.
+    #[must_use]
+    pub fn floor(self) -> &'static [CheckSpec] {
+        match self {
+            Self::RwireApp | Self::RustBin => &[
+                CheckSpec {
+                    name: "fmt",
+                    command: "cargo fmt --check",
+                },
+                CheckSpec {
+                    name: "test",
+                    command: "cargo test",
+                },
+                CheckSpec {
+                    name: "build",
+                    command: "cargo build",
+                },
+            ],
+            Self::NodeApp | Self::Docs | Self::Other => &[],
+        }
+    }
+
     /// The command that starts this kind's preview server (P2), run from the project dir with
     /// `CLAW_BIND=127.0.0.1:<port>` and `CLAW_PREVIEW_BASE` in the environment. `Some` only where
     /// the kind reliably implies a long-running server: an rwire app *is* one binary on one port,

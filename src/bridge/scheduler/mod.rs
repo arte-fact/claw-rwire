@@ -147,7 +147,9 @@ fn notify_sandbox_provisioning(conn: &rusqlite::Connection, task: &Task) {
 const PIPELINE_NOTE: &str = "## The pipeline\n\nThis project's CI checks and preview command live in \
      a `pipeline.yaml` at its root — the recipe your pass is judged by. Read it, and when you change \
      how the project builds, tests, or serves (a new check, a renamed script, a different preview \
-     command), update `pipeline.yaml` in the same pass so the checks and preview stay honest.";
+     command), update `pipeline.yaml` in the same pass so the checks and preview stay honest. claw \
+     always runs a `fmt`·`test`·`build` floor regardless of the file, so trimming a check can't \
+     weaken the gate — keep the recipe complete rather than minimal.";
 
 /// The project layer for a task's run (P1): the kind conventions + machine contracts for the
 /// repo it works in. The target project is the first non-meta repo the request touched, else
