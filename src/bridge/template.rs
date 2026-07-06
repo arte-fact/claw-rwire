@@ -102,6 +102,8 @@ const RWIRE_STANDARDS: &str = r#"# Review standards
   under ~40 — reject monoliths even when they work.
 - Tests live beside the code they cover and must pass (`cargo test`) before a pass verdict.
 - Builds must be warning-clean (`cargo clippy --all-targets -- -D warnings`).
+- Keep `pipeline.yaml` honest: when a change alters how the project builds, tests, or serves, the
+  same pass must update the project's `pipeline.yaml` (its checks + preview recipe).
 - Reject prose claims the diff does not back up.
 
 ## rwire UI

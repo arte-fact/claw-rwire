@@ -141,10 +141,18 @@ fn notify_sandbox_provisioning(conn: &rusqlite::Connection, task: &Task) {
     }
 }
 
+/// The `pipeline.yaml` maintenance contract (P4b), appended to every buildable project's layer:
+/// the producer keeps the recipe honest so the checks it's judged by track how the project really
+/// builds, tests, and serves.
+const PIPELINE_NOTE: &str = "## The pipeline\n\nThis project's CI checks and preview command live in \
+     a `pipeline.yaml` at its root — the recipe your pass is judged by. Read it, and when you change \
+     how the project builds, tests, or serves (a new check, a renamed script, a different preview \
+     command), update `pipeline.yaml` in the same pass so the checks and preview stay honest.";
+
 /// The project layer for a task's run (P1): the kind conventions + machine contracts for the
 /// repo it works in. The target project is the first non-meta repo the request touched, else
 /// the first `projects/<name>` named in the spec; `None` (no layer) when neither resolves or
-/// the kind has no guidance.
+/// the kind has no guidance. Buildable kinds also carry the [`PIPELINE_NOTE`] (P4b).
 fn project_layer(conn: &rusqlite::Connection, task: &Task, workspace_dir: &Path) -> Option<String> {
     let project = task
         .request_id
@@ -159,7 +167,8 @@ fn project_layer(conn: &rusqlite::Connection, task: &Task, workspace_dir: &Path)
         .or_else(|| crate::kinds::project_in_spec(&task.spec))?;
     let dir = workspace_dir.join("projects").join(&project);
     let kind = crate::kinds::kind_for(conn, &task.workspace_id, &project, &dir);
-    kind.prompt_layer()
+    let layer = kind.prompt_layer()?;
+    Some(format!("{layer}\n\n{PIPELINE_NOTE}"))
 }
 
 /// Launch the task's **current step's** producer/stage run on a worker thread (self-posting
