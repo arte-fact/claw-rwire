@@ -131,10 +131,11 @@ first-class `Chat` component (rwire F7) — claw stops hand-rolling and deletes 
       + defaulted `time`/`tag`/`detail`/`groups_with`, and a chrome-free `row()` escape hatch for
       system lines and gate rows). Design: rwire `docs/chat-component-design.md`. *Site*:
       `ui/run_chain.rs`, `ui/chat.rs`.
-- [ ] **Native disclosure (adoptable now)**: collapsible tool/diff rows move to native
-      `<details>`/`<summary>` (`El::Details`/`El::Summary`, shipped upstream `6260436`), retiring the
-      server-round-trip toggles (`tool_toggled` state / `disclosure_row`) — zero-latency, free a11y;
-      landable ahead of the full component. *Site*: `ui/run_chain.rs`, `ui/request_page.rs`.
+- [x] **Native disclosure (adoptable now)** — shipped `e5a66c9`: collapsible tool/diff/memory/check
+      rows render as native `<details>`/`<summary>` (`El::Details`/`El::Summary`, the shipped
+      `ChatDetail` pattern); the browser owns the toggle (zero-latency, free a11y). Retired the
+      server-round-trip toggles — `App::tool_toggled` + the `toggle_tool` handler are gone. *Site*:
+      `ui/run_chain.rs`, `ui/{chat,task_detail,request_page}.rs`.
 - [ ] **Seamless history — no button**: windowed (last N turns); older turns arrive by **infinite
       scroll** (F1's sentinel in reverse, one page in flight), not a "↑ load older" button. The bridge
       thread projection serves pages by cursor (`created_at,id`); the memory-fold line sits above the
