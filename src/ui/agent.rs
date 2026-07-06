@@ -218,19 +218,27 @@ fn live_tail(app: &App) -> ElementBuilder {
         .append(entries)
 }
 
-/// "Load older" (R5): browse the history past the fold — one page per click. Sits above the
-/// fold line; disappears once everything is loaded.
+/// Seamless history (R5): older turns arrive as the reader scrolls up — no button. A visibility
+/// sentinel above the fold fires `expand_thread` (one page per fire; `on_visible` fires once per
+/// instance, re-arming after each expand re-projects the window) until nothing remains past the
+/// fold, when the sentinel is gone. `truncated` is the `next` marker so the runtime distinguishes a
+/// fresh sentinel from a stale one.
 fn load_older(truncated: usize) -> ElementBuilder {
     el(El::Div)
-        .st([St::DisplayFlex, St::JustifyCenter])
-        .append([crate::ui::widgets::ghost(
-            &format!("load older · {truncated} more past the fold"),
-            expand_thread(),
-        )])
+        .id("agent-load-older")
+        .st([St::DisplayFlex, St::JustifyCenter, St::PSm])
+        .on_visible(expand_thread(), truncated as u32)
+        .append(
+            [Text::caption(format!("loading {truncated} earlier turns…"))
+                .muted()
+                .build()],
+        )
 }
 
 #[handler]
 fn expand_thread(app: &mut App, ctx: &EventContext) {
+    // Fired by the scroll sentinel; `ctx.item_index()` carries the truncated count at fire time. A
+    // repeated/stale fire only grows the window past the total, which the projection caps — benign.
     let _ = (app, ctx);
     bridge::send(Command::ExpandAgentThread);
 }
@@ -344,4 +352,32 @@ fn review_prompt(task_id: &str) -> ElementBuilder {
                 .text("Needs your review"),
             review_gate(task_id),
         ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rwire::Ev;
+
+    /// Seamless history (P4a): older turns arrive by a visibility sentinel as the reader scrolls
+    /// up — the "load older" click button is retired. Guards the "no button" contract.
+    #[test]
+    fn load_older_is_a_scroll_sentinel_not_a_button() {
+        let sentinel = load_older(3);
+        assert!(matches!(sentinel.el_type(), El::Div));
+        assert!(
+            sentinel
+                .events()
+                .iter()
+                .any(|(ev, _)| matches!(ev, Ev::Visible)),
+            "older history arrives by a visibility sentinel",
+        );
+        assert!(
+            !sentinel
+                .events()
+                .iter()
+                .any(|(ev, _)| matches!(ev, Ev::Click)),
+            "seamless — the load-older click button is gone",
+        );
+    }
 }
