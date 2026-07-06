@@ -228,11 +228,13 @@ pub struct ChatMessage {
 }
 
 /// One item in the rendered thread: a chat turn or a tool-call card, interleaved in
-/// the order they happened.
+/// the order they happened. `id` is the `web_messages` rowid — a stable key for keyed
+/// morph reuse as the history window grows (older pages prepend without re-keying the
+/// rest). `-1` marks a just-sent turn shown optimistically, before it's persisted.
 #[derive(Debug, Clone)]
 pub enum TranscriptItem {
-    Message(ChatMessage),
-    Tool(ToolCardView),
+    Message { id: i64, message: ChatMessage },
+    Tool { id: i64, card: ToolCardView },
 }
 
 /// A tool invocation rendered as a collapsible card: what ran, with what arguments,

@@ -104,15 +104,10 @@ fn transcript(app: &App) -> ElementBuilder {
             };
             rows.push(Row::Fold(line));
         }
-        rows.extend(
-            app.messages
-                .iter()
-                .enumerate()
-                .map(|(index, item)| match item {
-                    TranscriptItem::Message(message) => Row::Msg { index, message },
-                    TranscriptItem::Tool(card) => Row::Tool { index, card },
-                }),
-        );
+        rows.extend(app.messages.iter().map(|item| match item {
+            TranscriptItem::Message { id, message } => Row::Msg { id: *id, message },
+            TranscriptItem::Tool { id, card } => Row::Tool { id: *id, card },
+        }));
     }
 
     let empty = hint(if starting {
@@ -154,16 +149,17 @@ fn transcript(app: &App) -> ElementBuilder {
 
 /// One concierge transcript row, adapted to rwire's `ChatItem` so the surface renders through
 /// `ChatTranscript`/`ChatEntry` — the same authored-entry chrome (intent rail + header) as the
-/// agent thread. `index` keys the entry (stable while turns only append) and the tool disclosure.
+/// agent thread. `id` (the `web_messages` rowid) keys the entry and the tool disclosure, so older
+/// pages prepend on scroll-up without re-keying — and morphing — the rest of the transcript.
 enum Row<'a> {
     /// The memory-fold marker above the oldest turn — a chrome-free muted line via `row()`.
     Fold(String),
     Msg {
-        index: usize,
+        id: i64,
         message: &'a ChatMessage,
     },
     Tool {
-        index: usize,
+        id: i64,
         card: &'a ToolCardView,
     },
 }
@@ -172,8 +168,8 @@ impl ChatItem for Row<'_> {
     fn key(&self) -> Cow<'_, str> {
         match self {
             Row::Fold(_) => Cow::Borrowed("fold"),
-            Row::Msg { index, .. } => Cow::Owned(format!("m{index}")),
-            Row::Tool { index, .. } => Cow::Owned(format!("t{index}")),
+            Row::Msg { id, .. } => Cow::Owned(format!("m{id}")),
+            Row::Tool { id, .. } => Cow::Owned(format!("t{id}")),
         }
     }
 
@@ -202,9 +198,7 @@ impl ChatItem for Row<'_> {
                 MessageRole::Agent => crate::ui::widgets::markdown(message.text.clone()),
             },
             // The tool call as the shared native-details disclosure (identical to the task thread).
-            Row::Tool { index, card } => {
-                crate::ui::run_chain::tool_row(card, &format!("chat.{index}"))
-            }
+            Row::Tool { id, card } => crate::ui::run_chain::tool_row(card, &format!("chat.{id}")),
             Row::Fold(_) => el(El::Span),
         }
     }
@@ -304,11 +298,16 @@ fn send_message(app: &mut App, ctx: &EventContext) {
     let Some(chat) = app.open_chat.clone() else {
         return;
     };
-    app.messages.push(TranscriptItem::Message(ChatMessage {
-        role: MessageRole::User,
-        text: text.clone(),
-        time: now_hm(),
-    }));
+    // Optimistic echo before the DB round-trip: id `-1` (not yet persisted). The next projection
+    // replaces it with the real windowed load, so this transient key never collides.
+    app.messages.push(TranscriptItem::Message {
+        id: -1,
+        message: ChatMessage {
+            role: MessageRole::User,
+            text: text.clone(),
+            time: now_hm(),
+        },
+    });
     app.sending = true;
     bridge::send(Command::Submit { chat, text });
 }
@@ -319,4 +318,49 @@ fn send_message(app: &mut App, ctx: &EventContext) {
 fn expand_chat(app: &mut App, ctx: &EventContext) {
     let _ = (app, ctx);
     bridge::send(Command::ExpandChat);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rwire_components::ChatItem;
+
+    /// Entries key by the `web_messages` rowid, not list position — so paging older turns in on
+    /// scroll-up doesn't re-key (and re-render) the turns already on screen (P4a slice 4b refinement).
+    #[test]
+    fn rows_key_by_stable_id_not_position() {
+        let msg = ChatMessage {
+            role: MessageRole::User,
+            text: "hi".to_owned(),
+            time: "12:00".to_owned(),
+        };
+        let card = ToolCardView {
+            name: "search".to_owned(),
+            arguments: String::new(),
+            result: String::new(),
+            ok: true,
+            time: "12:00".to_owned(),
+        };
+        assert_eq!(
+            Row::Msg {
+                id: 42,
+                message: &msg
+            }
+            .key()
+            .as_ref(),
+            "m42"
+        );
+        assert_eq!(Row::Tool { id: 7, card: &card }.key().as_ref(), "t7");
+        // The optimistic just-sent turn keys distinctly (id -1); older pages loading in front of it
+        // leave every id-keyed entry above untouched.
+        assert_eq!(
+            Row::Msg {
+                id: -1,
+                message: &msg
+            }
+            .key()
+            .as_ref(),
+            "m-1"
+        );
+    }
 }

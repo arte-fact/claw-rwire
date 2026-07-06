@@ -150,7 +150,7 @@ pub fn load_thread_windowed(
     )?;
     let mut stmt = conn.prepare(
         "SELECT w.kind, w.direction, w.body, substr(w.created_at, 12, 5),
-                t.name, t.arguments, t.result, t.status
+                t.name, t.arguments, t.result, t.status, w.id
            FROM (SELECT id, kind, direction, body, created_at
                    FROM web_messages
                   WHERE messaging_group_id = ?1 AND kind IN ('chat', 'tool')
@@ -165,26 +165,33 @@ pub fn load_thread_windowed(
     Ok((items, truncated))
 }
 
-/// Map one joined `web_messages`(+tool) row to a transcript item — shared by the full and windowed
-/// thread loaders so both read the same eight columns in the same order.
+/// Map one joined `web_messages`(+tool) row to a transcript item. Column 8 is the `web_messages`
+/// rowid — the item's stable key for keyed morph reuse ([`TranscriptItem`]).
 fn transcript_row(row: &rusqlite::Row) -> rusqlite::Result<TranscriptItem> {
     let kind: String = row.get(0)?;
     let time: String = row.get(3)?;
+    let id: i64 = row.get(8)?;
     if kind == "tool" {
-        Ok(TranscriptItem::Tool(ToolCardView {
-            name: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
-            arguments: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-            result: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
-            ok: row.get::<_, Option<String>>(7)?.as_deref() == Some("ok"),
-            time,
-        }))
+        Ok(TranscriptItem::Tool {
+            id,
+            card: ToolCardView {
+                name: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                arguments: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                result: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                ok: row.get::<_, Option<String>>(7)?.as_deref() == Some("ok"),
+                time,
+            },
+        })
     } else {
         let direction: String = row.get(1)?;
-        Ok(TranscriptItem::Message(ChatMessage {
-            role: role_from_direction(&direction),
-            text: row.get(2)?,
-            time,
-        }))
+        Ok(TranscriptItem::Message {
+            id,
+            message: ChatMessage {
+                role: role_from_direction(&direction),
+                text: row.get(2)?,
+                time,
+            },
+        })
     }
 }
 
@@ -349,8 +356,8 @@ mod tests {
         let shape: Vec<(MessageRole, &str)> = thread
             .iter()
             .filter_map(|item| match item {
-                TranscriptItem::Message(m) => Some((m.role, m.text.as_str())),
-                TranscriptItem::Tool(_) => None,
+                TranscriptItem::Message { message: m, .. } => Some((m.role, m.text.as_str())),
+                TranscriptItem::Tool { .. } => None,
             })
             .collect();
         assert_eq!(
@@ -381,8 +388,8 @@ mod tests {
         let texts: Vec<&str> = thread
             .iter()
             .filter_map(|item| match item {
-                TranscriptItem::Message(m) => Some(m.text.as_str()),
-                TranscriptItem::Tool(_) => None,
+                TranscriptItem::Message { message: m, .. } => Some(m.text.as_str()),
+                TranscriptItem::Tool { .. } => None,
             })
             .collect();
         assert_eq!(texts, vec!["m3", "m4"], "newest two, oldest-first");
@@ -406,16 +413,20 @@ mod tests {
 
         let (thread, _) = load_thread_windowed(&conn, "c1", 100).expect("load");
         assert_eq!(thread.len(), 3);
-        assert!(matches!(&thread[0], TranscriptItem::Message(m) if m.role == MessageRole::User));
+        assert!(
+            matches!(&thread[0], TranscriptItem::Message { message: m, .. } if m.role == MessageRole::User)
+        );
         match &thread[1] {
-            TranscriptItem::Tool(card) => {
+            TranscriptItem::Tool { card, .. } => {
                 assert_eq!(card.name, "search");
                 assert!(card.ok);
                 assert!(card.result.contains("Rust is a language"));
             }
-            TranscriptItem::Message(_) => panic!("expected a tool card"),
+            TranscriptItem::Message { .. } => panic!("expected a tool card"),
         }
-        assert!(matches!(&thread[2], TranscriptItem::Message(m) if m.role == MessageRole::Agent));
+        assert!(
+            matches!(&thread[2], TranscriptItem::Message { message: m, .. } if m.role == MessageRole::Agent)
+        );
 
         // The model view folds the tool into a note between the chat turns.
         let turns = model_turns_after(&conn, "c1", 0).expect("model");
