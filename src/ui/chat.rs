@@ -107,7 +107,7 @@ fn transcript(app: &App) -> ElementBuilder {
             app.messages
                 .iter()
                 .enumerate()
-                .map(|(index, item)| transcript_row(item, index, &app.tool_toggled)),
+                .map(|(index, item)| transcript_row(item, index)),
         );
         if app.sending {
             messages.push(sending_row());
@@ -173,11 +173,11 @@ fn hint(text: &str) -> ElementBuilder {
 
 /// One transcript entry: a chat turn, or an inline tool call rendered with the **shared**
 /// collapsible tool row (so chat tool calls read exactly like the task thread's).
-fn transcript_row(item: &TranscriptItem, index: usize, toggled: &[String]) -> ElementBuilder {
+fn transcript_row(item: &TranscriptItem, index: usize) -> ElementBuilder {
     match item {
         TranscriptItem::Message(message) => message_row(message),
         TranscriptItem::Tool(card) => {
-            crate::ui::run_chain::tool_row(card, &format!("chat.{index}"), toggled)
+            crate::ui::run_chain::tool_row(card, &format!("chat.{index}"))
         }
     }
 }

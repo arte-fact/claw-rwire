@@ -6,7 +6,7 @@
 //! `verdict_chip` the thread builds its authored entries from.
 
 use rwire::style::Style;
-use rwire::{El, ElementBuilder, St, el, handler};
+use rwire::{At, El, ElementBuilder, St, el, handler};
 use rwire_components::{Badge, BadgeFill, BadgeIntent, BadgeShape, Text};
 use serde_json::Value;
 
@@ -23,8 +23,7 @@ pub(crate) fn role_tag(run: &RunView) -> String {
 /// click to toggle), and — when open — the detail (an `edit` diff, else the command/result).
 /// Collapsed by default (only the user's explicit toggles open it). Shared by the task thread
 /// and the main chat, so tool calls read identically on both.
-pub(crate) fn tool_row(tool: &ToolCardView, key: &str, toggled: &[String]) -> ElementBuilder {
-    let open = toggled.iter().any(|t| t == key);
+pub(crate) fn tool_row(tool: &ToolCardView, key: &str) -> ElementBuilder {
     let (mark, mark_color) = if tool.ok {
         ("✓", St::TextAccent)
     } else {
@@ -33,37 +32,34 @@ pub(crate) fn tool_row(tool: &ToolCardView, key: &str, toggled: &[String]) -> El
     let mark = el(El::Span).st([mark_color]).text(mark);
     disclosure_row(
         key,
-        open,
         &tool.name,
         &tool_summary(tool),
         Some(mark),
-        open.then(|| tool_body(tool)),
+        tool_body(tool),
+        false,
     )
 }
 
 /// The run's launch-time memory as a disclosure row (R3.5 M4 provenance): a muted "memory ·
 /// launched remembering…" header that opens to the snapshot — same toggle machinery as the
 /// tool rows, so "why did it do that?" sits right where the forensics live.
-pub(crate) fn memory_row(memory: &str, key: &str, toggled: &[String]) -> ElementBuilder {
-    let open = toggled.iter().any(|t| t == key);
-    let body = open.then(|| {
-        el(El::Div)
-            .st([
-                St::TextXs,
-                St::TextMuted,
-                St::WhitespacePreWrap,
-                St::PSm,
-                St::BgApp,
-            ])
-            .text(memory)
-    });
+pub(crate) fn memory_row(memory: &str, key: &str) -> ElementBuilder {
+    let body = el(El::Div)
+        .st([
+            St::TextXs,
+            St::TextMuted,
+            St::WhitespacePreWrap,
+            St::PSm,
+            St::BgApp,
+        ])
+        .text(memory);
     disclosure_row(
         key,
-        open,
         "memory",
         &format!("launched remembering · {}", one_line(memory, 96)),
         None,
         body,
+        false,
     )
 }
 
@@ -73,70 +69,61 @@ pub(crate) fn diff_row(
     diff: &str,
     files: &[crate::state::RestorableFile],
     key: &str,
-    toggled: &[String],
 ) -> ElementBuilder {
-    let open = toggled.iter().any(|t| t == key);
-    let body = open.then(|| {
-        let mut rows: Vec<ElementBuilder> = crate::diff::patch_lines(diff)
-            .into_iter()
-            .map(|line| {
-                let color = match line.kind {
-                    DiffKind::Added => St::TextSuccess,
-                    DiffKind::Removed => St::TextError,
-                    DiffKind::Equal => St::TextMuted,
-                };
-                el(El::Div)
-                    .st([St::WhitespacePreWrap, St::BreakWords, St::TextXs, color])
-                    .text(&line.text)
-            })
-            .collect();
-        // Per-file restore (G3): put a path back to its pre-pass state — the working tree
-        // takes the restore; the next pass commit records it.
-        for file in files {
-            let payload = serde_json::json!({
-                "workspace": file.workspace,
-                "task": file.task,
-                "repo": file.repo,
-                "sha": file.sha,
-                "path": file.path,
-            })
-            .to_string();
-            rows.push(
-                el(El::Div)
-                    .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::TextXs])
-                    .append([
-                        el(El::Span).st([St::TextMuted]).text(&file.path),
-                        crate::ui::widgets::ghost("restore", restore_file())
-                            .data("restore", &payload),
-                    ]),
-            );
-        }
-        el(El::Div)
-            .st([St::PSm, St::BgApp, St::OverflowXAuto])
-            .append(rows)
-    });
+    let mut rows: Vec<ElementBuilder> = crate::diff::patch_lines(diff)
+        .into_iter()
+        .map(|line| {
+            let color = match line.kind {
+                DiffKind::Added => St::TextSuccess,
+                DiffKind::Removed => St::TextError,
+                DiffKind::Equal => St::TextMuted,
+            };
+            el(El::Div)
+                .st([St::WhitespacePreWrap, St::BreakWords, St::TextXs, color])
+                .text(&line.text)
+        })
+        .collect();
+    // Per-file restore (G3): put a path back to its pre-pass state — the working tree
+    // takes the restore; the next pass commit records it.
+    for file in files {
+        let payload = serde_json::json!({
+            "workspace": file.workspace,
+            "task": file.task,
+            "repo": file.repo,
+            "sha": file.sha,
+            "path": file.path,
+        })
+        .to_string();
+        rows.push(
+            el(El::Div)
+                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::TextXs])
+                .append([
+                    el(El::Span).st([St::TextMuted]).text(&file.path),
+                    crate::ui::widgets::ghost("restore", restore_file()).data("restore", &payload),
+                ]),
+        );
+    }
+    let body = el(El::Div)
+        .st([St::PSm, St::BgApp, St::OverflowXAuto])
+        .append(rows);
     let summary = diff
         .lines()
         .find(|line| line.contains('|') || line.contains("file"))
         .unwrap_or_else(|| diff.lines().next().unwrap_or(""));
     disclosure_row(
         key,
-        open,
         "diff",
         &format!("what this pass changed · {}", one_line(summary, 90)),
         None,
         body,
+        false,
     )
 }
 
 /// A pass's machine checks (P1b) as a badge strip — one square outline badge per check,
 /// green `✓` / red `✗` — the machine verdict at a glance. Red checks with a failure tail add a
 /// disclosure below revealing the tails (the signature the reviewer/operator expands).
-pub(crate) fn checks_row(
-    checks: &[crate::state::CheckBadgeView],
-    key: &str,
-    toggled: &[String],
-) -> ElementBuilder {
+pub(crate) fn checks_row(checks: &[crate::state::CheckBadgeView], key: &str) -> ElementBuilder {
     let badges: Vec<ElementBuilder> = checks
         .iter()
         .map(|check| {
@@ -166,50 +153,47 @@ pub(crate) fn checks_row(
     if tails.is_empty() {
         return el(El::Div).st([St::PySm]).append([strip]);
     }
-    let open = toggled.iter().any(|t| t == key);
-    let body = open.then(|| {
-        el(El::Div)
-            .st([
-                St::PSm,
-                St::BgApp,
-                St::OverflowXAuto,
-                St::WhitespacePreWrap,
-                St::BreakWords,
-                St::TextXs,
-                St::TextError,
-            ])
-            .text(&tails)
-    });
+    let body = el(El::Div)
+        .st([
+            St::PSm,
+            St::BgApp,
+            St::OverflowXAuto,
+            St::WhitespacePreWrap,
+            St::BreakWords,
+            St::TextXs,
+            St::TextError,
+        ])
+        .text(&tails);
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::PySm])
         .append([
             strip,
             disclosure_row(
                 key,
-                open,
                 "checks",
                 "machine checks — failure detail",
                 None,
                 body,
+                false,
             ),
         ])
 }
 
-/// The shared disclosure-row scaffold: a full-width toggle header (caret + name + a truncated
-/// summary + an optional trailing mark) over the body when open. One shape for tool calls and
-/// the memory snapshot, so the forensics read uniformly.
+/// The shared disclosure-row scaffold: a native `<details>`/`<summary>` — the `<summary>` header
+/// (name + a truncated summary + an optional trailing mark) over the body. The toggle is
+/// client-side (zero-latency, keyboard/a11y for free), so there is no server round-trip and no
+/// `tool_toggled` state: the body is always built and the browser reveals it only when open. `key`
+/// is the element id so a re-render's morph preserves the open state; `open` sets the initial
+/// state. One shape for tool calls, diffs and the memory snapshot, so the forensics read uniformly.
 pub(crate) fn disclosure_row(
     key: &str,
-    open: bool,
     name: &str,
     summary: &str,
     mark: Option<ElementBuilder>,
-    body: Option<ElementBuilder>,
+    body: ElementBuilder,
+    open: bool,
 ) -> ElementBuilder {
     let mut header_parts = vec![
-        el(El::Span)
-            .st([St::TextLow])
-            .text(if open { "▾" } else { "▸" }),
         el(El::Span).st([St::TextMuted]).text(name),
         el(El::Span)
             .st([St::MinW0, St::Flex1, St::TextLow, St::Truncate])
@@ -218,25 +202,19 @@ pub(crate) fn disclosure_row(
     if let Some(mark) = mark {
         header_parts.push(mark);
     }
-    let header = crate::ui::widgets::bare_button(toggle_tool())
-        .data("tool", key)
-        .st([
-            St::WFull,
-            St::DisplayFlex,
-            St::ItemsCenter,
-            St::GapSm,
-            St::TextXs,
-            St::P0,
-            St::TextLeft,
-        ])
-        .append(header_parts);
-    let mut children = vec![header];
-    if let Some(body) = body {
-        children.push(body);
+    // The native `<summary>` supplies the disclosure caret (rotates on open for free); its content
+    // rides in an inner flex row so the truncating summary + trailing mark lay out as before.
+    let summary_el = el(El::Summary).st([St::CursorPointer]).append([el(El::Div)
+        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::TextXs])
+        .append(header_parts)]);
+    // `<details>` stays default block (rwire's `ChatDetail` pattern) so nothing competes with the
+    // browser's native show/hide of the body when closed.
+    let details = el(El::Details).id(key).append([summary_el, body]);
+    if open {
+        details.bool_attr(At::Open)
+    } else {
+        details
     }
-    el(El::Div)
-        .st([St::DisplayFlex, St::FlexCol, St::GapXs])
-        .append(children)
 }
 
 /// A humanized one-line summary of a tool call's arguments — the command, the file path, the
@@ -473,7 +451,6 @@ fn status_chip(tool: &ToolCardView) -> ElementBuilder {
         .append(row)
 }
 
-/// Toggle one tool row open/closed (flip it from its default).
 /// Restore one file to its state before the pass that changed it (G3).
 #[handler]
 fn restore_file(app: &mut App, ctx: &EventContext) {
@@ -498,17 +475,6 @@ fn restore_file(app: &mut App, ctx: &EventContext) {
         sha: field("sha"),
         path: field("path"),
     });
-}
-
-#[handler]
-pub fn toggle_tool(app: &mut App, ctx: &EventContext) {
-    if let Some(key) = ctx.data("tool").map(str::to_owned) {
-        if let Some(index) = app.tool_toggled.iter().position(|t| t == &key) {
-            app.tool_toggled.remove(index);
-        } else {
-            app.tool_toggled.push(key);
-        }
-    }
 }
 
 /// An `edit` call's `old_string` → `new_string` as coloured diff rows (a `path` header + `+`/`-`/
@@ -664,5 +630,57 @@ mod tests {
         let summary = tool_summary(&call("mystery", r#"{"alpha":"one","beta":2}"#));
         assert_eq!(summary, "alpha: one · beta: 2");
         assert!(!summary.contains('{'), "no raw JSON: {summary}");
+    }
+
+    /// The old server-toggle marked its header with `data-tool`; a native disclosure carries none
+    /// anywhere in its subtree.
+    fn has_data_tool(element: &ElementBuilder) -> bool {
+        element.attributes().iter().any(|(k, _)| k == "data-tool")
+            || element.children().iter().any(has_data_tool)
+    }
+
+    #[test]
+    fn disclosure_row_is_native_details_not_a_server_toggle() {
+        let row = disclosure_row(
+            "reqdiff.0",
+            "diff",
+            "src/lib.rs",
+            None,
+            el(El::Div).text("body"),
+            false,
+        );
+        // Native <details>, keyed by `key` so a re-render's morph preserves the open state.
+        assert!(matches!(row.el_type(), El::Details));
+        assert!(
+            row.attributes()
+                .iter()
+                .any(|(k, v)| k == "id" && v == "reqdiff.0"),
+            "details carries the key as its id"
+        );
+        // A <summary> header over the body — and no server round-trip (`data-tool`) anywhere.
+        let children = row.children();
+        assert_eq!(children.len(), 2);
+        assert!(matches!(children[0].el_type(), El::Summary));
+        assert!(
+            !has_data_tool(&row),
+            "native disclosure has no server toggle"
+        );
+    }
+
+    #[test]
+    fn tool_row_opens_client_side_and_honours_initial_state() {
+        let row = tool_row(&call("bash", r#"{"command":"cargo test"}"#), "chat.0");
+        assert!(matches!(row.el_type(), El::Details));
+        assert!(matches!(row.children()[0].el_type(), El::Summary));
+        assert!(!has_data_tool(&row));
+        // `open` is the server-set *initial* state only — it changes the rendered element
+        // (the native `open` attribute), then the browser owns every toggle after.
+        let closed = disclosure_row("k", "n", "s", None, el(El::Div), false);
+        let opened = disclosure_row("k", "n", "s", None, el(El::Div), true);
+        assert_ne!(
+            closed.content_hash(),
+            opened.content_hash(),
+            "open=true must set the native <details open> attribute"
+        );
     }
 }

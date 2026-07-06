@@ -120,7 +120,7 @@ fn page_thread(app: &App, detail: &TaskDetail) -> ElementBuilder {
     let column = el(El::Div)
         .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
         .md([St::PLg])
-        .append(thread_entries(app, detail));
+        .append(thread_entries(detail));
     el(El::Div)
         .st([St::Flex1, St::MinH0, St::DisplayFlex, St::FlexCol])
         .append([thread::scroll(column), gate_bar(app, detail)])
@@ -128,7 +128,7 @@ fn page_thread(app: &App, detail: &TaskDetail) -> ElementBuilder {
 
 /// The ordered thread entries: the spec (as the originating request), a plan's proposed tasks,
 /// each run as an authored entry, then the live run when one is in flight.
-fn thread_entries(app: &App, detail: &TaskDetail) -> Vec<ElementBuilder> {
+fn thread_entries(detail: &TaskDetail) -> Vec<ElementBuilder> {
     // The spec lives in its own panel above (the mockup's SPEC box) — the thread starts
     // with the work: a plan's proposal, then the runs.
     let mut entries: Vec<ElementBuilder> = Vec::new();
@@ -144,7 +144,7 @@ fn thread_entries(app: &App, detail: &TaskDetail) -> Vec<ElementBuilder> {
         ));
     }
     for (index, run) in detail.runs.iter().enumerate() {
-        entries.push(run_entry(run, &format!("a{index}"), &app.tool_toggled));
+        entries.push(run_entry(run, &format!("a{index}")));
     }
     // The live run is its own `#[renderer]`, so a token flush repaints only this entry — not the
     // whole board/modal. It reads the live stream itself and self-hides when nothing is streaming,
@@ -156,18 +156,13 @@ fn thread_entries(app: &App, detail: &TaskDetail) -> Vec<ElementBuilder> {
 /// One persisted run as an authored, phase-tagged thread entry: author (agent) + role tag +
 /// timestamp + verdict chip, over its collapsible tool rows, Markdown reply and any feedback.
 /// Shared by the Peek modal's Thread and the agent thread (`ui::agent`), so a run reads the same.
-pub(crate) fn run_entry(
-    run: &crate::state::RunView,
-    key: &str,
-    toggled: &[String],
-) -> ElementBuilder {
+pub(crate) fn run_entry(run: &crate::state::RunView, key: &str) -> ElementBuilder {
     let mut body: Vec<ElementBuilder> = Vec::new();
     if !run.memory.trim().is_empty() {
         // What the run remembered at launch (R3.5 M4) — collapsed, above the tool forensics.
         body.push(crate::ui::run_chain::memory_row(
             &run.memory,
             &format!("{key}.mem"),
-            toggled,
         ));
     }
     if !run.diff.trim().is_empty() {
@@ -176,7 +171,6 @@ pub(crate) fn run_entry(
             &run.diff,
             &run.diff_files,
             &format!("{key}.diff"),
-            toggled,
         ));
     }
     if !run.checks.is_empty() {
@@ -184,12 +178,14 @@ pub(crate) fn run_entry(
         body.push(crate::ui::run_chain::checks_row(
             &run.checks,
             &format!("{key}.checks"),
-            toggled,
         ));
     }
-    body.extend(run.tools.iter().enumerate().map(|(index, tool)| {
-        crate::ui::run_chain::tool_row(tool, &format!("{key}.{index}"), toggled)
-    }));
+    body.extend(
+        run.tools
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| crate::ui::run_chain::tool_row(tool, &format!("{key}.{index}"))),
+    );
     if run.output.trim().is_empty() {
         body.push(Text::caption("(no output)").muted().build());
     } else {

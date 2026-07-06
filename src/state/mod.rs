@@ -116,9 +116,6 @@ pub struct App {
     /// The agent-list nav (Phase 2): the concierge pinned on top, then agents grouped by
     /// workspace, each with a live status + approval badge. Projected by `bridge::agent_nav`.
     pub agent_nav: AgentNav,
-    /// Run-chain tool rows the user toggled away from their default (collapsed, except a run's
-    /// latest call). A tool is open iff `is_last XOR tool_toggled.contains(key)`.
-    pub tool_toggled: Vec<String>,
     /// The board's active quick-filter: `all` | `awaiting` | `running` | `blocked` | `failed`.
     pub board_filter: String,
     /// The active workspace's machine-check command (L1: run after each producer pass,

@@ -89,7 +89,7 @@ fn body(app: &App) -> ElementBuilder {
         ]);
     let mut sections = vec![header(app, detail), columns];
     if !detail.diff_stat.is_empty() {
-        sections.push(section("Diff", global_diff(app, detail)));
+        sections.push(section("Diff", global_diff(detail)));
     }
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg, St::MaxW80rem])
@@ -298,7 +298,7 @@ fn repos(detail: &RequestDetail) -> ElementBuilder {
 
 /// The whole request against its branch point: the stat block, then the patch split into
 /// one disclosure per file (N3) — closed by default, so a big request scans as a file list.
-fn global_diff(app: &App, detail: &RequestDetail) -> ElementBuilder {
+fn global_diff(detail: &RequestDetail) -> ElementBuilder {
     let mut children = vec![
         el(El::Div)
             .st([St::TextXs, St::TextMuted, St::WhitespacePreWrap])
@@ -314,27 +314,24 @@ fn global_diff(app: &App, detail: &RequestDetail) -> ElementBuilder {
             .unwrap_or("")
             .to_owned();
         let key = format!("reqdiff.{index}");
-        let open = app.tool_toggled.iter().any(|t| t == &key);
-        let body = open.then(|| {
-            let rows: Vec<ElementBuilder> = crate::diff::patch_lines(&chunk)
-                .into_iter()
-                .map(|line| {
-                    let color = match line.kind {
-                        DiffKind::Added => St::TextSuccess,
-                        DiffKind::Removed => St::TextError,
-                        DiffKind::Equal => St::TextMuted,
-                    };
-                    el(El::Div)
-                        .st([St::WhitespacePreWrap, St::BreakWords, St::TextXs, color])
-                        .text(&line.text)
-                })
-                .collect();
-            el(El::Div)
-                .st([St::PSm, St::BgApp, St::OverflowXAuto])
-                .append(rows)
-        });
+        let rows: Vec<ElementBuilder> = crate::diff::patch_lines(&chunk)
+            .into_iter()
+            .map(|line| {
+                let color = match line.kind {
+                    DiffKind::Added => St::TextSuccess,
+                    DiffKind::Removed => St::TextError,
+                    DiffKind::Equal => St::TextMuted,
+                };
+                el(El::Div)
+                    .st([St::WhitespacePreWrap, St::BreakWords, St::TextXs, color])
+                    .text(&line.text)
+            })
+            .collect();
+        let body = el(El::Div)
+            .st([St::PSm, St::BgApp, St::OverflowXAuto])
+            .append(rows);
         children.push(crate::ui::run_chain::disclosure_row(
-            &key, open, "file", &summary, None, body,
+            &key, "file", &summary, None, body, false,
         ));
     }
     el(El::Div)
