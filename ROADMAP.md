@@ -168,6 +168,40 @@ Stop discarding the output; make every stage's log openable.
       thread and (P5c) the project page — a large log can stream through rwire's `StreamedContent`
       (rwire F1) rather than one giant frame. *Site*: `ci.rs`, a log store, `run_chain::disclosure_row`.
 
+### P4d — The planner, made present
+
+The planner is the owner's most consequential turn — it decides the whole task breakdown — yet it is
+the one actor with **no presence in the interface**. `orchestrate::launch_planning` runs the owner
+through the **non-streaming** `run_turn` (`orchestrate.rs:145`), posts only the finished proposal, and
+**persists nothing**: the turn's reasoning evaporates, the owner's agent thread never shows it, and the
+operator watches an opaque "planning…" badge for the whole wait — the step *feels* slow precisely
+because it is invisible. Producer runs already solved this: they stream via `run_turn_steered` + an
+`EventSink` into `App.live_turns` (`bridge/live.rs`), rendered as a live entry
+(`live_entry`/`live_stream_body`). Give the planner the same treatment — legibility over the one turn
+that shapes everything downstream. (Rides on P4a's `ChatEntry`; no rwire dependency of its own.)
+
+- [ ] **Stream the planning turn**: switch `launch_planning` from `run_turn` to `run_turn_steered`
+      with a live sink, reusing the producer stream path — tool calls and the reply arrive as they
+      happen, not all at once at the end. *Site*: `bridge/orchestrate.rs`, `bridge/live.rs`.
+- [ ] **A planning presence where the request lives**: the concierge (`origin_chat`) and the plan/
+      request page show a live "*owner* is planning…" entry streaming its work — the same live entry
+      the board shows for a producer, rendered through P4a's `ChatEntry`. Retires the opaque status
+      wait. *Site*: `ui/chat.rs`, `ui/request_page.rs`.
+- [ ] **Persist the planning turn as a run**: record it in `task_runs` (`RunKind::Planning`) against
+      the plan task, with its transcript — so the proposal has a forensic "why", scrollable like a
+      producer pass, instead of an ephemeral one-shot. *Site*: `bridge/orchestrate.rs`, `db/task_runs.rs`.
+- [ ] **The planner in the owner's thread**: the owner agent's thread (`ui/agent.rs`) includes its
+      planning turns as authored entries (a `Plan` phase tag), so its working life reads producing ·
+      reviewing · **planning**, not just the first two. *Site*: `bridge/agent_thread.rs`, `ui/agent.rs`.
+- [ ] **The proposal points back**: `proposed_view` links each proposed breakdown to the planning run
+      that produced it — "why these tasks" is one click from the plan. *Site*: `ui/task_detail.rs`,
+      `ui/request_page.rs`.
+- [ ] **Speed the wait, not just its perception** (secondary): the planning turn is a light three-tool
+      loop (`propose_tasks` / `list_tasks` / `cancel_task`) — the latency is the LLM round(s) + a cold
+      context cache, not the toolbox. Consider a faster model for the planning role and cache-warming;
+      the streaming above makes whatever wait remains legible. *Site*: `db/resolution.rs` (per-role
+      model), `bridge/orchestrate.rs`.
+
 ## P5 — Release topology: develop → main, origin, and the control center
 
 The "make it a place" axis: two branches you can preview, an optional origin you manage in-app, and a
