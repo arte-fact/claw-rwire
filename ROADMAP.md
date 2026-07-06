@@ -151,17 +151,22 @@ first-class `Chat` component (rwire F7) — claw stops hand-rolling and deletes 
 Turn the inferred, invisible recipe into a file the agents maintain — without letting them edit away
 the gate.
 
-- [ ] **Read a root `pipeline.yaml`** (build · checks · preview) as the source of truth, resolved at
-      `ci::checks_for` and `preview::command_for`; detection **seeds** the first draft, the file wins
-      when present. Subsumes the three hidden `settings` override families. *Site*: new
-      `src/pipeline.rs`, `ci.rs`, `bridge/preview.rs`, `kinds.rs` (detect → scaffold).
-- [ ] **The agents own it**: the P1 prompt layer instructs the producer to author/maintain
-      `pipeline.yaml` (format, when to touch it). *Site*: `scheduler/mod.rs` prompt composition,
-      the rwire `STANDARDS.md`.
-- [ ] **claw enforces the floor**: `format · test · build` always run and **gate validation**
-      regardless of the file — an agent can't weaken the gate by editing it. Hardens the existing
-      macro gate (`bridge/requests/control.rs:256`) into a floor check. Floor degrades to "must pass
-      if the kind defines it" for non-buildable projects.
+- [x] **Read a root `pipeline.yaml`** — shipped `1098d2d` + `6d89ab5`: `src/pipeline.rs` reads a
+      project-root `pipeline.yaml` (checks + preview) via `serde_yml`; `ci::checks_for` and
+      `preview::command_for` consult it first, then the per-repo override, then the kind recipe (safe
+      fallback when absent/malformed). `kinds::detect` **seeds** the first draft — the rwire
+      template's `projects/hello` ships one. The `settings` override families stay as legacy fallback
+      rather than being deleted; the file simply wins. *Site*: `src/pipeline.rs`, `ci.rs`,
+      `bridge/preview.rs`, `bridge/template.rs`.
+- [x] **The agents own it** — shipped `a664c5f`: the producer's project layer appends a
+      `PIPELINE_NOTE` (read + maintain `pipeline.yaml` in the same pass); the rwire `STANDARDS.md`
+      carries the matching review rule. *Site*: `scheduler/mod.rs`, `bridge/template.rs`.
+- [x] **claw enforces the floor** — shipped `bded391`: `ProjectKind::floor()` (cargo kinds
+      `fmt`·`test`·`build`; others empty) is merged into `ci::checks_for` on top of the resolved
+      base, so the floor always runs and gates — feeding *both* the per-pass gate and the macro gate
+      (`control.rs`) from one resolution point. An agent can't trim a check to weaken it; `build` is
+      the kind-derived floor stage, not an editable field. Degrades to an empty floor for non-cargo
+      kinds. *Site*: `kinds.rs`, `ci.rs`.
 
 ### P4c — Persisted CI/CD logs
 
