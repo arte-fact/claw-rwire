@@ -123,14 +123,19 @@ first-class `Chat` component (rwire F7) — claw stops hand-rolling and deletes 
 **Depends on** rwire Phase 5 (runtime extraction) + F1 + F7 — the **critical path** for Platform II
 (rwire flags Phase 5 → F1 → F7 as the hot path claw blocks on).
 
-- [ ] **Adopt the upstream `Chat`/`ChatTranscript`**: all three surfaces render through it (author
-      rail, markdown body, `Composer`, writing state); delete the local `ui/chat.rs`/`ui/thread.rs`
-      scaffolding. *Site*: `ui/chat.rs`, `ui/agent.rs`, `ui/thread.rs`.
-- [ ] **App content via the `ChatItem` trait**: claw's rich transcript items — tool cards, memory
-      lines, review/approval gates, streaming turns — implement F7's `ChatItem` (`key`/`author`/`body`
-      + defaulted `time`/`tag`/`detail`/`groups_with`, and a chrome-free `row()` escape hatch for
-      system lines and gate rows). Design: rwire `docs/chat-component-design.md`. *Site*:
-      `ui/run_chain.rs`, `ui/chat.rs`.
+- [x] **Adopt the upstream `Chat`/`ChatTranscript`** — shipped `58894ab` (task thread) + `177bed4`
+      (agent thread), atop the concierge's earlier adoption: all three surfaces render through rwire's
+      `ChatTranscript`/`ChatScroll` (author rail, markdown body, `Composer`, seamless-history
+      sentinel). The hand-rolled `ui/thread.rs` (`ChatEntry`/`ChatScroll` wrapper) is **deleted**. The
+      streaming surfaces keep their two-region perf split via a new rwire `ChatTranscript::live_tail`
+      slot (committed in rwire, `6758bd0`) — the live tail is the caller's own synced region, so a
+      token repaints only it. *Site*: `ui/{chat,agent,task_detail}.rs`, rwire `chat_transcript.rs`.
+- [x] **App content via the `ChatItem` trait** — shipped with the above: each surface's rows
+      implement `ChatItem` — the concierge `Row`, the task `ThreadRow`, the agent `Row` — mapping run
+      forensics/markdown/feedback into `body()`, the verdict chip into `trailing()`, role/phase into
+      `tag()`, time into `time()`, and folds/gates/memory lines into the chrome-free `row()` escape
+      hatch. Live entries build on `ChatEntry` directly (shared `stream_entry`). *Site*:
+      `ui/{chat,agent,task_detail}.rs`.
 - [x] **Native disclosure (adoptable now)** — shipped `e5a66c9`: collapsible tool/diff/memory/check
       rows render as native `<details>`/`<summary>` (`El::Details`/`El::Summary`, the shipped
       `ChatDetail` pattern); the browser owns the toggle (zero-latency, free a11y). Retired the
