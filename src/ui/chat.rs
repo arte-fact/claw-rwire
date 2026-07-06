@@ -4,13 +4,15 @@
 //! outputs are wrapped in inline `__synced_` spans, so they only ever sit *inside* a plain
 //! flex/scroll container, never act as one.
 
+use std::borrow::Cow;
+
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, St, el, handler, renderer};
-use rwire_components::{Composer, Spinner, SpinnerSize, Text};
+use rwire_components::{ChatAuthor, ChatItem, ChatItemCtx, ChatTranscript, Composer, Text};
 
 use super::thread;
 use crate::bridge::{self, Command};
-use crate::state::{App, ChatMessage, MessageRole, TranscriptItem};
+use crate::state::{App, ChatMessage, MessageRole, ToolCardView, TranscriptItem};
 use crate::ui::memory;
 
 // The shared reading measure for conversation surfaces is `St::MaxW60rem` + `St::MxAuto` —
@@ -78,18 +80,17 @@ fn error_banner(app: &App) -> ElementBuilder {
     }
 }
 
-/// Always renders the same column→list structure; empty states are just a hint
-/// item in the list. Keeping the structure constant (only the children change)
-/// lets DOM morphing swap items positionally — a changing structure leaves the
-/// previous subtree behind.
+/// The transcript: the concierge's turns as authored `ChatItem` entries rendered through rwire's
+/// `ChatTranscript`. The memory-fold line rides a chrome-free `row()`; the writing cue and empty
+/// state are the component's own. Keyed by chat id so a chat switch swaps the whole subtree
+/// instead of positionally reusing the previous thread's nodes.
 #[renderer]
 fn transcript(app: &App) -> ElementBuilder {
-    let items: Vec<ElementBuilder> = if app.open_chat.is_none() {
-        vec![hint("Starting up…")]
-    } else {
+    let starting = app.open_chat.is_none();
+    let mut rows: Vec<Row> = Vec::new();
+    if !starting {
         // Concierge parity (R3.5 M3): the chat is the concierge's thread, so it opens on the
         // same fold line + memory card the agent pages have — the global scope row.
-        let mut messages: Vec<ElementBuilder> = Vec::new();
         if let Some(mem) = app.chat_memory.as_ref()
             && !mem.summary.trim().is_empty()
         {
@@ -101,31 +102,41 @@ fn transcript(app: &App) -> ElementBuilder {
                     mem.last_fold
                 )
             };
-            messages.push(memory::muted_line(&line));
+            rows.push(Row::Fold(line));
         }
-        messages.extend(
+        rows.extend(
             app.messages
                 .iter()
                 .enumerate()
-                .map(|(index, item)| transcript_row(item, index)),
+                .map(|(index, item)| match item {
+                    TranscriptItem::Message(message) => Row::Msg { index, message },
+                    TranscriptItem::Tool(card) => Row::Tool { index, card },
+                }),
         );
-        if app.sending {
-            messages.push(sending_row());
-        }
-        if messages.is_empty() {
-            messages.push(hint("Say hello to start the conversation."));
-        }
-        messages
-    };
+    }
 
-    // Key the thread subtree by chat id: switching chats yields a new id, so the
-    // morph replaces the whole subtree (old id becomes a removed leftover) instead
-    // of positionally reusing the previous thread's nodes.
+    let empty = hint(if starting {
+        "Starting up…"
+    } else {
+        "Say hello to start the conversation."
+    });
+    // Only arm the writing cue while a turn is actually in flight. (`ChatTranscript::writing`
+    // shows the indicator whenever it's *called* — `.writing(None)` still renders an unlabeled
+    // one — so gate the call itself rather than passing an Option.)
+    let mut transcript = ChatTranscript::new()
+        .items_plain(rows.iter())
+        .empty_state(empty);
+    if app.sending {
+        transcript = transcript.writing(Some(Cow::from("claw is typing…")));
+    }
+    let transcript = transcript.build();
+
     let key = format!("thread-{}", app.open_chat.as_deref().unwrap_or("none"));
     el(El::Div)
         .id(&key)
-        // Centered and width-limited (tokens — see the reading-measure note at the top). The
-        // composer reserves its own space below, so just breathing room above and below.
+        // Centered and width-limited (tokens — see the reading-measure note at the top); the flex
+        // column lets the transcript stretch to the measure. The composer reserves its own space
+        // below, so just breathing room above and below.
         .st([
             St::MaxW60rem,
             St::MxAuto,
@@ -134,9 +145,90 @@ fn transcript(app: &App) -> ElementBuilder {
             St::PxMd,
             St::DisplayFlex,
             St::FlexCol,
-            St::GapLg,
         ])
-        .append(items)
+        .append([transcript])
+}
+
+/// One concierge transcript row, adapted to rwire's `ChatItem` so the surface renders through
+/// `ChatTranscript`/`ChatEntry` — the same authored-entry chrome (intent rail + header) as the
+/// agent thread. `index` keys the entry (stable while turns only append) and the tool disclosure.
+enum Row<'a> {
+    /// The memory-fold marker above the oldest turn — a chrome-free muted line via `row()`.
+    Fold(String),
+    Msg {
+        index: usize,
+        message: &'a ChatMessage,
+    },
+    Tool {
+        index: usize,
+        card: &'a ToolCardView,
+    },
+}
+
+impl ChatItem for Row<'_> {
+    fn key(&self) -> Cow<'_, str> {
+        match self {
+            Row::Fold(_) => Cow::Borrowed("fold"),
+            Row::Msg { index, .. } => Cow::Owned(format!("m{index}")),
+            Row::Tool { index, .. } => Cow::Owned(format!("t{index}")),
+        }
+    }
+
+    fn author(&self) -> ChatAuthor {
+        match self {
+            Row::Msg { message, .. } => match message.role {
+                MessageRole::User => ChatAuthor::user("you"),
+                MessageRole::Agent => ChatAuthor::agent("claw"),
+            },
+            // Tool chatter is claw's, de-emphasised.
+            Row::Tool { .. } => ChatAuthor::agent("claw").muted(),
+            // Fold renders via `row()`; its author is never read.
+            Row::Fold(_) => ChatAuthor::agent("claw"),
+        }
+    }
+
+    fn body(&self, _ctx: &ChatItemCtx<Self>) -> ElementBuilder {
+        match self {
+            Row::Msg { message, .. } => match message.role {
+                // Match claw's compact Markdown size so your turn and claw's reply read alike.
+                MessageRole::User => el(El::Div)
+                    // `font-size: 0.82rem` — matches the agent's compact markdown; no token for it.
+                    .style(Style::new().set("font-size", "0.82rem"))
+                    .st([St::TextDefault, St::WhitespacePreWrap])
+                    .append([el(El::Span).text(&message.text)]),
+                MessageRole::Agent => crate::ui::widgets::markdown(message.text.clone()),
+            },
+            // The tool call as the shared native-details disclosure (identical to the task thread).
+            Row::Tool { index, card } => {
+                crate::ui::run_chain::tool_row(card, &format!("chat.{index}"))
+            }
+            Row::Fold(_) => el(El::Span),
+        }
+    }
+
+    fn time(&self) -> Option<Cow<'_, str>> {
+        match self {
+            Row::Msg { message, .. } => Some(Cow::Borrowed(message.time.as_str())),
+            Row::Tool { card, .. } => Some(Cow::Borrowed(card.time.as_str())),
+            Row::Fold(_) => None,
+        }
+    }
+
+    fn row(&self, _ctx: &ChatItemCtx<Self>) -> Option<ElementBuilder> {
+        match self {
+            Row::Fold(line) => Some(memory::muted_line(line)),
+            _ => None,
+        }
+    }
+
+    fn groups_with(&self, prev: &Self) -> bool {
+        // Suppress the repeated header for a same-author run (same role / consecutive tools).
+        match (self, prev) {
+            (Row::Msg { message: a, .. }, Row::Msg { message: b, .. }) => a.role == b.role,
+            (Row::Tool { .. }, Row::Tool { .. }) => true,
+            _ => false,
+        }
+    }
 }
 
 /// A 2px accent strip — rust-claw's left-bar marker for agent turns / active rows.
@@ -171,60 +263,6 @@ fn hint(text: &str) -> ElementBuilder {
         .append([Text::body(text.to_owned()).muted().build()])
 }
 
-/// One transcript entry: a chat turn, or an inline tool call rendered with the **shared**
-/// collapsible tool row (so chat tool calls read exactly like the task thread's).
-fn transcript_row(item: &TranscriptItem, index: usize) -> ElementBuilder {
-    match item {
-        TranscriptItem::Message(message) => message_row(message),
-        TranscriptItem::Tool(card) => {
-            crate::ui::run_chain::tool_row(card, &format!("chat.{index}"))
-        }
-    }
-}
-
-/// Flat terminal style (rust-claw): a bold sender label over the body, no bubbles — built on the
-/// shared [`thread::entry`] so a chat turn and a task-thread entry are the same widget. The left
-/// accent bar marks *your* turns; the agent's reply runs full-width with no bar.
-fn message_row(message: &ChatMessage) -> ElementBuilder {
-    let (sender, sender_color) = match message.role {
-        MessageRole::User => ("you", St::TextHigh),
-        MessageRole::Agent => ("claw", St::TextAccent),
-    };
-    let body = match message.role {
-        // Match the agent's compact Markdown body (see `widgets::markdown`, which shrinks the
-        // prose to ~0.82rem) so your turn and claw's reply read at the same size.
-        MessageRole::User => el(El::Div)
-            // `font-size: 0.82rem` — matches the agent's compact markdown; no token for it.
-            .style(Style::new().set("font-size", "0.82rem"))
-            .st([St::TextDefault, St::WhitespacePreWrap])
-            .append([el(El::Span).text(&message.text)]),
-        MessageRole::Agent => crate::ui::widgets::markdown(message.text.clone()),
-    };
-    let is_user = matches!(message.role, MessageRole::User);
-    let entry = thread::entry(
-        sender,
-        sender_color,
-        None,
-        &message.time,
-        None,
-        is_user,
-        vec![body],
-    );
-    if is_user {
-        // Right-aligned, capped at 40rem but never wider than the column, so on mobile it
-        // wraps within the viewport instead of spilling past it.
-        el(El::Div)
-            .style(
-                Style::new()
-                    .set("align-self", "flex-end")
-                    .set("max-width", "min(40rem, 100%)"),
-            )
-            .append([entry])
-    } else {
-        entry
-    }
-}
-
 /// `HH:MM` in UTC (matching the DB's UTC `created_at` stamps), for the optimistic
 /// user turn shown before the bridge reloads the persisted thread.
 fn now_hm() -> String {
@@ -234,16 +272,6 @@ fn now_hm() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60)
-}
-
-fn sending_row() -> ElementBuilder {
-    // The agent's pending turn — no accent bar, matching its finished replies.
-    el(El::Div)
-        .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-        .append([
-            Spinner::new().size(SpinnerSize::Sm).build(),
-            Text::body("thinking…").muted().build(),
-        ])
 }
 
 /// The composer pill: a rounded, shadowed card holding the message input over an
