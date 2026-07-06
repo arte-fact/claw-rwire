@@ -1,13 +1,10 @@
 //! Shared "thread" widgets — the chat-log vocabulary used by both the main chat
 //! (`ui::chat`) and the task Thread tab (`ui::task_detail`): a bottom-pinned autoscroll
-//! scroller and an **authored entry** (an author + optional phase tag + time header over a
-//! body, with an optional left accent rail). One vocabulary, so the two surfaces read the
-//! same.
+//! scroller and an **authored entry**, both rwire components. One vocabulary, so the two
+//! surfaces read the same.
 
 use rwire::{El, ElementBuilder, St, el};
-use rwire_components::ChatScroll;
-
-use super::chat::accent_bar;
+use rwire_components::{ChatAuthor, ChatEntry, ChatScroll, ChatTag};
 
 /// The scrolling transcript area — rwire's `ChatScroll` (the column-reverse bottom-pinned
 /// autoscroll, promoted upstream from this app after the "threads scrolling is broken"
@@ -16,56 +13,36 @@ pub fn scroll(inner: ElementBuilder) -> ElementBuilder {
     ChatScroll::new(inner).build()
 }
 
-/// An authored entry: a header (`author` in `author_color`, an optional phase `tag` like
-/// "Produce · iter 2", the `time`, and an optional `trailing` element pushed to the right — a
-/// verdict chip or a running dot) over the `body` children, with an optional left accent rail.
-/// The shared unit of the chat transcript and the task thread.
+/// An authored entry, rendered through rwire's `ChatEntry`: an intent rail (accent for the agent
+/// voice, muted for yours) + a header (`author` · an optional phase `tag` like "Produce · iter 2" ·
+/// `time` · an optional `trailing` status element pushed right — a verdict chip or running dot)
+/// over the `body` children. `author_color` picks the voice — `St::TextAccent` is the agent,
+/// anything else is you. The shared unit of the chat transcript and the task thread.
 pub fn entry(
     author: &str,
     author_color: St,
     tag: Option<&str>,
     time: &str,
     trailing: Option<ElementBuilder>,
-    accent: bool,
     body: Vec<ElementBuilder>,
 ) -> ElementBuilder {
-    let mut header = vec![el(El::Span).st([St::FontBold, author_color]).text(author)];
-    if let Some(tag) = tag {
-        header.push(el(El::Span).st([St::TextXs, St::TextMuted]).text(tag));
-    }
+    let chat_author = if author_color.as_u16() == St::TextAccent.as_u16() {
+        ChatAuthor::agent(author.to_owned())
+    } else {
+        ChatAuthor::user(author.to_owned())
+    };
+    let body = el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::MinW0])
+        .append(body);
+    let mut entry = ChatEntry::new(chat_author, body);
     if !time.is_empty() {
-        header.push(el(El::Span).st([St::TextLow, St::TextXs]).text(time));
+        entry = entry.time(time.to_owned());
+    }
+    if let Some(tag) = tag {
+        entry = entry.tag(ChatTag::muted(tag.to_owned()));
     }
     if let Some(trailing) = trailing {
-        // A spacer pushes the trailing element (verdict chip / running dot) to the right edge.
-        header.push(el(El::Span).st([St::Flex1]));
-        header.push(trailing);
+        entry = entry.trailing(trailing);
     }
-    // `MinW0` + `BreakWords` let the body wrap at the column edge instead of forcing a
-    // horizontal scroll; `Flex1` lets the block fill the row beside an accent rail.
-    let block = el(El::Div)
-        .st([
-            St::Flex1,
-            St::MinW0,
-            St::BreakWords,
-            St::DisplayFlex,
-            St::FlexCol,
-            St::GapXs,
-        ])
-        .append([
-            el(El::Div)
-                .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
-                .append(header),
-            el(El::Div)
-                .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::MinW0])
-                .append(body),
-        ]);
-    let mut row = Vec::new();
-    if accent {
-        row.push(accent_bar(true));
-    }
-    row.push(block);
-    el(El::Div)
-        .st([St::DisplayFlex, St::GapMd, St::MinW0])
-        .append(row)
+    entry.build()
 }

@@ -205,7 +205,6 @@ fn live_tail(app: &App) -> ElementBuilder {
                 Some(&live.tag),
                 "",
                 Some(running_dot()),
-                false,
                 live_stream_body(items),
             )
         })
@@ -284,7 +283,6 @@ fn turn_row(turn: &AgentTurn) -> ElementBuilder {
         Some(&turn.tag),
         &turn.time,
         Some(verdict_chip_of(turn.verdict.as_deref(), turn.ok)),
-        yours,
         column,
     )
 }

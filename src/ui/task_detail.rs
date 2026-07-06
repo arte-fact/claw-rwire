@@ -139,7 +139,6 @@ fn thread_entries(detail: &TaskDetail) -> Vec<ElementBuilder> {
             Some("Plan"),
             "",
             None,
-            false,
             vec![proposed_view(&detail.proposed, detail.awaiting)],
         ));
     }
@@ -209,7 +208,6 @@ pub(crate) fn run_entry(run: &crate::state::RunView, key: &str) -> ElementBuilde
         Some(&crate::ui::run_chain::role_tag(run)),
         &run.time,
         Some(crate::ui::run_chain::verdict_chip(run)),
-        false,
         body,
     )
 }
@@ -248,7 +246,6 @@ fn live_entry(app: &App) -> ElementBuilder {
         Some(&tag),
         "",
         Some(running_dot()),
-        false,
         live_stream_body(items),
     )
 }
