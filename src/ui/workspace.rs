@@ -6,7 +6,7 @@
 
 use rwire::router::Link;
 use rwire::style::Style;
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, EventContext, St, el, handler, renderer};
 use rwire_components::{Avatar, AvatarSize, Card, Input, Select, Text, TextColor, Tooltip};
 
 use crate::bridge::{self, Command};
@@ -443,37 +443,64 @@ fn delete_block(armed: bool) -> ElementBuilder {
 
 // ── Team handlers (immediate-apply over the active workspace) ───────────────────
 
+// Each interactive control resolves to at most one `Command` through a pure `*_command` decision,
+// split out from the thin `#[handler]` so the payload-reading — the easy-to-get-wrong part — is
+// unit-tested below. The accessor is dictated by the DOM event: an `<input>` change carries a
+// `Text` payload (`ctx.text()`), a `<select>` change carries a `Form` payload (`ctx.field(name)`,
+// keyed by the control's `name`), and a click carries `Data` (`ctx.data(key)`). Reaching for the
+// wrong one silently yields `None` — which is exactly how owner selection was clearing the owner.
+
 #[handler]
 fn rename(app: &mut App, ctx: &EventContext) {
-    let (Some(id), Some(name)) = (app.active_workspace.clone(), ctx.text()) else {
-        return;
-    };
-    let name = name.trim().to_owned();
-    if !name.is_empty() {
-        bridge::send(Command::RenameWorkspace { id, name });
+    if let Some(command) = rename_command(app.active_workspace.as_deref(), ctx) {
+        bridge::send(command);
     }
 }
 
 #[handler]
 fn set_owner(app: &mut App, ctx: &EventContext) {
-    let Some(id) = app.active_workspace.clone() else {
-        return;
-    };
-    let owner = ctx.text().map(str::to_owned).filter(|v| !v.is_empty());
-    bridge::send(Command::SetWorkspaceOwner { id, owner });
+    if let Some(command) = owner_command(app.active_workspace.as_deref(), ctx) {
+        bridge::send(command);
+    }
 }
 
 #[handler]
 fn toggle_member(app: &mut App, ctx: &EventContext) {
-    let (Some(id), Some(agent)) = (app.active_workspace.clone(), ctx.data("agent")) else {
-        return;
-    };
-    let agent = agent.to_owned();
-    if ctx.data("on") == Some("1") {
-        bridge::send(Command::RemoveMember { id, agent });
-    } else {
-        bridge::send(Command::AddMember { id, agent });
+    if let Some(command) = member_command(app.active_workspace.as_deref(), ctx) {
+        bridge::send(command);
     }
+}
+
+/// Rename the active workspace to the name `<input>`'s trimmed text. `None` when there's no active
+/// workspace or the name is blank (a blank rename is a no-op, not a clear).
+fn rename_command(active: Option<&str>, ctx: &EventContext) -> Option<Command> {
+    let id = active?.to_owned();
+    let name = ctx.text()?.trim().to_owned();
+    (!name.is_empty()).then_some(Command::RenameWorkspace { id, name })
+}
+
+/// Set — or, on the blank `— no owner —` option, clear — the active workspace's owner from the
+/// owner `<select>`. Reads `ctx.field("owner")`: a `<select>` change delivers a `Form` payload, so
+/// the earlier `ctx.text()` always read `None` and cleared the owner on every pick.
+fn owner_command(active: Option<&str>, ctx: &EventContext) -> Option<Command> {
+    let id = active?.to_owned();
+    let owner = ctx
+        .field("owner")
+        .map(str::to_owned)
+        .filter(|value| !value.trim().is_empty());
+    Some(Command::SetWorkspaceOwner { id, owner })
+}
+
+/// Add or remove the clicked member chip's agent. The chip carries its agent id and current
+/// on-state as `data-*`, so the toggle direction comes from `ctx.data("on")`.
+fn member_command(active: Option<&str>, ctx: &EventContext) -> Option<Command> {
+    let id = active?.to_owned();
+    let agent = ctx.data("agent")?.to_owned();
+    Some(if ctx.data("on") == Some("1") {
+        Command::RemoveMember { id, agent }
+    } else {
+        Command::AddMember { id, agent }
+    })
 }
 
 #[handler]
@@ -509,4 +536,73 @@ pub(crate) fn card(label: &str, body: ElementBuilder) -> ElementBuilder {
             body,
         ])
         .build()
+}
+
+#[cfg(test)]
+mod team_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A `<select>`/form change payload, as the client delivers it (`ctx.field(name)`).
+    fn form(fields: serde_json::Value) -> EventContext {
+        EventContext::new(json!({ "t": "form", "v": fields }).to_string().into_bytes())
+    }
+
+    /// A click payload with `data-*` values (`ctx.data(key)`).
+    fn data(fields: serde_json::Value) -> EventContext {
+        EventContext::new(json!({ "t": "data", "v": fields }).to_string().into_bytes())
+    }
+
+    #[test]
+    fn owner_select_change_sets_the_picked_owner() {
+        // The bug this guards: a <select> change is a Form payload read via ctx.field. The old
+        // ctx.text() read None here and cleared the owner on every pick.
+        match owner_command(Some("ws-1"), &form(json!({ "owner": "ag-scout" }))) {
+            Some(Command::SetWorkspaceOwner { id, owner }) => {
+                assert_eq!(id, "ws-1");
+                assert_eq!(owner.as_deref(), Some("ag-scout"));
+            }
+            _ => panic!("expected SetWorkspaceOwner with the picked owner"),
+        }
+    }
+
+    #[test]
+    fn owner_select_blank_option_clears_the_owner() {
+        match owner_command(Some("ws-1"), &form(json!({ "owner": "" }))) {
+            Some(Command::SetWorkspaceOwner { owner, .. }) => assert_eq!(owner, None),
+            _ => panic!("expected SetWorkspaceOwner clearing the owner"),
+        }
+    }
+
+    #[test]
+    fn owner_change_without_an_active_workspace_is_ignored() {
+        assert!(owner_command(None, &form(json!({ "owner": "ag-scout" }))).is_none());
+    }
+
+    #[test]
+    fn rename_reads_the_trimmed_text_payload() {
+        match rename_command(Some("ws-1"), &EventContext::from_text("  New Name  ")) {
+            Some(Command::RenameWorkspace { id, name }) => {
+                assert_eq!(id, "ws-1");
+                assert_eq!(name, "New Name");
+            }
+            _ => panic!("expected RenameWorkspace"),
+        }
+        // A blank name is a no-op, not a rename to empty.
+        assert!(rename_command(Some("ws-1"), &EventContext::from_text("   ")).is_none());
+    }
+
+    #[test]
+    fn member_chip_toggles_on_its_current_state() {
+        match member_command(Some("ws-1"), &data(json!({ "agent": "ag-a", "on": "0" }))) {
+            Some(Command::AddMember { id, agent }) => {
+                assert_eq!((id.as_str(), agent.as_str()), ("ws-1", "ag-a"));
+            }
+            _ => panic!("an off chip adds the member"),
+        }
+        match member_command(Some("ws-1"), &data(json!({ "agent": "ag-a", "on": "1" }))) {
+            Some(Command::RemoveMember { agent, .. }) => assert_eq!(agent, "ag-a"),
+            _ => panic!("an on chip removes the member"),
+        }
+    }
 }
