@@ -9,6 +9,8 @@
 > a file you can read, CI/CD output you can actually see, and a two-line branch topology where
 > `develop` and `main` are both places you can open. Cadence unchanged: each phase gate-green,
 > live-verified, ticked with a commit. Design source: the UX & CD proposal (2026-07-06, artifact).
+> **Companion: rwire `RELEASE_ROADMAP.md`** (Phases 5–6, executed by the rwire agent) — the framework
+> improvements P4a and P5c adopt. Improve the framework first; claw consumes the result.
 
 ## Shipped foundation (Platform I, P0–P3)
 
@@ -81,22 +83,63 @@
 - **Origin:** optional, set **from the project page**; auth via an **admin SSH-key store**, one key
   chosen per project; commits **ahead/behind** origin and **merge-conflict** state shown in-app.
 
+## Upstream-first — the framework leads (rwire `RELEASE_ROADMAP.md`)
+
+Improve rwire before committing claw's UI work; the **rwire agent** executes its RELEASE_ROADMAP. Two
+of Platform II's surfaces are **adoptions**, not hand-rolls — the promotion-upstream constraint
+realised (Breadcrumb/Progress precedent):
+
+- **P4a (conversation)** adopts rwire's `Chat`/`ChatTranscript` family (rwire **F7**) on the extracted
+  runtime (rwire **Phase 5**), with **seamless infinite-scroll history** (rwire **F1** scroll-sentinel)
+  — this **supersedes the drafted "↑ load older" button**. claw's app-specific transcript content (tool
+  cards, memory lines, review gates, streaming turns) plugs in via F7's **`ChatItem` trait** (+ a
+  chrome-free `row()` escape hatch); collapsible rows become native **`<details>`/`<summary>`**
+  (`El::Details`/`El::Summary`, the first F7 brick — shipped upstream `6260436`), retiring claw's
+  server-round-trip toggles (`tool_toggled`/`disclosure_row`). Benefits from rwire **T1** keyed diffing.
+- **P5c (per-branch file tree)** adopts rwire's `FileTree`/`FileExplorer` (rwire **F2**) in read-only
+  mode; `ui/files.rs` migrates onto the managed `FileExplorer`.
+- **P4c logs** can ride rwire's `StreamedContent` (rwire **F1**) when a log is large, rather than one
+  giant frame — optional, not blocking.
+
+The **pipeline + CD work is claw-native** and does **not** block on rwire: P4b (`pipeline.yaml`), P4c
+(logs), P5a (`develop→main`), P5b (origin + keys) proceed in parallel with the framework track. Each
+adoption lands with a migration that **deletes local scaffolding** (`ui/chat.rs`, `ui/thread.rs`,
+`ui/files.rs`) — the migration pressure-tests the upstream component's genericity.
+
+**Critical path:** rwire's own status note flags **Phase 5 → F1 → F7** as the hot path that Platform II
+blocks on. But the first F7 brick — native `<details>`/`<summary>` (`El::Details`/`El::Summary`, shipped
+`6260436`) — is adoptable **now**: claw can retire its server-round-trip disclosure toggles ahead of the
+rest of the component, an early non-blocking win.
+
 ## P4 — Legibility: a visible conversation and a visible pipeline
 
 The "make it legible" axis: one thread you can scroll back through, one recipe you can read, and the
 CI/CD output you were previously denied.
 
-### P4a — One conversation surface, lazily loaded
+### P4a — One conversation surface, adopting rwire's `Chat`
 
-The concierge chat and an agent thread should be the same widget, and neither should ship a thousand
-turns to show ten.
+Upstream-first: the concierge, agent threads, and the task Thread tab all render through rwire's
+first-class `Chat` component (rwire F7) — claw stops hand-rolling and deletes its scaffolding.
+**Depends on** rwire Phase 5 (runtime extraction) + F1 + F7 — the **critical path** for Platform II
+(rwire flags Phase 5 → F1 → F7 as the hot path claw blocks on).
 
-- [ ] **Unify the surface**: chat (`/`) and the agent thread (`/w/:wid/agent/:aid`) render through one
-      `Thread` component — same author rail, markdown body, composer, spacing. *Site*: `ui/chat.rs`,
-      `ui/agent.rs`, `ui/thread.rs` (fold the two callers onto the shared `thread::entry`/`scroll`).
-- [ ] **Windowed history**: render the last N turns; `↑ load older` fetches the previous page by
-      cursor (`created_at,id`); the memory-fold line sits above the oldest *loaded* page. Replaces the
-      full-list read in the bridge thread projection; keep the subtree keyed so a chat switch swaps it.
+- [ ] **Adopt the upstream `Chat`/`ChatTranscript`**: all three surfaces render through it (author
+      rail, markdown body, `Composer`, writing state); delete the local `ui/chat.rs`/`ui/thread.rs`
+      scaffolding. *Site*: `ui/chat.rs`, `ui/agent.rs`, `ui/thread.rs`.
+- [ ] **App content via the `ChatItem` trait**: claw's rich transcript items — tool cards, memory
+      lines, review/approval gates, streaming turns — implement F7's `ChatItem` (`key`/`author`/`body`
+      + defaulted `time`/`tag`/`detail`/`groups_with`, and a chrome-free `row()` escape hatch for
+      system lines and gate rows). Design: rwire `docs/chat-component-design.md`. *Site*:
+      `ui/run_chain.rs`, `ui/chat.rs`.
+- [ ] **Native disclosure (adoptable now)**: collapsible tool/diff rows move to native
+      `<details>`/`<summary>` (`El::Details`/`El::Summary`, shipped upstream `6260436`), retiring the
+      server-round-trip toggles (`tool_toggled` state / `disclosure_row`) — zero-latency, free a11y;
+      landable ahead of the full component. *Site*: `ui/run_chain.rs`, `ui/request_page.rs`.
+- [ ] **Seamless history — no button**: windowed (last N turns); older turns arrive by **infinite
+      scroll** (F1's sentinel in reverse, one page in flight), not a "↑ load older" button. The bridge
+      thread projection serves pages by cursor (`created_at,id`); the memory-fold line sits above the
+      oldest loaded page; the subtree stays keyed so a chat switch swaps it (rwire T1 keyed diffing).
+      *Site*: the bridge thread projection.
 
 ### P4b — An agent-owned `pipeline.yaml`, with a floor claw enforces
 
@@ -121,7 +164,8 @@ Stop discarding the output; make every stage's log openable.
 
 - [ ] **Full per-stage logs**: CI stops cutting to a 2 000-char tail and writes the whole log
       (mirror the preview logfile pattern, `preview.rs:538`); a logs drawer surfaces it on the task
-      thread and (P5c) the project page. *Site*: `ci.rs`, a log store, `run_chain::disclosure_row`.
+      thread and (P5c) the project page — a large log can stream through rwire's `StreamedContent`
+      (rwire F1) rather than one giant frame. *Site*: `ci.rs`, a log store, `run_chain::disclosure_row`.
 
 ## P5 — Release topology: develop → main, origin, and the control center
 
@@ -159,10 +203,14 @@ project page that is the CI/CD cockpit.
 
 - [ ] **Branch switcher → per-branch pipeline · logs · preview · files.** `ProjectDetail` gains a
       branch list, a per-branch pipeline (floor + extra checks, statuses + durations), the logs
-      drawer, the live preview link (`port_for`), and a read-only file tree of the selected branch
-      (`git show <branch>:<path>`, or the worktree-less tree). CI grows a **branch dimension** (today
-      `CheckOutcome` is per-run, aggregated per request). *Site*: `ui/project_page.rs`,
-      `state/views.rs`, `bridge/requests/view.rs`, `ci.rs`.
+      drawer, the live preview link (`port_for`), and a **read-only file tree of the selected branch**
+      rendered with rwire's upstream `FileTree` (rwire F2, read-only mode) over
+      `git show <branch>:<path>` / the worktree-less tree. CI grows a **branch dimension** (today
+      `CheckOutcome` is per-run, aggregated per request). *Depends on* rwire F2. *Site*:
+      `ui/project_page.rs`, `state/views.rs`, `bridge/requests/view.rs`, `ci.rs`.
+- [ ] **Migrate `ui/files.rs` onto the upstream `FileExplorer`** (rwire F2, managed mode) — delete the
+      local two-pane scaffolding; the Files tab and the branch tree share one component. *Site*:
+      `ui/files.rs`.
 
 ## Backlog (harvested, scheduled by pull)
 
