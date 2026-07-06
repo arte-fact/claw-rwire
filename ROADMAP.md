@@ -136,11 +136,15 @@ first-class `Chat` component (rwire F7) — claw stops hand-rolling and deletes 
       `ChatDetail` pattern); the browser owns the toggle (zero-latency, free a11y). Retired the
       server-round-trip toggles — `App::tool_toggled` + the `toggle_tool` handler are gone. *Site*:
       `ui/run_chain.rs`, `ui/{chat,task_detail,request_page}.rs`.
-- [ ] **Seamless history — no button**: windowed (last N turns); older turns arrive by **infinite
-      scroll** (F1's sentinel in reverse, one page in flight), not a "↑ load older" button. The bridge
-      thread projection serves pages by cursor (`created_at,id`); the memory-fold line sits above the
-      oldest loaded page; the subtree stays keyed so a chat switch swaps it (rwire T1 keyed diffing).
-      *Site*: the bridge thread projection.
+- [x] **Seamless history — no button** — shipped `2a2ae5a` (agent thread) + `ec7f484` (concierge):
+      both conversation surfaces window to the newest N turns; older turns arrive by **infinite
+      scroll** (rwire's `on_visible` sentinel, one page in flight via its re-keyed binding), not a "↑
+      load older" button. The agent thread reuses its existing `OPEN_AGENT` window; the concierge
+      gains a mirror `OPEN_CHAT` (chat_id, window) store that grows a page on `ExpandChat` and resets
+      lazily on a differing chat_id (no switch hook). Pages are id-ordered (`load_thread_windowed`
+      LIMIT N, oldest-first) — simpler than and equivalent to a `created_at,id` cursor; the
+      memory-fold line stays above the oldest loaded page; the subtree stays keyed by chat id. *Site*:
+      `bridge/{chat_turn,agent_thread}.rs`, `db/chat.rs`, `ui/{chat,agent}.rs`.
 
 ### P4b — An agent-owned `pipeline.yaml`, with a floor claw enforces
 
