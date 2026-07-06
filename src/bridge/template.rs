@@ -55,6 +55,9 @@ pub fn scaffold_rwire_app(data_dir: &Path, ws_id: &str, ws_name: &str) {
     if std::fs::create_dir_all(hello.join("src")).is_ok() {
         let _ = std::fs::write(hello.join("Cargo.toml"), HELLO_CARGO);
         let _ = std::fs::write(hello.join("src").join("main.rs"), HELLO_MAIN);
+        // Detection seeds the first pipeline.yaml draft (P4b): now that Cargo.toml is in place the
+        // project detects as an rwire app, so the starter ships a readable checks/preview recipe.
+        crate::pipeline::seed(&hello, crate::kinds::detect(&hello));
         // Birth the repo (init → .gitignore on `develop`), then commit the skeleton so it is
         // the branch base — otherwise a request worktree cut from `develop`'s HEAD wouldn't
         // carry the app files.

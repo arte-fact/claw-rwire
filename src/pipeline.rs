@@ -12,6 +12,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::kinds::ProjectKind;
+
 /// The recipe file claw reads at a project root.
 pub const PIPELINE_FILE: &str = "pipeline.yaml";
 
@@ -92,6 +94,48 @@ pub fn preview(project_dir: &Path) -> Option<String> {
         .filter(|command| !command.trim().is_empty())
 }
 
+/// A canonical `pipeline.yaml` draft for a freshly-detected `kind` — the "first draft" claw seeds
+/// (P4b) so there's always a readable file to edit. `None` for kinds with nothing worth seeding
+/// (no checks and no preview — the file would say nothing the fallback doesn't).
+#[must_use]
+pub fn seed_text(kind: ProjectKind) -> Option<String> {
+    let checks = kind.checks();
+    let preview = kind.preview_command();
+    if checks.is_empty() && preview.is_none() {
+        return None;
+    }
+    let mut out = String::from(
+        "# claw pipeline — this project's checks + preview command.\n\
+         # Edit freely; claw always runs a fmt·test·build floor regardless.\n",
+    );
+    if !checks.is_empty() {
+        out.push_str("checks:\n");
+        for spec in checks {
+            out.push_str(&format!(
+                "  - name: {}\n    run: {}\n",
+                spec.name, spec.command
+            ));
+        }
+    }
+    if let Some(preview) = preview {
+        out.push_str(&format!("preview: {preview}\n"));
+    }
+    Some(out)
+}
+
+/// Write [`seed_text`] to `project_dir/pipeline.yaml` when absent (best-effort) — never clobbers an
+/// agent-owned file. Returns whether a file was written.
+pub fn seed(project_dir: &Path, kind: ProjectKind) -> bool {
+    let path = project_dir.join(PIPELINE_FILE);
+    if path.exists() {
+        return false;
+    }
+    match seed_text(kind) {
+        Some(text) => std::fs::write(&path, text).is_ok(),
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +195,27 @@ mod tests {
             "no checks key → fall back for checks"
         );
         assert_eq!(preview(&dir).as_deref(), Some("npm start"));
+    }
+
+    #[test]
+    fn seeded_draft_round_trips_and_never_clobbers() {
+        let dir = scratch("seed");
+        assert!(seed(&dir, ProjectKind::RwireApp), "writes the first draft");
+        assert!(
+            !seed(&dir, ProjectKind::RwireApp),
+            "never clobbers an existing (agent-owned) file"
+        );
+        let names: Vec<String> = checks(&dir)
+            .expect("seeded checks parse back")
+            .into_iter()
+            .map(|check| check.name)
+            .collect();
+        assert_eq!(names, ["fmt", "clippy", "test"]);
+        assert_eq!(preview(&dir).as_deref(), Some("cargo run"));
+
+        // A kind with no recipe seeds nothing (the fallback already says it all).
+        let empty = scratch("seed-empty");
+        assert!(!seed(&empty, ProjectKind::Other));
+        assert!(load(&empty).is_none());
     }
 }
