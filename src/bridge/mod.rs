@@ -214,6 +214,9 @@ pub enum Command {
     },
     /// "Load older" on the agent thread (R5): grow the open thread's window by one page.
     ExpandAgentThread,
+    /// Seamless history on the concierge thread (P4a): the top sentinel scrolled into view — grow
+    /// the open thread's window by one page and re-project.
+    ExpandChat,
     /// Leaving the agent pages — clear the open agent so the nav highlight follows the route.
     CloseAgentThread,
     /// Project the active workspace's pipeline steps + edit lock — the Workflow tab opening.
@@ -642,6 +645,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             agent_thread::load(conn, shared, &agent, &workspace)
         }
         Command::ExpandAgentThread => agent_thread::expand(conn, shared),
+        Command::ExpandChat => chat_turn::expand(conn, shared),
         Command::CloseAgentThread => agent_thread::close(shared),
         Command::LoadWorkflow { workspace } => workflow::load(conn, shared, &workspace),
         Command::AddStep { workspace, kind } => workflow::add(conn, shared, &workspace, &kind),
@@ -832,9 +836,9 @@ fn delete_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str
     let chats = chat::list_chats(conn).unwrap_or_default();
     let archived = chat::list_archived_chats(conn).unwrap_or_default();
     let fallback = chats.first().map(|chat| chat.id.clone());
-    let fallback_messages = fallback
+    let (fallback_messages, fallback_truncated) = fallback
         .as_deref()
-        .map(|id| chat::load_thread(conn, id).unwrap_or_default())
+        .map(|id| chat_turn::windowed_thread(conn, id))
         .unwrap_or_default();
     let id = id.to_owned();
     shared.update_shared_changed::<App>(
@@ -844,6 +848,7 @@ fn delete_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str
             App::FIELD_PENDING_DELETE,
             App::FIELD_OPEN_CHAT,
             App::FIELD_MESSAGES,
+            App::FIELD_MESSAGES_TRUNCATED,
         ]),
         |app| {
             app.chats = chats;
@@ -852,6 +857,7 @@ fn delete_chat(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str
             if app.open_chat.as_deref() == Some(id.as_str()) {
                 app.open_chat = fallback;
                 app.messages = fallback_messages;
+                app.messages_truncated = fallback_truncated;
             }
         },
     );

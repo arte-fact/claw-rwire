@@ -8,7 +8,9 @@ use crate::db::{self, agents, chat, endpoints, workspaces};
 use crate::id;
 use crate::state::App;
 
-use super::{admin, data_dir, log_line, project_chat_memory, project_memory_overview, seed};
+use super::{
+    admin, chat_turn, data_dir, log_line, project_chat_memory, project_memory_overview, seed,
+};
 
 /// Prime the projection from the DB and select the most recent thread. On first
 /// run (no threads yet) seed one so the operator lands in a ready chat.
@@ -46,21 +48,23 @@ pub(super) fn boot(conn: &rusqlite::Connection, shared: &SharedServerState) {
     admin::project_registry(conn, shared);
     let chats = chat::list_chats(conn).unwrap_or_default();
     let selected = chats.first().map(|chat| chat.id.clone());
-    let messages = selected
+    let (messages, truncated) = selected
         .as_deref()
-        .map(|id| chat::load_thread(conn, id).unwrap_or_default())
+        .map(|id| chat_turn::windowed_thread(conn, id))
         .unwrap_or_default();
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
             App::FIELD_CHATS,
             App::FIELD_OPEN_CHAT,
             App::FIELD_MESSAGES,
+            App::FIELD_MESSAGES_TRUNCATED,
             App::FIELD_PIPELINE_READY,
         ]),
         |app| {
             app.chats = chats;
             app.open_chat = selected;
             app.messages = messages;
+            app.messages_truncated = truncated;
             app.pipeline_ready = true;
         },
     );

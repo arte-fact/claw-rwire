@@ -132,38 +132,60 @@ pub fn title_if_default(conn: &Connection, id: &str, title: &str) -> rusqlite::R
     Ok(())
 }
 
-/// The rendered thread: chat turns and tool cards interleaved by insertion order.
-/// `kind='tool'` rows join their structured payload from `web_message_tools`.
-pub fn load_thread(conn: &Connection, chat_id: &str) -> rusqlite::Result<Vec<TranscriptItem>> {
+/// The rendered thread: chat turns and tool cards interleaved by insertion order — the newest
+/// `window` turns (oldest-first), plus the count of older rows *not* loaded (the seamless-history
+/// sentinel's `next`, P4a). `kind='tool'` rows join their structured payload from
+/// `web_message_tools`. The window grows a page at a time as the reader scrolls up (the bridge's
+/// `OPEN_CHAT` store owns the size).
+pub fn load_thread_windowed(
+    conn: &Connection,
+    chat_id: &str,
+    window: usize,
+) -> rusqlite::Result<(Vec<TranscriptItem>, usize)> {
+    let total: usize = conn.query_row(
+        "SELECT COUNT(*) FROM web_messages
+          WHERE messaging_group_id = ?1 AND kind IN ('chat', 'tool')",
+        [chat_id],
+        |row| row.get(0),
+    )?;
     let mut stmt = conn.prepare(
         "SELECT w.kind, w.direction, w.body, substr(w.created_at, 12, 5),
                 t.name, t.arguments, t.result, t.status
-           FROM web_messages w
+           FROM (SELECT id, kind, direction, body, created_at
+                   FROM web_messages
+                  WHERE messaging_group_id = ?1 AND kind IN ('chat', 'tool')
+                  ORDER BY id DESC LIMIT ?2) w
            LEFT JOIN web_message_tools t ON t.web_message_id = w.id
-          WHERE w.messaging_group_id = ?1 AND w.kind IN ('chat', 'tool')
           ORDER BY w.id ASC",
     )?;
-    let rows = stmt.query_map([chat_id], |row| {
-        let kind: String = row.get(0)?;
-        let time: String = row.get(3)?;
-        if kind == "tool" {
-            Ok(TranscriptItem::Tool(ToolCardView {
-                name: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                arguments: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                result: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
-                ok: row.get::<_, Option<String>>(7)?.as_deref() == Some("ok"),
-                time,
-            }))
-        } else {
-            let direction: String = row.get(1)?;
-            Ok(TranscriptItem::Message(ChatMessage {
-                role: role_from_direction(&direction),
-                text: row.get(2)?,
-                time,
-            }))
-        }
-    })?;
-    rows.collect()
+    let items: Vec<TranscriptItem> = stmt
+        .query_map((chat_id, window as i64), transcript_row)?
+        .collect::<rusqlite::Result<_>>()?;
+    let truncated = total.saturating_sub(items.len());
+    Ok((items, truncated))
+}
+
+/// Map one joined `web_messages`(+tool) row to a transcript item — shared by the full and windowed
+/// thread loaders so both read the same eight columns in the same order.
+fn transcript_row(row: &rusqlite::Row) -> rusqlite::Result<TranscriptItem> {
+    let kind: String = row.get(0)?;
+    let time: String = row.get(3)?;
+    if kind == "tool" {
+        Ok(TranscriptItem::Tool(ToolCardView {
+            name: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            arguments: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+            result: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+            ok: row.get::<_, Option<String>>(7)?.as_deref() == Some("ok"),
+            time,
+        }))
+    } else {
+        let direction: String = row.get(1)?;
+        Ok(TranscriptItem::Message(ChatMessage {
+            role: role_from_direction(&direction),
+            text: row.get(2)?,
+            time,
+        }))
+    }
 }
 
 /// One model-facing transcript turn with its source `web_messages.id` — the id lets the
@@ -322,7 +344,8 @@ mod tests {
         append_message(&conn, "c1", MessageRole::User, "hello").expect("append");
         append_message(&conn, "c1", MessageRole::Agent, "hi back").expect("append");
 
-        let thread = load_thread(&conn, "c1").expect("load");
+        let (thread, truncated) = load_thread_windowed(&conn, "c1", 100).expect("load");
+        assert_eq!(truncated, 0, "the whole short thread fits the window");
         let shape: Vec<(MessageRole, &str)> = thread
             .iter()
             .filter_map(|item| match item {
@@ -337,7 +360,32 @@ mod tests {
                 (MessageRole::Agent, "hi back"),
             ]
         );
-        assert!(load_thread(&conn, "c2").expect("load empty").is_empty());
+        assert!(
+            load_thread_windowed(&conn, "c2", 100)
+                .expect("load empty")
+                .0
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn windowing_keeps_the_newest_turns_and_counts_the_rest() {
+        let conn = db::open_in_memory().expect("open");
+        create_chat(&conn, "c1", "Long").expect("create");
+        for n in 0..5 {
+            append_message(&conn, "c1", MessageRole::User, &format!("m{n}")).expect("append");
+        }
+        // A window of 2 loads only the newest two turns, oldest-first, and reports 3 older.
+        let (thread, truncated) = load_thread_windowed(&conn, "c1", 2).expect("load");
+        assert_eq!(truncated, 3);
+        let texts: Vec<&str> = thread
+            .iter()
+            .filter_map(|item| match item {
+                TranscriptItem::Message(m) => Some(m.text.as_str()),
+                TranscriptItem::Tool(_) => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["m3", "m4"], "newest two, oldest-first");
     }
 
     #[test]
@@ -356,7 +404,7 @@ mod tests {
         .expect("tool");
         append_message(&conn, "c1", MessageRole::Agent, "Rust is great.").expect("reply");
 
-        let thread = load_thread(&conn, "c1").expect("load");
+        let (thread, _) = load_thread_windowed(&conn, "c1", 100).expect("load");
         assert_eq!(thread.len(), 3);
         assert!(matches!(&thread[0], TranscriptItem::Message(m) if m.role == MessageRole::User));
         match &thread[1] {

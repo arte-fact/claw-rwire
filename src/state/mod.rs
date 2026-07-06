@@ -33,6 +33,10 @@ pub struct App {
     pub open_chat: Option<String>,
     /// Transcript of the open thread — chat turns and tool cards, interleaved.
     pub messages: Vec<TranscriptItem>,
+    /// Count of older turns past the window, not loaded into `messages` (P4a seamless history):
+    /// the scroll sentinel's `next`, `> 0` while there's more to load. Zero when the whole thread
+    /// fits the window.
+    pub messages_truncated: usize,
     /// The agent is producing a reply on the open thread.
     pub sending: bool,
     /// A transient error from the last turn (e.g. the endpoint failed). Shown as a

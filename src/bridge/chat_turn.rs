@@ -3,11 +3,13 @@
 //! thread, and — past the window — folds into the concierge's rolling summary. Split from
 //! `bridge/mod.rs`; every fn here runs on the bridge thread except the spawned agent turn.
 
+use std::sync::{Mutex, OnceLock};
+
 use rwire::{ChangeSet, SharedServerState};
 
 use crate::agent;
 use crate::db::{self, chat, resolution, workspaces};
-use crate::state::{ActivityKind, App, ChatSummary, MessageRole, RunKind};
+use crate::state::{ActivityKind, App, ChatSummary, MessageRole, RunKind, TranscriptItem};
 use crate::tools::{CompositeToolbox, ConciergeToolbox, EmptyToolbox, Toolbox};
 use crate::workspace;
 
@@ -15,6 +17,74 @@ use super::{
     Command, DEFAULT_CONTEXT_TOKENS, Delegate, build_toolbox, cached_context, data_dir, log_line,
     memory, now_hm, push_activity, role_prompt, run_system_prompt, send, tasks, warm_context_cache,
 };
+
+/// The default display window — turns projected before the reader scrolls up. Small on purpose: the
+/// concierge thread grows without bound, so a full load would balloon every projection. `CLAW_CHAT_
+/// WINDOW` overrides it (mainly for exercising the sentinel in tests). Mirrors the agent thread's
+/// page size in spirit.
+const CHAT_WINDOW: usize = 50;
+
+fn default_chat_window() -> usize {
+    std::env::var("CLAW_CHAT_WINDOW")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(CHAT_WINDOW)
+}
+
+/// The open concierge thread's `(chat_id, window)`, mirrored bridge-side so a "load older" expansion
+/// survives background refreshes and resets when the reader switches threads (a differing chat_id).
+static OPEN_CHAT: OnceLock<Mutex<Option<(String, usize)>>> = OnceLock::new();
+
+fn open_chat_slot() -> &'static Mutex<Option<(String, usize)>> {
+    OPEN_CHAT.get_or_init(|| Mutex::new(None))
+}
+
+/// The window to project `chat_id` with — the stored size when it's the open thread, else a fresh
+/// default. Switching threads (a new chat_id) resets the expansion lazily, with no switch hook.
+fn chat_window(chat_id: &str) -> usize {
+    let mut slot = open_chat_slot().lock().unwrap_or_else(|e| e.into_inner());
+    match slot.as_ref() {
+        Some((id, window)) if id == chat_id => *window,
+        _ => {
+            let window = default_chat_window();
+            *slot = Some((chat_id.to_owned(), window));
+            window
+        }
+    }
+}
+
+/// Project `chat_id`'s windowed transcript: the newest `chat_window` turns oldest-first + the count
+/// of older turns past the fold (the sentinel's `next`). The single seam every projection site uses.
+pub(super) fn windowed_thread(
+    conn: &rusqlite::Connection,
+    chat_id: &str,
+) -> (Vec<TranscriptItem>, usize) {
+    chat::load_thread_windowed(conn, chat_id, chat_window(chat_id)).unwrap_or_default()
+}
+
+/// Seamless history (P4a): the top sentinel scrolled into view — grow the open thread's window by a
+/// page and re-project it. No-op when nothing is open. The grown window sticks across background
+/// refreshes; switching threads resets it.
+pub(super) fn expand(conn: &rusqlite::Connection, shared: &SharedServerState) {
+    let chat_id = {
+        let mut slot = open_chat_slot().lock().unwrap_or_else(|e| e.into_inner());
+        let Some((id, window)) = slot.as_mut() else {
+            return;
+        };
+        *window += default_chat_window();
+        id.clone()
+    };
+    let (messages, truncated) = windowed_thread(conn, &chat_id);
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_MESSAGES, App::FIELD_MESSAGES_TRUNCATED]),
+        |app| {
+            if app.open_chat.as_deref() == Some(chat_id.as_str()) {
+                app.messages = messages;
+                app.messages_truncated = truncated;
+            }
+        },
+    );
+}
 
 pub(super) fn submit(
     conn: &rusqlite::Connection,
@@ -80,7 +150,7 @@ fn dispatch_native(
 
     // Two views of the transcript: the display thread (chat turns + tool cards) for the
     // UI, and the model view (tools folded into notes, windowed past the summary) for the request.
-    let display = chat::load_thread(conn, chat_id).unwrap_or_default();
+    let (display, display_truncated) = windowed_thread(conn, chat_id);
     let model_turns: Vec<crate::state::ChatMessage> =
         chat::model_turns_after(conn, chat_id, memory.summarized_through)
             .unwrap_or_default()
@@ -134,6 +204,7 @@ fn dispatch_native(
         ChangeSet::from_fields(&[
             App::FIELD_CHATS,
             App::FIELD_MESSAGES,
+            App::FIELD_MESSAGES_TRUNCATED,
             App::FIELD_SENDING,
             App::FIELD_ERROR,
             App::FIELD_RUNNING,
@@ -143,6 +214,7 @@ fn dispatch_native(
             app.chats = chats;
             if app.open_chat.as_deref() == Some(proj_chat.as_str()) {
                 app.messages = display;
+                app.messages_truncated = display_truncated;
             }
             app.sending = true;
             app.error = None;
@@ -206,7 +278,7 @@ pub(super) fn agent_reply(
 ) {
     match result {
         Ok(turn) => {
-            // Persist the tool cards (in order), then the final reply — `load_thread`
+            // Persist the tool cards (in order), then the final reply — `windowed_thread`
             // reads them back interleaved.
             for tool in &turn.invocations {
                 if let Err(err) = chat::append_tool(
@@ -370,14 +442,19 @@ pub(super) fn notified(
         return;
     }
     let chats = chat::list_chats(conn).unwrap_or_default();
-    let messages = chat::load_thread(conn, chat_id).unwrap_or_default();
+    let (messages, truncated) = windowed_thread(conn, chat_id);
     let chat_id = chat_id.to_owned();
     shared.update_shared_changed::<App>(
-        ChangeSet::from_fields(&[App::FIELD_CHATS, App::FIELD_MESSAGES]),
+        ChangeSet::from_fields(&[
+            App::FIELD_CHATS,
+            App::FIELD_MESSAGES,
+            App::FIELD_MESSAGES_TRUNCATED,
+        ]),
         |app| {
             app.chats = chats;
             if app.open_chat.as_deref() == Some(chat_id.as_str()) {
                 app.messages = messages;
+                app.messages_truncated = truncated;
             }
         },
     );
@@ -386,13 +463,14 @@ pub(super) fn notified(
 /// Reload the thread + sidebar and clear `sending`/`error` after a reply landed.
 fn project_reply(conn: &rusqlite::Connection, shared: &SharedServerState, chat_id: &str) {
     let chats = chat::list_chats(conn).unwrap_or_default();
-    let messages = chat::load_thread(conn, chat_id).unwrap_or_default();
+    let (messages, truncated) = windowed_thread(conn, chat_id);
     let title = title_of(&chats, chat_id);
     let chat_id = chat_id.to_owned();
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
             App::FIELD_CHATS,
             App::FIELD_MESSAGES,
+            App::FIELD_MESSAGES_TRUNCATED,
             App::FIELD_SENDING,
             App::FIELD_ERROR,
             App::FIELD_RUNNING,
@@ -402,6 +480,7 @@ fn project_reply(conn: &rusqlite::Connection, shared: &SharedServerState, chat_i
             app.chats = chats;
             if app.open_chat.as_deref() == Some(chat_id.as_str()) {
                 app.messages = messages;
+                app.messages_truncated = truncated;
             }
             app.sending = false;
             app.error = None;

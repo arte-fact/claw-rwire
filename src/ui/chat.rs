@@ -122,6 +122,13 @@ fn transcript(app: &App) -> ElementBuilder {
     });
     let transcript = ChatTranscript::new()
         .items_plain(rows.iter())
+        // Seamless history (P4a): older turns arrive as the reader scrolls up — no button.
+        // `messages_truncated` is the count past the window and the sentinel's `next`; zero hides it.
+        .on_load_older(
+            expand_chat(),
+            app.messages_truncated as u32,
+            app.messages_truncated > 0,
+        )
         // Show the writing cue only while a turn is in flight (`writing(None)` hides it).
         .writing(app.sending.then(|| Cow::from("claw is typing…")))
         .empty_state(empty)
@@ -304,4 +311,12 @@ fn send_message(app: &mut App, ctx: &EventContext) {
     }));
     app.sending = true;
     bridge::send(Command::Submit { chat, text });
+}
+
+/// The seamless-history sentinel scrolled into view — ask the bridge to grow the open thread's
+/// window and re-project it with the next page of older turns prepended (P4a).
+#[handler]
+fn expand_chat(app: &mut App, ctx: &EventContext) {
+    let _ = (app, ctx);
+    bridge::send(Command::ExpandChat);
 }
