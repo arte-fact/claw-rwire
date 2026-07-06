@@ -5,14 +5,16 @@
 //! live run streaming in — above a pinned gate bar (review composer when parked, else run
 //! controls). Board cards and deep links route here; renders from `App.task_detail`.
 
+use std::borrow::Cow;
+
 use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
 use rwire_components::{
-    Avatar, AvatarSize, Breadcrumb, Button, ButtonSize, Input, StatusDot, StatusDotIntent, Text,
+    Avatar, AvatarSize, Breadcrumb, Button, ButtonSize, ChatAuthor, ChatEntry, ChatItem,
+    ChatItemCtx, ChatScroll, ChatTag, ChatTranscript, Input, StatusDot, StatusDotIntent, Text,
 };
 
-use super::thread;
 use crate::bridge::{self, Command};
-use crate::state::{App, LiveItem, ProposedTask, TaskDetail};
+use crate::state::{App, LiveItem, ProposedTask, RunView, TaskDetail};
 
 /// The task page, filling the workspace shell's content area. The thread supplies its own
 /// scroll; the page never scrolls as a whole, so the breadcrumb header and the gate bar stay
@@ -117,45 +119,107 @@ fn status_badge(status: &str) -> ElementBuilder {
 /// the originating spec, a plan's proposal, each persisted run, and (while running) the live run
 /// streaming in — above a pinned gate bar (review composer when parked, else run controls).
 fn page_thread(app: &App, detail: &TaskDetail) -> ElementBuilder {
+    let rows = thread_rows(detail);
+    // The runs render through rwire's `ChatTranscript`; the live run rides its `live_tail` slot — a
+    // synced region of its own (`live_entry`), so a token flush repaints only the tail, never the
+    // persisted history above it. That preserves the two-region perf split inside one transcript.
+    let transcript = ChatTranscript::new()
+        .items_plain(rows.iter())
+        .live_tail(live_entry())
+        .build();
     let column = el(El::Div)
-        .st([St::WFull, St::DisplayFlex, St::FlexCol, St::GapLg, St::PMd])
+        .st([St::WFull, St::PMd])
         .md([St::PLg])
-        .append(thread_entries(detail));
+        .append([transcript]);
     el(El::Div)
         .st([St::Flex1, St::MinH0, St::DisplayFlex, St::FlexCol])
-        .append([thread::scroll(column), gate_bar(app, detail)])
+        .append([ChatScroll::new(column).build(), gate_bar(app, detail)])
 }
 
-/// The ordered thread entries: the spec (as the originating request), a plan's proposed tasks,
-/// each run as an authored entry, then the live run when one is in flight.
-fn thread_entries(detail: &TaskDetail) -> Vec<ElementBuilder> {
-    // The spec lives in its own panel above (the mockup's SPEC box) — the thread starts
-    // with the work: a plan's proposal, then the runs.
-    let mut entries: Vec<ElementBuilder> = Vec::new();
+/// The ordered thread rows as `ChatItem`s: a plan's proposal, then each persisted run. The live run
+/// is not here — it rides the transcript's `live_tail` slot (its own synced region).
+fn thread_rows(detail: &TaskDetail) -> Vec<ThreadRow<'_>> {
+    let mut rows: Vec<ThreadRow> = Vec::new();
     if detail.is_plan {
-        entries.push(thread::entry(
-            "claw",
-            St::TextAccent,
-            Some("Plan"),
-            "",
-            None,
-            vec![proposed_view(&detail.proposed, detail.awaiting)],
-        ));
+        rows.push(ThreadRow::Plan {
+            proposed: &detail.proposed,
+            awaiting: detail.awaiting,
+        });
     }
-    for (index, run) in detail.runs.iter().enumerate() {
-        entries.push(run_entry(run, &format!("a{index}")));
-    }
-    // The live run is its own `#[renderer]`, so a token flush repaints only this entry — not the
-    // whole board/modal. It reads the live stream itself and self-hides when nothing is streaming,
-    // so it's included unconditionally (the board never subscribes to `live_turns`).
-    entries.push(live_entry());
-    entries
+    rows.extend(
+        detail
+            .runs
+            .iter()
+            .enumerate()
+            .map(|(index, run)| ThreadRow::Run { run, index }),
+    );
+    rows
 }
 
-/// One persisted run as an authored, phase-tagged thread entry: author (agent) + role tag +
-/// timestamp + verdict chip, over its collapsible tool rows, Markdown reply and any feedback.
-/// Shared by the Peek modal's Thread and the agent thread (`ui::agent`), so a run reads the same.
-pub(crate) fn run_entry(run: &crate::state::RunView, key: &str) -> ElementBuilder {
+/// A task-thread row adapted to rwire's `ChatItem`: a plan's proposal (a "Plan" tag) or a persisted
+/// run (author · role tag · time · verdict chip over its collapsible forensics + reply).
+enum ThreadRow<'a> {
+    Plan {
+        proposed: &'a [ProposedTask],
+        awaiting: bool,
+    },
+    Run {
+        run: &'a RunView,
+        index: usize,
+    },
+}
+
+impl ChatItem for ThreadRow<'_> {
+    fn key(&self) -> Cow<'_, str> {
+        match self {
+            ThreadRow::Plan { .. } => Cow::Borrowed("plan"),
+            ThreadRow::Run { index, .. } => Cow::Owned(format!("a{index}")),
+        }
+    }
+
+    fn author(&self) -> ChatAuthor {
+        match self {
+            ThreadRow::Plan { .. } => ChatAuthor::agent("claw"),
+            ThreadRow::Run { run, .. } if run.agent == "you" => ChatAuthor::user("you"),
+            ThreadRow::Run { run, .. } => ChatAuthor::agent(run.agent.clone()),
+        }
+    }
+
+    fn body(&self, _ctx: &ChatItemCtx<Self>) -> ElementBuilder {
+        match self {
+            ThreadRow::Plan {
+                proposed,
+                awaiting,
+            } => proposed_view(proposed, *awaiting),
+            ThreadRow::Run { run, index } => run_body(run, &format!("a{index}")),
+        }
+    }
+
+    fn time(&self) -> Option<Cow<'_, str>> {
+        match self {
+            ThreadRow::Run { run, .. } if !run.time.is_empty() => Some(Cow::Borrowed(&run.time)),
+            _ => None,
+        }
+    }
+
+    fn tag(&self) -> Option<ChatTag> {
+        match self {
+            ThreadRow::Plan { .. } => Some(ChatTag::muted("Plan")),
+            ThreadRow::Run { run, .. } => Some(ChatTag::muted(crate::ui::run_chain::role_tag(run))),
+        }
+    }
+
+    fn trailing(&self, _ctx: &ChatItemCtx<Self>) -> Option<ElementBuilder> {
+        match self {
+            ThreadRow::Plan { .. } => None,
+            ThreadRow::Run { run, .. } => Some(crate::ui::run_chain::verdict_chip(run)),
+        }
+    }
+}
+
+/// The body of one persisted run (the entry chrome — author/role/time/verdict — is the `ChatItem`'s):
+/// what it remembered, what it changed, the machine verdict, tool forensics, the reply, any feedback.
+fn run_body(run: &RunView, key: &str) -> ElementBuilder {
     let mut body: Vec<ElementBuilder> = Vec::new();
     if !run.memory.trim().is_empty() {
         // What the run remembered at launch (R3.5 M4) — collapsed, above the tool forensics.
@@ -197,19 +261,9 @@ pub(crate) fn run_entry(run: &crate::state::RunView, key: &str) -> ElementBuilde
                 .build(),
         );
     }
-    let author_color = if run.agent == "you" {
-        St::TextHigh
-    } else {
-        St::TextAccent
-    };
-    thread::entry(
-        &run.agent,
-        author_color,
-        Some(&crate::ui::run_chain::role_tag(run)),
-        &run.time,
-        Some(crate::ui::run_chain::verdict_chip(run)),
-        body,
-    )
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::MinW0])
+        .append(body)
 }
 
 /// The live run as the newest thread entry: the agent + current step, a `● running` marker, its
@@ -240,14 +294,21 @@ fn live_entry(app: &App) -> ElementBuilder {
     if let Some(task) = task.filter(|t| t.iteration > 0) {
         tag.push_str(&format!(" · iter {}", task.iteration + 1));
     }
-    thread::entry(
-        author,
-        St::TextAccent,
-        Some(&tag),
-        "",
-        Some(running_dot()),
-        live_stream_body(items),
-    )
+    stream_entry(author, &tag, live_stream_body(items))
+}
+
+/// A live-streaming entry built directly on rwire's `ChatEntry` — it is *not* a transcript
+/// `ChatItem` but a synced region of its own (so token flushes repaint only it): the agent's voice,
+/// a `● running` marker, its streaming body. Shared by this thread's `live_entry` and the agent
+/// thread's live tail (`ui::agent`), so a running turn reads the same in both places.
+pub(crate) fn stream_entry(author: &str, tag: &str, body: Vec<ElementBuilder>) -> ElementBuilder {
+    let column = el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::MinW0])
+        .append(body);
+    ChatEntry::new(ChatAuthor::agent(author.to_owned()), column)
+        .tag(ChatTag::muted(tag.to_owned()))
+        .trailing(running_dot())
+        .build()
 }
 
 /// The live stream's body elements in arrival order — a "working…" placeholder while empty, then
