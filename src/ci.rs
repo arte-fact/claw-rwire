@@ -146,10 +146,22 @@ struct ResolvedCheck {
     command: String,
 }
 
-/// The checks for one repo: the operator's per-repo override if set (one `custom` check),
-/// else the repo's kind recipe. The meta repo (`""`) uses the workspace-level `checks` key
-/// (back-compat with the pre-P1b global command); a project repo uses `…checks.<repo>`.
+/// The checks for one repo, in priority order: the project's `pipeline.yaml` (P4b), then the
+/// operator's per-repo override (one `custom` check), then the repo's kind recipe. The meta repo
+/// (`""`) uses the workspace-level `checks` key (back-compat with the pre-P1b global command); a
+/// project repo uses `…checks.<repo>`.
 fn checks_for(conn: &Connection, workspace: &str, repo: &str, dir: &Path) -> Vec<ResolvedCheck> {
+    // A project's own `pipeline.yaml` is the source of truth (P4b): it wins over the per-repo
+    // override and the kind recipe. Absent/malformed → fall through to legacy resolution.
+    if let Some(checks) = crate::pipeline::checks(dir) {
+        return checks
+            .into_iter()
+            .map(|check| ResolvedCheck {
+                name: check.name,
+                command: check.run,
+            })
+            .collect();
+    }
     let override_key = override_key(workspace, repo);
     let overridden = settings::get(conn, &override_key)
         .ok()

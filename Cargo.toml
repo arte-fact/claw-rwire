@@ -16,6 +16,7 @@ thiserror = "2"
 # Blocking HTTP for the OpenAI-compatible endpoint. The bridge is a sync thread, so
 # a blocking pure-Rust client (rustls TLS) fits with no async runtime there.
 ureq = { version = "2", features = ["json"] }
+serde_yml = "0.0.13"
 
 
 [dev-dependencies]

@@ -300,9 +300,13 @@ fn label(repo: &str) -> String {
     }
 }
 
-/// The preview command for one repo: the per-project `preview` override if set, else the kind
-/// default. Mirrors `ci::checks_for`'s override-then-recipe shape.
+/// The preview command for one repo, in priority order: the project's `pipeline.yaml` (P4b), then
+/// the per-project `preview` override, then the kind default. Mirrors `ci::checks_for`.
 fn command_for(conn: &Connection, workspace: &str, repo: &str, dir: &Path) -> Option<String> {
+    // pipeline.yaml wins (P4b), then the per-project override, then the kind default.
+    if let Some(command) = crate::pipeline::preview(dir) {
+        return Some(command);
+    }
     if let Some(project) = repo.strip_prefix("projects/") {
         let overridden = settings::get(conn, &override_key(workspace, project))
             .ok()

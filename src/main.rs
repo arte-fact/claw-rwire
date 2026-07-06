@@ -13,6 +13,7 @@ mod gitops;
 mod id;
 mod kinds;
 mod mcp;
+mod pipeline;
 mod sandbox;
 mod schedule;
 mod state;
