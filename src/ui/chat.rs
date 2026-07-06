@@ -120,16 +120,12 @@ fn transcript(app: &App) -> ElementBuilder {
     } else {
         "Say hello to start the conversation."
     });
-    // Only arm the writing cue while a turn is actually in flight. (`ChatTranscript::writing`
-    // shows the indicator whenever it's *called* — `.writing(None)` still renders an unlabeled
-    // one — so gate the call itself rather than passing an Option.)
-    let mut transcript = ChatTranscript::new()
+    let transcript = ChatTranscript::new()
         .items_plain(rows.iter())
-        .empty_state(empty);
-    if app.sending {
-        transcript = transcript.writing(Some(Cow::from("claw is typing…")));
-    }
-    let transcript = transcript.build();
+        // Show the writing cue only while a turn is in flight (`writing(None)` hides it).
+        .writing(app.sending.then(|| Cow::from("claw is typing…")))
+        .empty_state(empty)
+        .build();
 
     let key = format!("thread-{}", app.open_chat.as_deref().unwrap_or("none"));
     el(El::Div)
