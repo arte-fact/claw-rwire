@@ -9,17 +9,20 @@
 //! streamed token repaints only the tail; a lifecycle change re-projects the (windowed, tiny)
 //! timeline. No renderer nests inside a keyed subtree — the two failure modes of the v1 page.
 
+use std::borrow::Cow;
+
 use rwire::router::Link;
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, St, el, handler, renderer};
-use rwire_components::{Composer, Text};
+use rwire_components::{
+    ChatAuthor, ChatItem, ChatItemCtx, ChatScroll, ChatTag, ChatTranscript, Composer, Text,
+};
 
 use crate::bridge::{self, Command};
 use crate::state::{AgentThread, AgentThreadItem, AgentTurn, App, LiveItem};
 use crate::ui::memory;
 use crate::ui::run_chain::verdict_chip_of;
-use crate::ui::task_detail::{live_stream_body, review_gate, running_dot};
-use crate::ui::thread;
+use crate::ui::task_detail::{live_stream_body, review_gate, stream_entry};
 
 /// The page shell: a pinned header over the autoscrolling conversation — a static column whose
 /// two renderer children (timeline, live tail) are siblings, never nested.
@@ -28,7 +31,7 @@ pub fn page() -> ElementBuilder {
         .st([St::Flex1, St::MinH0, St::DisplayFlex, St::FlexCol])
         .append([
             header_bar(),
-            thread::scroll(
+            ChatScroll::new(
                 el(El::Div)
                     .st([
                         St::MaxW60rem,
@@ -40,8 +43,14 @@ pub fn page() -> ElementBuilder {
                         St::PMd,
                     ])
                     .md([St::PLg])
+                    // Two sibling synced regions: the windowed history (a ChatTranscript) and the
+                    // live tail. Kept siblings — never the transcript's live_tail slot — because the
+                    // timeline is its own keyed #[renderer]; nesting the live region inside it would
+                    // put a renderer in a keyed subtree (a v1 failure mode). A token repaints only
+                    // live_tail; a lifecycle change re-projects only the (tiny, windowed) timeline.
                     .append([timeline(), live_tail()]),
-            ),
+            )
+            .build(),
             steer_bar(),
         ])
 }
@@ -150,36 +159,120 @@ fn timeline(app: &App) -> ElementBuilder {
         || "loading".to_owned(),
         |t| format!("{}-{}", t.agent_id, t.workspace_id),
     );
-    let mut rows: Vec<ElementBuilder> = Vec::new();
-    match thread {
-        None => rows.push(Text::body("Loading…").muted().build()),
+    let inner = match thread {
+        None => Text::body("Loading…").muted().build(),
         Some(thread) => {
-            if thread.truncated > 0 {
-                rows.push(load_older(thread.truncated));
+            let mut rows: Vec<Row> = Vec::new();
+            if let Some(line) = fold_text(thread) {
+                rows.push(Row::Fold(line));
             }
-            if let Some(line) = fold_line(thread) {
-                rows.push(line);
-            }
-            for item in &thread.items {
+            // Stable per-item key: `truncated + index` is the turn's absolute position in the full
+            // history, so growing the window on scroll-up doesn't re-key (and re-render) the turns
+            // already on screen — the same discipline the concierge uses with its message rowid.
+            for (index, item) in thread.items.iter().enumerate() {
+                let key = format!("i{}", thread.truncated + index);
                 rows.push(match item {
-                    AgentThreadItem::Turn(turn) => turn_row(turn),
-                    AgentThreadItem::ReviewGate { task_id } => review_prompt(task_id),
-                    AgentThreadItem::Memory { time, note } => memory::event_line(time, note),
+                    AgentThreadItem::Turn(turn) => Row::Turn { turn, key },
+                    AgentThreadItem::ReviewGate { task_id } => Row::Gate { task_id, key },
+                    AgentThreadItem::Memory { time, note } => Row::Memory { time, note, key },
                 });
             }
+            let mut transcript = ChatTranscript::new().items_plain(rows.iter()).on_load_older(
+                expand_thread(),
+                thread.truncated as u32,
+                thread.truncated > 0,
+            );
+            // The empty state is the transcript's only when nothing streams either: the live tail is
+            // a sibling region, so a bare "no activity" must not sit above a running turn.
             if thread.items.is_empty() && thread.live.is_empty() {
-                rows.push(
-                    el(El::Div)
-                        .st([St::TextSm, St::TextMuted])
-                        .text("No activity yet — this agent hasn't worked on anything."),
+                transcript = transcript.empty_state(
+                    Text::body("No activity yet — this agent hasn't worked on anything.")
+                        .muted()
+                        .build(),
                 );
+            }
+            transcript.build()
+        }
+    };
+    el(El::Div).id(&format!("agent-thread-{key}")).append([inner])
+}
+
+/// One agent-thread row adapted to rwire's `ChatItem`. A `Turn` carries the full entry chrome
+/// (author · phase tag · time · verdict chip over its prose + feedback + meta line); the fold
+/// marker, review gate, and memory event lines are chrome-free `row()` overrides — system lines,
+/// not authored turns. `key` is the turn's absolute position, stable across window growth.
+enum Row<'a> {
+    Fold(String),
+    Turn {
+        turn: &'a AgentTurn,
+        key: String,
+    },
+    Gate {
+        task_id: &'a str,
+        key: String,
+    },
+    Memory {
+        time: &'a str,
+        note: &'a str,
+        key: String,
+    },
+}
+
+impl ChatItem for Row<'_> {
+    fn key(&self) -> Cow<'_, str> {
+        match self {
+            Row::Fold(_) => Cow::Borrowed("fold"),
+            Row::Turn { key, .. } | Row::Gate { key, .. } | Row::Memory { key, .. } => {
+                Cow::Borrowed(key)
             }
         }
     }
-    el(El::Div)
-        .id(&format!("agent-thread-{key}"))
-        .st([St::DisplayFlex, St::FlexCol, St::GapLg])
-        .append(rows)
+
+    fn author(&self) -> ChatAuthor {
+        match self {
+            Row::Turn { turn, .. } if turn.author == "you" => ChatAuthor::user("you"),
+            Row::Turn { turn, .. } => ChatAuthor::agent(turn.author.clone()),
+            // Fold/Gate/Memory render via `row()`; their author is never read.
+            _ => ChatAuthor::agent("claw"),
+        }
+    }
+
+    fn body(&self, _ctx: &ChatItemCtx<Self>) -> ElementBuilder {
+        match self {
+            Row::Turn { turn, .. } => turn_body(turn),
+            _ => el(El::Span),
+        }
+    }
+
+    fn time(&self) -> Option<Cow<'_, str>> {
+        match self {
+            Row::Turn { turn, .. } if !turn.time.is_empty() => Some(Cow::Borrowed(&turn.time)),
+            _ => None,
+        }
+    }
+
+    fn tag(&self) -> Option<ChatTag> {
+        match self {
+            Row::Turn { turn, .. } => Some(ChatTag::muted(turn.tag.clone())),
+            _ => None,
+        }
+    }
+
+    fn trailing(&self, _ctx: &ChatItemCtx<Self>) -> Option<ElementBuilder> {
+        match self {
+            Row::Turn { turn, .. } => Some(verdict_chip_of(turn.verdict.as_deref(), turn.ok)),
+            _ => None,
+        }
+    }
+
+    fn row(&self, _ctx: &ChatItemCtx<Self>) -> Option<ElementBuilder> {
+        match self {
+            Row::Fold(text) => Some(memory::muted_line(text)),
+            Row::Gate { task_id, .. } => Some(review_prompt(task_id)),
+            Row::Memory { time, note, .. } => Some(memory::event_line(time, note)),
+            Row::Turn { .. } => None,
+        }
+    }
 }
 
 /// The live run(s) streaming below the history — the only region that reads `live_turns`, so a
@@ -199,14 +292,7 @@ fn live_tail(app: &App) -> ElementBuilder {
                 .find(|turn| turn.task_id == live.task_id)
                 .map(|turn| turn.items.as_slice())
                 .unwrap_or(&[]);
-            thread::entry(
-                &thread.agent_name,
-                St::TextAccent,
-                Some(&live.tag),
-                "",
-                Some(running_dot()),
-                live_stream_body(items),
-            )
+            stream_entry(&thread.agent_name, &live.tag, live_stream_body(items))
         })
         .collect();
     el(El::Div)
@@ -216,23 +302,6 @@ fn live_tail(app: &App) -> ElementBuilder {
         ))
         .st([St::DisplayFlex, St::FlexCol, St::GapLg])
         .append(entries)
-}
-
-/// Seamless history (R5): older turns arrive as the reader scrolls up — no button. A visibility
-/// sentinel above the fold fires `expand_thread` (one page per fire; `on_visible` fires once per
-/// instance, re-arming after each expand re-projects the window) until nothing remains past the
-/// fold, when the sentinel is gone. `truncated` is the `next` marker so the runtime distinguishes a
-/// fresh sentinel from a stale one.
-fn load_older(truncated: usize) -> ElementBuilder {
-    el(El::Div)
-        .id("agent-load-older")
-        .st([St::DisplayFlex, St::JustifyCenter, St::PSm])
-        .on_visible(expand_thread(), truncated as u32)
-        .append(
-            [Text::caption(format!("loading {truncated} earlier turns…"))
-                .muted()
-                .build()],
-        )
 }
 
 #[handler]
@@ -246,7 +315,7 @@ fn expand_thread(app: &mut App, ctx: &EventContext) {
 /// The fold line at the top of the thread — where history passes into memory (R3): what's
 /// past it isn't gone, it's condensed into the working memory shown just below. Falls back to
 /// the plain truncation note when this scope has no memory yet.
-fn fold_line(thread: &AgentThread) -> Option<ElementBuilder> {
+fn fold_text(thread: &AgentThread) -> Option<String> {
     let has_memory = !thread.memory.trim().is_empty();
     let text = match (has_memory, thread.truncated) {
         (true, 0) => "· older work condensed into memory ·".to_owned(),
@@ -256,15 +325,14 @@ fn fold_line(thread: &AgentThread) -> Option<ElementBuilder> {
         (false, 0) => return None,
         (false, n) => format!("· {n} earlier turns not shown ·"),
     };
-    Some(memory::muted_line(&text))
+    Some(text)
 }
 
-/// One conversational turn, on the shared [`thread::entry`] vocabulary: author + phase tag +
-/// time + verdict chip over the prose, any reviewer feedback, and the muted tool/task meta line.
-/// Your turns carry the accent rail (like the chat); agent turns render as Markdown replies.
-fn turn_row(turn: &AgentTurn) -> ElementBuilder {
+/// One conversational turn's body (the entry chrome — author/tag/time/verdict — is the `ChatItem`'s):
+/// the prose, any reviewer feedback, and the muted tool/task meta line. Your turns render as plain
+/// text at the reply size; agent turns render as Markdown.
+fn turn_body(turn: &AgentTurn) -> ElementBuilder {
     let yours = turn.author == "you";
-    let author_color = if yours { St::TextHigh } else { St::TextAccent };
     let body = if yours {
         // Plain text at the agent-reply size (matching the chat's user turns).
         el(El::Div)
@@ -285,14 +353,9 @@ fn turn_row(turn: &AgentTurn) -> ElementBuilder {
     if turn.tool_count > 0 || turn.link_task {
         column.push(meta_line(turn));
     }
-    thread::entry(
-        &turn.author,
-        author_color,
-        Some(&turn.tag),
-        &turn.time,
-        Some(verdict_chip_of(turn.verdict.as_deref(), turn.ok)),
-        column,
-    )
+    el(El::Div)
+        .st([St::DisplayFlex, St::FlexCol, St::GapXs, St::MinW0])
+        .append(column)
 }
 
 /// The muted meta line under a turn: the tool-work count and the task link into the board's
@@ -357,27 +420,48 @@ fn review_prompt(task_id: &str) -> ElementBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rwire::Ev;
 
-    /// Seamless history (P4a): older turns arrive by a visibility sentinel as the reader scrolls
-    /// up — the "load older" click button is retired. Guards the "no button" contract.
+    fn ctx<'a>() -> ChatItemCtx<Row<'a>> {
+        ChatItemCtx { item_ref: None }
+    }
+
+    /// The fold marker, review gate, and memory lines are system rows — they bypass the authored-
+    /// entry chrome via `row()`. (The "no button" seamless-history contract now lives in rwire's
+    /// `ChatTranscript::on_load_older`, tested there.)
     #[test]
-    fn load_older_is_a_scroll_sentinel_not_a_button() {
-        let sentinel = load_older(3);
-        assert!(matches!(sentinel.el_type(), El::Div));
+    fn system_rows_render_chrome_free_via_row() {
+        assert!(Row::Fold("· folded ·".to_owned()).row(&ctx()).is_some());
         assert!(
-            sentinel
-                .events()
-                .iter()
-                .any(|(ev, _)| matches!(ev, Ev::Visible)),
-            "older history arrives by a visibility sentinel",
+            Row::Gate {
+                task_id: "t1",
+                key: "i0".to_owned(),
+            }
+            .row(&ctx())
+            .is_some()
         );
         assert!(
-            !sentinel
-                .events()
-                .iter()
-                .any(|(ev, _)| matches!(ev, Ev::Click)),
-            "seamless — the load-older click button is gone",
+            Row::Memory {
+                time: "12:00",
+                note: "noted",
+                key: "i1".to_owned(),
+            }
+            .row(&ctx())
+            .is_some()
+        );
+    }
+
+    /// Items key by absolute position (`i{truncated+index}`), so a turn keeps its key as older pages
+    /// load on scroll-up — the transcript morph reuses it instead of re-rendering the whole thread.
+    #[test]
+    fn item_keys_are_stable_absolute_positions() {
+        assert_eq!(Row::Fold("x".to_owned()).key(), "fold");
+        assert_eq!(
+            Row::Gate {
+                task_id: "t",
+                key: "i5".to_owned(),
+            }
+            .key(),
+            "i5"
         );
     }
 }

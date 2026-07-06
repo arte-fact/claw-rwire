@@ -8,9 +8,10 @@ use std::borrow::Cow;
 
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, St, el, handler, renderer};
-use rwire_components::{ChatAuthor, ChatItem, ChatItemCtx, ChatTranscript, Composer, Text};
+use rwire_components::{
+    ChatAuthor, ChatItem, ChatItemCtx, ChatScroll, ChatTranscript, Composer, Text,
+};
 
-use super::thread;
 use crate::bridge::{self, Command};
 use crate::state::{App, ChatMessage, MessageRole, ToolCardView, TranscriptItem};
 use crate::ui::memory;
@@ -32,7 +33,7 @@ pub fn surface() -> ElementBuilder {
             St::FlexCol,
             St::OverflowHidden,
         ])
-        .append([thread::scroll(transcript()), composer_bar()])
+        .append([ChatScroll::new(transcript()).build(), composer_bar()])
 }
 
 /// The composer row: an elevated, centered, width-limited card sitting below the
