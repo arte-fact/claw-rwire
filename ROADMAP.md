@@ -177,10 +177,16 @@ the gate.
 
 Stop discarding the output; make every stage's log openable.
 
-- [ ] **Full per-stage logs**: CI stops cutting to a 2 000-char tail and writes the whole log
-      (mirror the preview logfile pattern, `preview.rs:538`); a logs drawer surfaces it on the task
-      thread and (P5c) the project page — a large log can stream through rwire's `StreamedContent`
-      (rwire F1) rather than one giant frame. *Site*: `ci.rs`, a log store, `run_chain::disclosure_row`.
+- [x] **Full per-stage logs**: CI stops cutting to a 2 000-char tail — `run_for_repos` keeps each
+      check's whole output (`CheckOutcome.log`, `serde(skip)` so it never bloats the run's `checks`
+      JSON) and the scheduler persists it to a new **`ci_logs`** table keyed by `(run_id, repo,
+      check)`, cascading with the run. A **logs drawer** surfaces it on the task thread: every check
+      badge is a button that fetches its full log on demand (`Command::LoadCheckLog` →
+      `ci_logs::fetch` → `App.log_drawer` → a right-side `Drawer`), so the run projection stays light
+      (only the capped tail rides the default frame). *Shipped `3f8680d` (store + capture) + `b26722e`
+      (drawer).* *Deferred:* the (P5c) project-page surface, and `StreamedContent` (rwire F1) chunking
+      for pathological logs — the drawer renders the whole log in one scrollable frame today, which is
+      fine while output stays `CHECK_TIMEOUT`-bounded.
 
 ### P4d — The planner, made present
 
