@@ -298,3 +298,11 @@ project page that is the CI/CD cockpit.
 - **P3 success metric (still open):** a fresh "build me an X" ask in an rwire-template workspace
   ships a previewable app with zero operator touches between plan approval and Deliver — the
   deterministic pieces are green; needs one agent-driven request to Deliver.
+- **DevOps agent role ("Relay") — after P5a/P5b.** A CI/CD-steward persona that owns `pipeline.yaml`
+  hygiene, keeps the pipeline green and the preview healthy, and leaves the lane mergeable to
+  `develop`. The persona text is **drafted** (see the session memory `relay-devops-persona-draft`);
+  wiring is a new `agent_groups` row + `agent_prompts.body`, assignable as a workspace owner/member.
+  Deferred deliberately: its full value depends on the Release surface, and if Relay is to *drive* a
+  Release (`develop → main`) or flip `kind` itself, those need **new agent tools** (a release tool +
+  a kind-override tool) that only make sense once P5a/P5b exist. Finish CI/CD first, then refine +
+  wire the persona.
