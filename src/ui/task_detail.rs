@@ -278,7 +278,10 @@ fn live_entry(app: &App) -> ElementBuilder {
     let Some(detail) = app.task_detail.as_ref() else {
         return hidden();
     };
-    if detail.status != "running" {
+    // A plan's turn streams while it is being planned — the plan task is `awaiting`, not `running`,
+    // so it's gated on the in-flight planning marker (P4d) rather than the run status.
+    let planning = app.planning_live.iter().find(|p| p.plan_id == detail.id);
+    if detail.status != "running" && planning.is_none() {
         return hidden();
     }
     let items: &[LiveItem] = app
@@ -287,6 +290,9 @@ fn live_entry(app: &App) -> ElementBuilder {
         .find(|turn| turn.task_id == detail.id)
         .map(|turn| turn.items.as_slice())
         .unwrap_or(&[]);
+    if let Some(planning) = planning {
+        return stream_entry(&planning.agent, "Plan", live_stream_body(items));
+    }
     let task = app.tasks.iter().find(|t| t.id == detail.id);
     let author = task.and_then(|t| t.agent.as_deref()).unwrap_or("owner");
     let mut tag = task

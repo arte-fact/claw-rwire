@@ -171,6 +171,10 @@ pub struct App {
     /// Per currently-running task, the interleaved live stream (text segments + tool events in
     /// arrival order) shown in the task detail's Thread — the typewriter, in order.
     pub live_turns: Vec<LiveTurn>,
+    /// Planning turns in flight (P4d): the chat/request → plan-task bridge that lets the concierge
+    /// and the request page show the owner's live planning stream (keyed into `live_turns` by
+    /// `plan_id`). Set when a plan turn launches, cleared when it lands.
+    pub planning_live: Vec<PlanningLive>,
     /// Recent operational log lines for the Logs viewer (newest first, capped).
     pub logs: Vec<LogLine>,
     /// Whether the mobile slide-in nav drawer is open. The desktop sidebar is always

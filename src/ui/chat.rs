@@ -125,6 +125,8 @@ fn transcript(app: &App) -> ElementBuilder {
             app.messages_truncated as u32,
             app.messages_truncated > 0,
         )
+        // The owner's planning turn (P4d) streams live in its own synced region below the thread.
+        .live_tail(live_planning_entry())
         // Show the writing cue only while a turn is in flight (`writing(None)` hides it).
         .writing(app.sending.then(|| Cow::from("claw is typing…")))
         .empty_state(empty)
@@ -146,6 +148,32 @@ fn transcript(app: &App) -> ElementBuilder {
             St::FlexCol,
         ])
         .append([transcript])
+}
+
+/// The owner's planning turn streaming live into this concierge thread (P4d): while a plan launched
+/// from this chat is in flight, its tool calls + reply ride the transcript's `live_tail` slot — the
+/// operator watches the planner work instead of an opaque "planning…". Its own synced region (reads
+/// only `planning_live`/`live_turns`), so a token flush repaints just this line; hidden otherwise.
+#[renderer]
+fn live_planning_entry(app: &App) -> ElementBuilder {
+    let hidden = || el(El::Div).st([St::DisplayNone]);
+    let Some(chat) = app.open_chat.as_deref() else {
+        return hidden();
+    };
+    let Some(plan) = app.planning_live.iter().find(|p| p.chat_id == chat) else {
+        return hidden();
+    };
+    let items: &[crate::state::LiveItem] = app
+        .live_turns
+        .iter()
+        .find(|turn| turn.task_id == plan.plan_id)
+        .map(|turn| turn.items.as_slice())
+        .unwrap_or(&[]);
+    crate::ui::task_detail::stream_entry(
+        &plan.agent,
+        "Plan",
+        crate::ui::task_detail::live_stream_body(items),
+    )
 }
 
 /// One concierge transcript row, adapted to rwire's `ChatItem` so the surface renders through

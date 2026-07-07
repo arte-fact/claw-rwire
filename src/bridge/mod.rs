@@ -789,7 +789,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             workspace,
             request,
             origin_chat,
-        } => orchestrate::ask(conn, &workspace, &request, &origin_chat),
+        } => orchestrate::ask(conn, shared, &workspace, &request, &origin_chat),
         Command::AskPlanned {
             workspace,
             origin_chat,

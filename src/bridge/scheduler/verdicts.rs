@@ -550,7 +550,7 @@ pub(super) fn plan_verdict(
             // revise: discard the current proposal and re-plan with the feedback; the plan stays
             // at the gate for another review.
             let _ = tasks::proposal::clear(conn, &task.id);
-            super::super::orchestrate::replan(conn, task, feedback);
+            super::super::orchestrate::replan(conn, shared, task, feedback);
             activity(
                 shared,
                 task,

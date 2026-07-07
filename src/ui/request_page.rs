@@ -26,7 +26,9 @@ fn body(app: &App) -> ElementBuilder {
     // Two columns on desktop (N3): the story on the left (contract → verdict → timeline),
     // the git reality on the right (branch, repos, history); phones stack them. The full
     // diff keeps the page's bottom at full width, one disclosure per file.
-    let mut story = vec![ask_block(detail)];
+    // The owner's planning turn (P4d) streams live at the top of the story while it's in flight,
+    // then collapses — retiring the opaque "planning…" wait on the request that launched it.
+    let mut story = vec![live_planning_entry(), ask_block(detail)];
     if !detail.checks.is_empty() {
         // The machine verdict on the request's latest passes (P1b) — green reassures, red
         // names the failing checks the macro gate blocks auto-delivery on.
@@ -94,6 +96,39 @@ fn body(app: &App) -> ElementBuilder {
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg, St::MaxW80rem])
         .append(sections)
+}
+
+/// The owner's planning turn streaming live on the request page (P4d): while the plan launched for
+/// this request is in flight, its tool calls + reply stream in its own synced region (matched by
+/// `request_id`), so the operator watches the planner work instead of a static "planning…" badge.
+/// Hidden when no planning turn targets this request.
+#[renderer]
+fn live_planning_entry(app: &App) -> ElementBuilder {
+    let hidden = || el(El::Div).st([St::DisplayNone]);
+    let Some(request_id) = app.request_detail.as_ref().map(|detail| detail.id.as_str()) else {
+        return hidden();
+    };
+    let Some(plan) = app
+        .planning_live
+        .iter()
+        .find(|p| p.request_id == request_id)
+    else {
+        return hidden();
+    };
+    let items: &[crate::state::LiveItem] = app
+        .live_turns
+        .iter()
+        .find(|turn| turn.task_id == plan.plan_id)
+        .map(|turn| turn.items.as_slice())
+        .unwrap_or(&[]);
+    section(
+        "Planning",
+        crate::ui::task_detail::stream_entry(
+            &plan.agent,
+            "Plan",
+            crate::ui::task_detail::live_stream_body(items),
+        ),
+    )
 }
 
 /// The page's first line, per the navigation redesign (N0): breadcrumb trail

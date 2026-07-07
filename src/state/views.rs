@@ -150,6 +150,18 @@ pub struct LiveTurn {
     pub items: Vec<LiveItem>,
 }
 
+/// A planning turn in flight (P4d): the bridge from the surfaces the operator watches — the
+/// concierge (by `chat_id`) and the request page (by `request_id`) — to the plan task's live
+/// stream in [`LiveTurn`] (keyed by `plan_id`). The `agent` is the owner's display name (author of
+/// the streaming entry). Set when the plan turn launches, removed when it lands.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanningLive {
+    pub plan_id: String,
+    pub chat_id: String,
+    pub request_id: String,
+    pub agent: String,
+}
+
 impl LiveTurn {
     /// Extend the current text segment; a tool call in between means the next chunk starts a new
     /// segment, so the stream keeps its real `text → tool → text` order.

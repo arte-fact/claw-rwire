@@ -18,7 +18,13 @@ use super::{Command, data_dir, log_line, memory, now_hm, push_activity, run_syst
 /// yet). The user approves to materialise it. A workspace with `auto_approve` set materialises the
 /// proposal immediately (see [`planned`]) — and its per-task human sign-off gates also pass
 /// automatically (see `scheduler::gate_action`), so the workspace runs hands-off end to end.
-pub fn ask(conn: &rusqlite::Connection, workspace: &str, request: &str, origin_chat: &str) {
+pub fn ask(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    request: &str,
+    origin_chat: &str,
+) {
     let Ok(plan_id) = crate::id::new_id() else {
         return log_line("orchestrate: could not mint a plan id".to_owned());
     };
@@ -62,15 +68,21 @@ pub fn ask(conn: &rusqlite::Connection, workspace: &str, request: &str, origin_c
     } else {
         plan_brief(request)
     };
-    launch_planning(conn, workspace, &plan_id, &brief, origin_chat);
+    launch_planning(conn, shared, workspace, &plan_id, &brief, origin_chat);
 }
 
 /// Re-plan a sent-back plan: re-run the owner's planning turn into the same plan task with the
 /// reviewer's feedback. The previous proposal was already cleared by the caller.
-pub fn replan(conn: &rusqlite::Connection, plan: &crate::db::tasks::Task, feedback: &str) {
+pub fn replan(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    plan: &crate::db::tasks::Task,
+    feedback: &str,
+) {
     let origin = plan.origin_chat.as_deref().unwrap_or("");
     launch_planning(
         conn,
+        shared,
         &plan.workspace_id,
         &plan.id,
         &revise_brief(&plan.spec, feedback),
@@ -82,6 +94,7 @@ pub fn replan(conn: &rusqlite::Connection, plan: &crate::db::tasks::Task, feedba
 /// thread, appending its proposal to `plan_id`. Posts `Command::AskPlanned` back.
 fn launch_planning(
     conn: &rusqlite::Connection,
+    shared: &SharedServerState,
     workspace: &str,
     plan_id: &str,
     brief_text: &str,
@@ -138,12 +151,17 @@ fn launch_planning(
     let messages = agent::build_messages(&system_prompt, std::slice::from_ref(&brief));
     let toolbox = PlanningToolbox::new(planning_conn, workspace, Some(plan_id.to_owned()));
 
-    // The plan gate task's title labels the live activity feed while this turn streams.
-    let task_title = db::tasks::get(conn, plan_id)
-        .ok()
-        .flatten()
-        .map(|task| task.title)
+    // The plan gate task labels the live feed (its title) and links the streaming turn back to the
+    // request the operator is watching (its request_id).
+    let plan_task = db::tasks::get(conn, plan_id).ok().flatten();
+    let task_title = plan_task
+        .as_ref()
+        .map(|task| task.title.clone())
         .unwrap_or_else(|| "planning".to_owned());
+    let request_id = plan_task
+        .as_ref()
+        .and_then(|task| task.request_id.clone())
+        .unwrap_or_default();
     let ctx = crate::state::ProgressCtx {
         task_id: plan_id.to_owned(),
         task: task_title,
@@ -151,6 +169,21 @@ fn launch_planning(
         workspace_id: workspace.to_owned(),
         workspace: workspace_name,
     };
+    // Project the in-flight planning marker (P4d) so the concierge and the request page can show
+    // the owner's live stream immediately — before the first token — and drop it when it lands.
+    let live = crate::state::PlanningLive {
+        plan_id: plan_id.to_owned(),
+        chat_id: origin_chat.to_owned(),
+        request_id,
+        agent: inference.agent_name.clone(),
+    };
+    shared.update_shared_changed::<App>(
+        rwire::ChangeSet::from_fields(&[App::FIELD_PLANNING_LIVE]),
+        move |app| {
+            app.planning_live.retain(|p| p.plan_id != live.plan_id);
+            app.planning_live.push(live);
+        },
+    );
 
     let workspace = workspace.to_owned();
     let origin_chat = origin_chat.to_owned();
@@ -236,6 +269,14 @@ pub fn planned(
     // run is the source of truth.
     record_planning_run(conn, workspace, plan_id, &result, transcript.as_deref());
     super::live::clear_live_turn(shared, plan_id);
+    // Retire the in-flight planning marker — the persisted run is now the source of truth.
+    shared.update_shared_changed::<App>(
+        rwire::ChangeSet::from_fields(&[App::FIELD_PLANNING_LIVE]),
+        {
+            let plan_id = plan_id.to_owned();
+            move |app| app.planning_live.retain(|p| p.plan_id != plan_id)
+        },
+    );
 
     let auto_approve = workspaces::get(conn, workspace)
         .ok()
