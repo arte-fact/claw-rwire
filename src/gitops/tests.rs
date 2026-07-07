@@ -352,7 +352,7 @@ fn push_lands_develop_and_the_request_branch_on_a_bare_remote() {
     assert_eq!(errors, Vec::<String>::new());
     deliver_repo(&root, "req/req5-push", "Deliver: out\n\nRequest: req-5").expect("deliver");
 
-    push_refs(&root, "req/req5-push").expect("push");
+    push_signed(&root, "origin", &[DEVELOP, "req/req5-push"], None).expect("push");
     let remote_refs = git(&remote, &["branch"]).expect("branches");
     assert!(remote_refs.contains("develop"), "{remote_refs}");
     assert!(remote_refs.contains("req/req5-push"), "{remote_refs}");
@@ -863,4 +863,28 @@ fn origin_divergence_counts_unpushed_commits_and_is_none_without_a_tracking_ref(
     assert_eq!(origin_divergence(&local, MAIN), Some((1, 0)));
     // A branch with no origin/<branch> tracking ref reports nothing rather than a spurious 0/0.
     assert_eq!(origin_divergence(&local, "no-such-branch"), None);
+}
+
+#[test]
+fn set_origin_adds_updates_and_removes_the_remote() {
+    let dir = merge_repo("set-origin");
+    assert!(!has_remote(&dir), "no remote at birth");
+
+    set_origin(&dir, "git@github.com:me/a.git").expect("add");
+    assert!(has_remote(&dir));
+    assert_eq!(
+        git(&dir, &["remote", "get-url", "origin"]).expect("url"),
+        "git@github.com:me/a.git"
+    );
+
+    // A second call updates the URL in place rather than erroring on a duplicate remote.
+    set_origin(&dir, "git@github.com:me/b.git").expect("update");
+    assert_eq!(
+        git(&dir, &["remote", "get-url", "origin"]).expect("url"),
+        "git@github.com:me/b.git"
+    );
+
+    // A blank URL clears the remote.
+    set_origin(&dir, "").expect("remove");
+    assert!(!has_remote(&dir));
 }

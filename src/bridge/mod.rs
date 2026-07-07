@@ -204,6 +204,14 @@ pub enum Command {
         workspace: String,
         project: String,
     },
+    /// Set (or clear, with blanks) a project's deploy origin URL + chosen SSH key (P5b), and point
+    /// the repo's `origin` remote at the URL.
+    SetProjectRemote {
+        workspace: String,
+        project: String,
+        origin: String,
+        deploy_key: String,
+    },
     /// The request-level macro review's verdict came back (G3, worker → bridge).
     RequestValidated {
         request_id: String,
@@ -672,6 +680,19 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::ReleaseProject { workspace, project } => {
             requests::control::release_project(conn, shared, &workspace, &project)
         }
+        Command::SetProjectRemote {
+            workspace,
+            project,
+            origin,
+            deploy_key,
+        } => requests::view::set_project_remote(
+            conn,
+            shared,
+            &workspace,
+            &project,
+            &origin,
+            &deploy_key,
+        ),
         Command::RequestValidated {
             request_id,
             decision,

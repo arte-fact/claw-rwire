@@ -116,6 +116,9 @@ pub(crate) fn load_project_detail(
     let main_preview_uri = main_preview_uri(workspace, project);
     let (origin_ahead, origin_behind) =
         gitops::origin_divergence(&dir, gitops::MAIN).unwrap_or((0, 0));
+    let origin = crate::project_settings::origin(conn, workspace, project).unwrap_or_default();
+    let deploy_key =
+        crate::project_settings::deploy_key(conn, workspace, project).unwrap_or_default();
     let detail = crate::state::ProjectDetail {
         workspace_id: workspace.to_owned(),
         name: project.to_owned(),
@@ -133,6 +136,8 @@ pub(crate) fn load_project_detail(
         release_conflict,
         origin_ahead,
         origin_behind,
+        origin,
+        deploy_key,
     };
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_PROJECT_DETAIL]),
@@ -313,6 +318,24 @@ pub(crate) fn set_project_kind(
         db::settings::set(conn, &key, slug.trim())
     };
     // Re-project on the default branch — a kind change is a settings act, not a branch switch.
+    load_project_detail(conn, shared, workspace, project, None);
+}
+
+/// Set a project's deploy remote (P5b): store the origin URL + chosen SSH-key name, and point the
+/// repo's `origin` remote at the URL so pushes and `origin/*` sync tracking work through one name.
+pub(crate) fn set_project_remote(
+    conn: &Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    project: &str,
+    origin: &str,
+    deploy_key: &str,
+) {
+    let _ = crate::project_settings::set(conn, workspace, project, origin, deploy_key);
+    let dir = crate::workspace::dir_for(&data_dir(), workspace)
+        .join("projects")
+        .join(project);
+    let _ = gitops::set_origin(&dir, origin);
     load_project_detail(conn, shared, workspace, project, None);
 }
 

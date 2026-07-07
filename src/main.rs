@@ -14,6 +14,7 @@ mod id;
 mod kinds;
 mod mcp;
 mod pipeline;
+mod project_settings;
 mod sandbox;
 mod schedule;
 mod ssh_store;

@@ -17,8 +17,8 @@ mod worktrees;
 pub use inspect::{local_branches, ref_tree};
 pub use merge::{MAIN, MergeOutcome, divergence, origin_divergence, would_conflict};
 pub use requests::{
-    DEVELOP, RequestRef, abandon_branch, branch_exists, deliver_repo, has_remote, push_branch,
-    push_refs, release_repo, restore_file, revert_merge,
+    DEVELOP, RequestRef, abandon_branch, branch_exists, deliver_repo, has_remote, push_signed,
+    release_repo, restore_file, revert_merge, set_origin,
 };
 pub use sweep::{commit_pass, ensure_meta_repo, ensure_project_repo, repos};
 pub use task_tree::{reset_task_tree, snapshot_task_bases};
@@ -83,7 +83,19 @@ struct GitRun {
 /// treating a non-zero exit as an error. `cfg` slots between the always-on `core.hooksPath` and
 /// the command args (how identity rides `commit-tree`).
 fn git_run(dir: &Path, cfg: &[&str], args: &[&str]) -> Result<GitRun, GitError> {
-    let output = Command::new("git")
+    git_run_env(dir, cfg, &[], args)
+}
+
+/// [`git_run`] with extra environment variables — the push path sets `GIT_SSH_COMMAND` here to
+/// select a deploy key (P5b). Everything else about the hermetic spawn is identical.
+fn git_run_env(
+    dir: &Path,
+    cfg: &[&str],
+    envs: &[(&str, &str)],
+    args: &[&str],
+) -> Result<GitRun, GitError> {
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(dir)
         .args(["-c", "core.hooksPath=/dev/null"])
@@ -91,9 +103,11 @@ fn git_run(dir: &Path, cfg: &[&str], args: &[&str]) -> Result<GitRun, GitError> 
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .map_err(GitError::Spawn)?;
+        .env("GIT_CONFIG_GLOBAL", "/dev/null");
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let output = command.output().map_err(GitError::Spawn)?;
     Ok(GitRun {
         ok: output.status.success(),
         stdout: String::from_utf8_lossy(&output.stdout).trim().to_owned(),

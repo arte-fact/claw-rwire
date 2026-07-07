@@ -3,6 +3,8 @@
 //! Abandon, Roll back, Push, and per-file Restore. The harness still never touches a
 //! remote unprompted: Push is a button.
 
+use std::path::PathBuf;
+
 use rusqlite::Connection;
 use rwire::SharedServerState;
 
@@ -418,8 +420,15 @@ pub(crate) fn rollback(conn: &Connection, shared: &SharedServerState, request_id
     refresh(conn, shared, &request);
 }
 
+/// The filesystem path of a project's configured SSH deploy key (P5b), or `None` when unset — the
+/// push then runs keyless (ssh-agent / default identities), unchanged from before P5b.
+fn project_deploy_key(conn: &Connection, workspace: &str, project: &str) -> Option<PathBuf> {
+    crate::project_settings::deploy_key(conn, workspace, project)
+        .and_then(|name| crate::ssh_store::key_path(&data_dir(), &name))
+}
+
 /// The explicit, user-gated push: the request branch + develop to `origin` in every
-/// remote-bearing repo the request touched.
+/// remote-bearing repo the request touched, each under its project's chosen deploy key (P5b).
 pub(crate) fn push(conn: &Connection, shared: &SharedServerState, request_id: &str) {
     let Ok(Some(request)) = db::requests::get(conn, request_id) else {
         return;
@@ -434,7 +443,16 @@ pub(crate) fn push(conn: &Connection, shared: &SharedServerState, request_id: &s
         if !gitops::has_remote(&dir) {
             continue;
         }
-        match gitops::push_refs(&dir, &repo.branch) {
+        let key = repo
+            .repo
+            .strip_prefix("projects/")
+            .and_then(|project| project_deploy_key(conn, &request.workspace_id, project));
+        match gitops::push_signed(
+            &dir,
+            "origin",
+            &[gitops::DEVELOP, &repo.branch],
+            key.as_deref(),
+        ) {
             Ok(_) => pushed += 1,
             Err(err) => errors.push(format!("{}: {err}", repo_name(&repo.repo))),
         }
@@ -511,10 +529,14 @@ pub(crate) fn release_project(
                     "🚀 Released {project} — develop → main. No origin set, so main advanced \
                      locally only."
                 )
-            } else if gitops::push_branch(&dir, gitops::MAIN).is_ok() {
-                format!("🚀 Released {project} — develop → main, pushed to origin.")
             } else {
-                format!("🚀 Released {project} — develop → main. ⚠️ Push to origin failed.")
+                let key = project_deploy_key(conn, workspace, project);
+                match gitops::push_signed(&dir, "origin", &[gitops::MAIN], key.as_deref()) {
+                    Ok(_) => format!("🚀 Released {project} — develop → main, pushed to origin."),
+                    Err(err) => format!(
+                        "🚀 Released {project} — develop → main. ⚠️ Push to origin failed: {err}"
+                    ),
+                }
             }
         }
         Ok(gitops::MergeOutcome::UpToDate) => {

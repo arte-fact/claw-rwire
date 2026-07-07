@@ -872,6 +872,10 @@ pub struct ProjectDetail {
     pub origin_ahead: usize,
     /// `origin/main` commits not yet local (P5a sync) — fetched but not merged. `0` when none.
     pub origin_behind: usize,
+    /// The configured deploy origin URL (P5b), empty when unset — the Remote panel's URL field.
+    pub origin: String,
+    /// The configured SSH deploy-key name (P5b), empty when unset — the Remote panel's key selection.
+    pub deploy_key: String,
 }
 
 /// One producer run's checks on the selected branch (P5c) — carries the `task_runs.id` so each

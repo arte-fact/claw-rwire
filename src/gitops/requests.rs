@@ -90,7 +90,8 @@ pub fn release_repo(dir: &Path, message: &str) -> Result<MergeOutcome, GitError>
     merge_treeless(dir, MAIN, DEVELOP, message)
 }
 
-/// Whether the repo has any remote configured — the Push affordance's visibility.
+/// Whether the repo has any remote configured — the Push affordance's visibility. Reflects the
+/// per-project origin too, since [`set_origin`] writes the configured URL onto the `origin` remote.
 #[must_use]
 pub fn has_remote(dir: &Path) -> bool {
     git(dir, &["remote"])
@@ -98,17 +99,53 @@ pub fn has_remote(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Push the request branch and `develop` to `origin` (G3): the explicit, user-gated act —
-/// the harness never touches a remote on its own. Runs hermetically like all harness git,
-/// so ssh-agent / file remotes work; https credential helpers are deliberately cut off.
-pub fn push_refs(dir: &Path, branch: &str) -> Result<String, GitError> {
-    git(dir, &["push", "origin", DEVELOP, branch])
+/// Point the repo's `origin` remote at `url` (P5b) — `set-url` if it exists, else `add`; a blank
+/// `url` removes it. Writing the configured deploy URL onto `origin` (rather than pushing a bare
+/// URL) is what lets pushes **and** `origin/*` tracking (the sync badges) work through one name.
+pub fn set_origin(dir: &Path, url: &str) -> Result<(), GitError> {
+    if url.trim().is_empty() {
+        let _ = git(dir, &["remote", "remove", "origin"]);
+        return Ok(());
+    }
+    if git(dir, &["remote", "get-url", "origin"]).is_ok() {
+        git(dir, &["remote", "set-url", "origin", url])?;
+    } else {
+        git(dir, &["remote", "add", "origin", url])?;
+    }
+    Ok(())
 }
 
-/// Push one branch to `origin` — the release push (P5a). Hermetic like all harness git; a
-/// per-project remote + chosen key replaces the hardcoded `origin` in P5b.
-pub fn push_branch(dir: &Path, branch: &str) -> Result<String, GitError> {
-    git(dir, &["push", "origin", branch])
+/// Push `refs` to `remote` (G3/P5a), optionally under a chosen SSH deploy key (P5b): the explicit,
+/// user-gated act — the harness never touches a remote on its own. `key_path` sets
+/// `GIT_SSH_COMMAND -i <key>` in batch mode (never prompts; first-seen host keys are accepted so a
+/// fresh deploy target doesn't hang). Hermetic like all harness git; https credential helpers stay
+/// cut off. The request Push passes `develop` + the req branch; a Release passes `main`.
+pub fn push_signed(
+    dir: &Path,
+    remote: &str,
+    refs: &[&str],
+    key_path: Option<&Path>,
+) -> Result<String, GitError> {
+    let ssh = key_path.map(|path| {
+        format!(
+            "ssh -i {} -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
+            path.display()
+        )
+    });
+    let envs: Vec<(&str, &str)> = ssh
+        .as_deref()
+        .map(|command| vec![("GIT_SSH_COMMAND", command)])
+        .unwrap_or_default();
+    let mut args = vec!["push", remote];
+    args.extend_from_slice(refs);
+    let run = super::git_run_env(dir, &[], &envs, &args)?;
+    if !run.ok {
+        return Err(GitError::Command {
+            args: args.join(" "),
+            stderr: run.stderr,
+        });
+    }
+    Ok(run.stdout)
 }
 
 /// Post-delivery rollback (G3): revert the delivery merge on `develop` — a new commit,

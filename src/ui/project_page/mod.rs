@@ -6,6 +6,7 @@
 
 mod pipeline;
 mod release;
+mod remote;
 mod tree;
 
 use rwire::{El, ElementBuilder, EventContext, Link, St, el, handler, renderer};
@@ -30,6 +31,7 @@ fn body(app: &App) -> ElementBuilder {
         tree::switcher(detail),
         pipeline::pipeline_panel(detail),
         release::release_panel(detail),
+        remote::remote_panel(app, detail),
         settings_panel(detail),
         tree::files_panel(detail),
         requests_panel(detail),
