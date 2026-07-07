@@ -1,9 +1,9 @@
 //! The preview supervisor (P2): a running server per request branch (and a long-lived develop
 //! staging preview per web project), reachable at a pooled local port. In-memory and process-only —
 //! previews die with the server, so there is **no table**; the map starts empty on boot and
-//! develop-staging is re-launched on the next delivery. Start runs the project's kind preview command
-//! (rwire-app: `cargo run`; node-app: `npm start`; or a per-project override) from the lane (or the
-//! canonical root, for staging) under its exec strategy, reusing the P1b build artifact.
+//! develop-staging is re-launched on the next delivery. Start runs the project's `pipeline.yaml`
+//! `preview:` command (or a per-project override) from the lane (or the canonical root, for staging)
+//! under its exec strategy, reusing the P1b build artifact.
 //!
 //! Stopping a preview is deliberate. An isola preview is an `isola exec` host process that *parents*
 //! the in-sandbox server across a PID namespace, so reaping that handle does not reap the server (it
@@ -24,7 +24,6 @@ use std::time::{Duration, Instant};
 use rusqlite::Connection;
 
 use crate::db::settings;
-use crate::kinds;
 use crate::tools::exec::{self, ExecStrategy};
 
 /// Default local port pool when `CLAW_PREVIEW_PORTS` is unset. Same-origin previews proxy to these.
@@ -65,7 +64,7 @@ fn supervisor() -> &'static Mutex<Supervisor> {
 
 /// Start (or restart in place) the preview for a task's lane, returning the human status to hand
 /// the agent (up-and-at-`<uri>`, or still-building with a log tail). Resolves the target repo's
-/// command (per-project `preview` override, else the kind default) and spawns it with
+/// command (the project's `pipeline.yaml` `preview:`, else the per-project override) and spawns it with
 /// `CLAW_BIND`/`CLAW_PREVIEW_BASE`/`CLAW_PREVIEW_ID` in the environment. `Err` only when the target
 /// isn't previewable or the spawn itself fails. The port/key the proxy needs live in the map
 /// (read via [`port_for`]/[`resolve_proxy`]), not returned here.
@@ -331,7 +330,7 @@ fn resolve_target(
             .map(|command| (label(&repo), command))
             .ok_or_else(|| {
                 format!(
-                    "`{repo}` has no preview command (not an rwire/node app, no `preview` override)"
+                    "`{repo}` has no preview command (no `preview:` in pipeline.yaml or override)"
                 )
             });
     }
@@ -343,7 +342,10 @@ fn resolve_target(
             return Ok((label(&repo), command));
         }
     }
-    Err("no previewable project in this lane (no rwire/node app, no `preview` override)".to_owned())
+    Err(
+        "no previewable project in this lane (no `preview:` in pipeline.yaml or override)"
+            .to_owned(),
+    )
 }
 
 /// A repo rel's display label — `.` for the meta repo, else the rel itself.
@@ -355,27 +357,19 @@ fn label(repo: &str) -> String {
     }
 }
 
-/// The preview command for one repo, in priority order: the project's `pipeline.yaml` (P4b), then
-/// the per-project `preview` override, then the kind default. Mirrors `ci::checks_for`.
+/// The preview command for one repo: the project's `pipeline.yaml` `preview:` is the source of truth,
+/// then the per-project `preview` override. A project with neither is not previewable. Mirrors
+/// `ci::checks_for`.
 fn command_for(conn: &Connection, workspace: &str, repo: &str, dir: &Path) -> Option<String> {
-    // pipeline.yaml wins (P4b), then the per-project override, then the kind default.
     if let Some(command) = crate::pipeline::preview(dir) {
         return Some(command);
     }
-    if let Some(project) = repo.strip_prefix("projects/") {
-        let overridden = settings::get(conn, &override_key(workspace, project))
-            .ok()
-            .flatten()
-            .map(|c| c.trim().to_owned())
-            .filter(|c| !c.is_empty());
-        if overridden.is_some() {
-            return overridden;
-        }
-        return kinds::kind_for(conn, workspace, project, dir)
-            .preview_command()
-            .map(str::to_owned);
-    }
-    kinds::detect(dir).preview_command().map(str::to_owned)
+    let project = repo.strip_prefix("projects/")?;
+    settings::get(conn, &override_key(workspace, project))
+        .ok()
+        .flatten()
+        .map(|c| c.trim().to_owned())
+        .filter(|c| !c.is_empty())
 }
 
 /// `project.<ws>.<name>.preview` — the per-project preview-command override.
@@ -730,27 +724,27 @@ mod tests {
     }
 
     #[test]
-    fn command_for_prefers_override_then_kind() {
+    fn command_for_reads_pipeline_yaml_then_override() {
         let conn = crate::db::open_in_memory().expect("db");
         let dir = std::env::temp_dir().join(format!("claw-prev-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname=\"x\"\n[dependencies]\nrwire={path=\"../rwire\"}\n",
-        )
-        .unwrap();
 
-        // rwire-app kind → cargo run.
-        assert_eq!(
-            command_for(&conn, "ws", "projects/x", &dir).as_deref(),
-            Some("cargo run")
-        );
-        // Override wins.
+        // No pipeline.yaml and no override → not previewable.
+        assert_eq!(command_for(&conn, "ws", "projects/x", &dir), None);
+
+        // The per-project override is the escape hatch.
         settings::set(&conn, &override_key("ws", "x"), "just serve").unwrap();
         assert_eq!(
             command_for(&conn, "ws", "projects/x", &dir).as_deref(),
             Some("just serve")
+        );
+
+        // pipeline.yaml `preview:` is the source of truth — it wins over the override.
+        std::fs::write(dir.join("pipeline.yaml"), "preview: cargo run\n").unwrap();
+        assert_eq!(
+            command_for(&conn, "ws", "projects/x", &dir).as_deref(),
+            Some("cargo run")
         );
     }
 

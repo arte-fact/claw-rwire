@@ -192,12 +192,6 @@ pub enum Command {
         project: String,
         branch: Option<String>,
     },
-    /// Set (or clear, with an empty slug) a project's kind override (P1).
-    SetProjectKind {
-        workspace: String,
-        project: String,
-        slug: String,
-    },
     /// Release a project (P5a): CI-gate `develop`, merge it into `main` (working-tree-less), and
     /// push `main` iff an origin exists.
     ReleaseProject {
@@ -672,11 +666,6 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             &project,
             branch.as_deref(),
         ),
-        Command::SetProjectKind {
-            workspace,
-            project,
-            slug,
-        } => requests::view::set_project_kind(conn, shared, &workspace, &project, &slug),
         Command::ReleaseProject { workspace, project } => {
             requests::control::release_project(conn, shared, &workspace, &project)
         }

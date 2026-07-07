@@ -1,9 +1,9 @@
 //! The agent-owned `pipeline.yaml` (P4b): a project's build · checks · preview recipe, kept as a
-//! file the agents maintain. When a parseable `pipeline.yaml` sits at the project root it is the
-//! source of truth for the CI checks ([`crate::ci`]) and the preview command
-//! ([`crate::bridge::preview`]); when absent, resolution falls back to the per-repo override and
-//! then the kind recipe. claw still enforces a fmt·test·build floor regardless of the file (a
-//! later P4b slice) so an agent can't weaken the gate by editing it away.
+//! file the agents maintain. It is the **sole** source of truth for a project's CI checks
+//! ([`crate::ci`]) and preview command ([`crate::bridge::preview`]): a parseable `pipeline.yaml` at
+//! the project root defines them, and when it is absent the only fallback is the per-repo `checks`
+//! override — there is no auto-detected recipe and no forced floor, so a project's pipeline is
+//! exactly what its config says.
 //!
 //! Distinct from [`crate::db::pipeline`] — that is a workspace's workflow *stages* (the ordered
 //! Build→Review steps a task flows through); this is a project's CI *recipe* (what commands run).
@@ -12,13 +12,11 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::kinds::ProjectKind;
-
 /// The recipe file claw reads at a project root.
 pub const PIPELINE_FILE: &str = "pipeline.yaml";
 
 /// A project's pipeline recipe, read from [`PIPELINE_FILE`]. Unknown keys are ignored, so a
-/// forward `build:` key (consumed by the floor slice) parses harmlessly until then.
+/// project can carry extra fields without breaking resolution.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Pipeline {
     /// The ordered checks run after a producer pass, before the reviewer.
@@ -69,8 +67,8 @@ fn derive_name(command: &str) -> String {
 }
 
 /// Parse the project's `pipeline.yaml`. `None` when the file is absent or unparseable — resolution
-/// then falls back to the legacy override→kind path, so a malformed edit degrades safely (the
-/// agent notices when its checks don't change) rather than breaking the run.
+/// then falls back to the per-repo override, so a malformed edit degrades safely (the agent notices
+/// when its checks don't change) rather than breaking the run.
 #[must_use]
 pub fn load(project_dir: &Path) -> Option<Pipeline> {
     let text = std::fs::read_to_string(project_dir.join(PIPELINE_FILE)).ok()?;
@@ -78,7 +76,7 @@ pub fn load(project_dir: &Path) -> Option<Pipeline> {
 }
 
 /// The checks a present, non-empty `pipeline.yaml` defines — the source of truth that wins over the
-/// per-repo override and the kind recipe. `None` falls back to legacy resolution.
+/// per-repo override. `None` falls back to the override.
 #[must_use]
 pub fn checks(project_dir: &Path) -> Option<Vec<Check>> {
     let pipeline = load(project_dir)?;
@@ -86,54 +84,12 @@ pub fn checks(project_dir: &Path) -> Option<Vec<Check>> {
 }
 
 /// The preview command a present `pipeline.yaml` defines (blank/whitespace treated as unset).
-/// `None` falls back to legacy resolution.
+/// `None` falls back to the per-project override.
 #[must_use]
 pub fn preview(project_dir: &Path) -> Option<String> {
     load(project_dir)?
         .preview
         .filter(|command| !command.trim().is_empty())
-}
-
-/// A canonical `pipeline.yaml` draft for a freshly-detected `kind` — the "first draft" claw seeds
-/// (P4b) so there's always a readable file to edit. `None` for kinds with nothing worth seeding
-/// (no checks and no preview — the file would say nothing the fallback doesn't).
-#[must_use]
-pub fn seed_text(kind: ProjectKind) -> Option<String> {
-    let checks = kind.checks();
-    let preview = kind.preview_command();
-    if checks.is_empty() && preview.is_none() {
-        return None;
-    }
-    let mut out = String::from(
-        "# claw pipeline — this project's checks + preview command.\n\
-         # Edit freely; claw always runs a fmt·test·build floor regardless.\n",
-    );
-    if !checks.is_empty() {
-        out.push_str("checks:\n");
-        for spec in checks {
-            out.push_str(&format!(
-                "  - name: {}\n    run: {}\n",
-                spec.name, spec.command
-            ));
-        }
-    }
-    if let Some(preview) = preview {
-        out.push_str(&format!("preview: {preview}\n"));
-    }
-    Some(out)
-}
-
-/// Write [`seed_text`] to `project_dir/pipeline.yaml` when absent (best-effort) — never clobbers an
-/// agent-owned file. Returns whether a file was written.
-pub fn seed(project_dir: &Path, kind: ProjectKind) -> bool {
-    let path = project_dir.join(PIPELINE_FILE);
-    if path.exists() {
-        return false;
-    }
-    match seed_text(kind) {
-        Some(text) => std::fs::write(&path, text).is_ok(),
-        None => false,
-    }
 }
 
 #[cfg(test)]
@@ -195,27 +151,5 @@ mod tests {
             "no checks key → fall back for checks"
         );
         assert_eq!(preview(&dir).as_deref(), Some("npm start"));
-    }
-
-    #[test]
-    fn seeded_draft_round_trips_and_never_clobbers() {
-        let dir = scratch("seed");
-        assert!(seed(&dir, ProjectKind::RwireApp), "writes the first draft");
-        assert!(
-            !seed(&dir, ProjectKind::RwireApp),
-            "never clobbers an existing (agent-owned) file"
-        );
-        let names: Vec<String> = checks(&dir)
-            .expect("seeded checks parse back")
-            .into_iter()
-            .map(|check| check.name)
-            .collect();
-        assert_eq!(names, ["fmt", "clippy", "test"]);
-        assert_eq!(preview(&dir).as_deref(), Some("cargo run"));
-
-        // A kind with no recipe seeds nothing (the fallback already says it all).
-        let empty = scratch("seed-empty");
-        assert!(!seed(&empty, ProjectKind::Other));
-        assert!(load(&empty).is_none());
     }
 }

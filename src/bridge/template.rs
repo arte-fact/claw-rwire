@@ -55,9 +55,9 @@ pub fn scaffold_rwire_app(data_dir: &Path, ws_id: &str, ws_name: &str) {
     if std::fs::create_dir_all(hello.join("src")).is_ok() {
         let _ = std::fs::write(hello.join("Cargo.toml"), HELLO_CARGO);
         let _ = std::fs::write(hello.join("src").join("main.rs"), HELLO_MAIN);
-        // Detection seeds the first pipeline.yaml draft (P4b): now that Cargo.toml is in place the
-        // project detects as an rwire app, so the starter ships a readable checks/preview recipe.
-        crate::pipeline::seed(&hello, crate::kinds::detect(&hello));
+        // pipeline.yaml is the sole source of truth for the project's CI + preview (no auto-detected
+        // default), so the starter ships a literal, agent-owned recipe.
+        let _ = std::fs::write(hello.join(crate::pipeline::PIPELINE_FILE), HELLO_PIPELINE);
         // Birth the repo (init → .gitignore on `develop`), then commit the skeleton so it is
         // the branch base — otherwise a request worktree cut from `develop`'s HEAD wouldn't
         // carry the app files.
@@ -154,6 +154,24 @@ rwire-components = { git = "https://github.com/arte-fact/rwire", branch = "main"
 rwire-themes = { git = "https://github.com/arte-fact/rwire", branch = "main" }
 async-std = { version = "1.12", features = ["attributes"] }
 "#;
+
+/// The starter's `pipeline.yaml` — the rwire-app CI recipe + preview command, shipped literally now
+/// that `pipeline.yaml` is the sole source of truth for a project's checks and preview (there is no
+/// auto-detected default). Agents own it from here — edit freely.
+const HELLO_PIPELINE: &str = "\
+# claw pipeline — this project's checks + preview command. Edit freely; this file is the
+# sole source of truth for CI and preview (there is no hidden default).
+checks:
+  - name: fmt
+    run: cargo fmt --check
+  - name: clippy
+    run: cargo clippy --all-targets -- -D warnings
+  - name: test
+    run: cargo test
+  - name: build
+    run: cargo build
+preview: cargo run
+";
 
 /// The starter app: a live counter. Clicking +/- updates the count over the WebSocket, which
 /// proves the preview's socket rides the same-origin proxy. Serves from `CLAW_BIND` (the port)
@@ -257,7 +275,6 @@ fn decrement(state: &mut Counter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kinds::{self, ProjectKind};
 
     #[test]
     fn template_slugs_round_trip() {
@@ -279,14 +296,20 @@ mod tests {
     }
 
     #[test]
-    fn hello_manifest_detects_as_an_rwire_app() {
-        // The scaffolded starter's git-dep manifest must classify as RwireApp so kind/CI/preview
-        // are automatic.
+    fn hello_pipeline_ships_a_valid_rwire_recipe() {
+        // The starter ships a literal pipeline.yaml (no auto-detection) — it must parse into the
+        // rwire CI recipe + preview so CI and preview work out of the box.
         let dir = std::env::temp_dir().join(format!("claw-tmpl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");
-        std::fs::write(dir.join("Cargo.toml"), HELLO_CARGO).expect("write");
-        assert_eq!(kinds::detect(&dir), ProjectKind::RwireApp);
+        std::fs::write(dir.join(crate::pipeline::PIPELINE_FILE), HELLO_PIPELINE).expect("write");
+        let names: Vec<String> = crate::pipeline::checks(&dir)
+            .expect("starter pipeline.yaml parses")
+            .into_iter()
+            .map(|check| check.name)
+            .collect();
+        assert_eq!(names, ["fmt", "clippy", "test", "build"]);
+        assert_eq!(crate::pipeline::preview(&dir).as_deref(), Some("cargo run"));
     }
 
     #[test]

@@ -11,7 +11,6 @@ mod diff;
 mod env_file;
 mod gitops;
 mod id;
-mod kinds;
 mod mcp;
 mod pipeline;
 mod project_settings;

@@ -47,7 +47,7 @@ pub(crate) fn pass_diff(root: &std::path::Path, commits_json: Option<&str>) -> S
 }
 
 /// The workspace's project cards for the Work tab's Projects strip (P1): every `projects/*`
-/// repo `gitops::repos` lists, with its derived kind and open-request count. Derived on read.
+/// repo `gitops::repos` lists, with its open-request count. Derived on read.
 pub(crate) fn project_cards(
     conn: &Connection,
     workspace: &str,
@@ -58,8 +58,6 @@ pub(crate) fn project_cards(
         .filter(|repo| !repo.is_empty())
         .map(|repo| {
             let name = repo.trim_start_matches("projects/").to_owned();
-            let dir = root.join("projects").join(&name);
-            let kind = crate::kinds::kind_for(conn, workspace, &name, &dir);
             let open_requests = db::requests::requests_touching(conn, &repo)
                 .unwrap_or_default()
                 .into_iter()
@@ -74,15 +72,14 @@ pub(crate) fn project_cards(
                 .count();
             crate::state::ProjectCardView {
                 name,
-                kind_slug: kind.slug().to_owned(),
                 open_requests,
             }
         })
         .collect()
 }
 
-/// Project the project page (`Command::LoadProjectDetail`, P1): the derived kind + the
-/// requests that touched the project — no project table, computed on read.
+/// Project the project page (`Command::LoadProjectDetail`, P1): the requests that touched the
+/// project + its branch/release/remote state — no project table, computed on read.
 pub(crate) fn load_project_detail(
     conn: &Connection,
     shared: &SharedServerState,
@@ -93,11 +90,6 @@ pub(crate) fn load_project_detail(
     let dir = crate::workspace::dir_for(&data_dir(), workspace)
         .join("projects")
         .join(project);
-    let kind = crate::kinds::kind_for(conn, workspace, project, &dir);
-    let overridden = db::settings::get(conn, &crate::kinds::kind_key(workspace, project))
-        .ok()
-        .flatten()
-        .is_some_and(|slug| crate::kinds::ProjectKind::from_slug(&slug).is_some());
     let requests = db::requests::requests_touching(conn, &format!("projects/{project}"))
         .unwrap_or_default()
         .into_iter()
@@ -122,8 +114,6 @@ pub(crate) fn load_project_detail(
     let detail = crate::state::ProjectDetail {
         workspace_id: workspace.to_owned(),
         name: project.to_owned(),
-        kind_slug: kind.slug().to_owned(),
-        kind_overridden: overridden,
         requests,
         branches,
         selected_branch: selected,
@@ -300,25 +290,6 @@ fn project_tree(dir: &Path, reference: &str) -> Vec<crate::state::ProjectTreeEnt
             depth: entry.depth,
         })
         .collect()
-}
-
-/// Set (or clear) a project's kind override (P1), then re-project the page. An empty slug
-/// clears the override — detection takes over again.
-pub(crate) fn set_project_kind(
-    conn: &Connection,
-    shared: &SharedServerState,
-    workspace: &str,
-    project: &str,
-    slug: &str,
-) {
-    let key = crate::kinds::kind_key(workspace, project);
-    let _ = if slug.trim().is_empty() {
-        db::settings::set(conn, &key, "")
-    } else {
-        db::settings::set(conn, &key, slug.trim())
-    };
-    // Re-project on the default branch — a kind change is a settings act, not a branch switch.
-    load_project_detail(conn, shared, workspace, project, None);
 }
 
 /// Set a project's deploy remote (P5b): store the origin URL + chosen SSH-key name, and point the

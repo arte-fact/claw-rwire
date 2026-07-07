@@ -4,6 +4,11 @@ A snapshot to resume from. The plan lives in `ROADMAP.md` (now **Platform II**);
 CLAUDE.md; durable facts live in this session's memory. This file is just the operational state +
 the hard-won gotchas.
 
+> **Update (2026-07-07):** the **kind system was removed** — `pipeline.yaml` is the sole source of a
+> project's CI checks + preview command (per-repo override the only fallback; no auto-detection, no
+> floor, no kind badge/override UI). The "derived kinds" and "format·test·build floor" language below
+> is historical.
+
 ## Where things stand
 
 - **Platform I (P0–P3) is shipped and live-verified**: isola sandboxing, first-class projects +
@@ -60,8 +65,10 @@ Use **Playwright** (real chromium), not the mcp headless browser (it drops WS wr
 
 - **Conversation:** `ui/chat.rs` (whole-list today) + `ui/agent.rs` (`load_older` stub); shared atom
   `ui/thread.rs::entry`/`scroll` — P4a unifies the callers + adds a cursor.
-- **Pipeline/kind:** `kinds::detect` drives checks/preview/prompt/badge; resolution seams
-  `ci::checks_for` + `preview::command_for` (both override-then-kind) — P4b slots the yaml here.
+- **Pipeline:** `pipeline.yaml` is the **sole** source of a project's checks + preview (2026-07-07:
+  the kind system was removed — no `kinds::detect`, no floor, no badge/override). Resolution seams
+  `ci::checks_for` + `preview::command_for` read `pipeline.yaml`, then the per-repo override, then
+  nothing.
 - **CI:** `src/ci.rs` runs per-repo checks, keeps only a 2 000-char red tail (discards the rest);
   the macro gate holds on red at `bridge/requests/control.rs:256` — P4b hardens it into the floor.
 - **Preview:** `bridge/preview.rs` in-memory supervisor, `/preview/<key>/` proxy (registered in

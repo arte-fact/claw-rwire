@@ -1,7 +1,7 @@
 //! Per-project git-remote settings (P5b): the deploy origin URL and the chosen SSH deploy-key name,
 //! stored in the shared `settings` table under `project.<ws>.<name>.{origin,deploy_key}` — the same
-//! namespace as the kind override (`kinds::kind_key`) and the preview override. The key *material*
-//! lives in [`crate::ssh_store`]; here we keep only the key's name so a project can point at it.
+//! namespace as the preview override. The key *material* lives in [`crate::ssh_store`]; here we keep
+//! only the key's name so a project can point at it.
 
 use rusqlite::Connection;
 

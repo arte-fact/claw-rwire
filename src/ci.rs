@@ -1,9 +1,8 @@
-//! CI (P1b): the machine judgement that runs before the model reviewer. Per-repo and
-//! kind-driven — each repo a producer pass touched has its [`ProjectKind`](crate::kinds)
-//! supply a check recipe (cargo for Rust kinds, nothing auto for other stacks), with a
-//! per-repo `checks` settings override as the escape hatch for non-cargo builds. This module
-//! is the runner + result type; the scheduler records the outcomes on the run and fails fast
-//! on red before spending a reviewer round.
+//! CI (P1b): the machine judgement that runs before the model reviewer. Per-repo and driven
+//! entirely by each project's `pipeline.yaml` — the checks a producer pass is judged by — with a
+//! per-repo `checks` settings override as the escape hatch. A project with neither runs no checks.
+//! This module is the runner + result type; the scheduler records the outcomes on the run and fails
+//! fast on red before spending a reviewer round.
 //!
 //! Incremental builds come for free: Rust projects gitignore `/target`, and a request's lane
 //! worktree persists across passes, so each repo's `target/` survives from one pass to the
@@ -15,7 +14,6 @@ use std::time::Duration;
 use rusqlite::Connection;
 
 use crate::db::settings;
-use crate::kinds;
 use crate::tools::exec::{self, ExecStrategy};
 
 /// CI wall-clock ceiling per check — a longer leash than interactive `bash` (a cold
@@ -29,8 +27,8 @@ const TAIL_CAP_CHARS: usize = 2_000;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CheckOutcome {
     pub repo: String,
-    /// The check name — a [`CheckSpec`](crate::kinds::CheckSpec) name (`fmt`/`clippy`/`test`)
-    /// or `custom` for an operator override.
+    /// The check name — from `pipeline.yaml` (`fmt`/`clippy`/`test`/…) or `custom` for an operator
+    /// override.
     pub check: String,
     pub ok: bool,
     /// The failure tail when red; empty when green — a capped glance stored in the run's `checks`
@@ -154,48 +152,18 @@ pub fn run_for_repos(
     outcomes
 }
 
-/// A resolved check for one repo — a name + a concrete command (the kind recipe's `&'static`
-/// borrowed into `String`, or the operator's override string).
+/// A resolved check for one repo — a name + a concrete command (from `pipeline.yaml`, or the
+/// operator's override string).
 struct ResolvedCheck {
     name: String,
     command: String,
 }
 
-/// The checks for one repo: the base recipe — the project's `pipeline.yaml` (P4b), else the
-/// operator's per-repo override (one `custom` check), else the repo's kind recipe — with the kind's
-/// `fmt`·`test`·`build` **floor** merged in on top (P4b), so those always run and gate whatever the
-/// file or override says. The meta repo (`""`) uses the workspace-level `checks` key (back-compat
-/// with the pre-P1b global command); a project repo uses `…checks.<repo>`.
+/// The checks for one repo: the project's `pipeline.yaml` is the sole source of truth, else the
+/// operator's per-repo override (one `custom` check), else nothing runs. The meta repo (`""`) uses
+/// the workspace-level `checks` key (back-compat with the pre-P1b global command); a project repo
+/// uses `…checks.<repo>`.
 fn checks_for(conn: &Connection, workspace: &str, repo: &str, dir: &Path) -> Vec<ResolvedCheck> {
-    let kind = if let Some(project) = repo.strip_prefix("projects/") {
-        kinds::kind_for(conn, workspace, project, dir)
-    } else {
-        kinds::detect(dir)
-    };
-    let mut checks = resolved_checks(conn, workspace, repo, dir, kind);
-    // The floor (P4b): the kind's fmt·test·build always run and gate, whatever the file or override
-    // says — an agent can't weaken the gate by trimming a check. Appended when a floor command isn't
-    // already resolved (matched by exact command).
-    for spec in kind.floor() {
-        if !checks.iter().any(|check| check.command == spec.command) {
-            checks.push(ResolvedCheck {
-                name: spec.name.to_owned(),
-                command: spec.command.to_owned(),
-            });
-        }
-    }
-    checks
-}
-
-/// The base checks before the floor is merged: a project's `pipeline.yaml` (the source of truth,
-/// P4b), else the per-repo override, else the kind recipe.
-fn resolved_checks(
-    conn: &Connection,
-    workspace: &str,
-    repo: &str,
-    dir: &Path,
-    kind: kinds::ProjectKind,
-) -> Vec<ResolvedCheck> {
     if let Some(checks) = crate::pipeline::checks(dir) {
         return checks
             .into_iter()
@@ -209,19 +177,13 @@ fn resolved_checks(
         .ok()
         .flatten()
         .filter(|cmd| !cmd.trim().is_empty());
-    if let Some(command) = overridden {
-        return vec![ResolvedCheck {
+    match overridden {
+        Some(command) => vec![ResolvedCheck {
             name: "custom".to_owned(),
             command,
-        }];
+        }],
+        None => Vec::new(),
     }
-    kind.checks()
-        .iter()
-        .map(|spec| ResolvedCheck {
-            name: spec.name.to_owned(),
-            command: spec.command.to_owned(),
-        })
-        .collect()
 }
 
 /// The per-repo override key: `workspace.<ws>.checks` for the meta repo (the pre-P1b global
@@ -316,61 +278,37 @@ mod tests {
     }
 
     #[test]
-    fn checks_for_layers_override_and_kind_recipe_under_the_floor() {
+    fn checks_come_only_from_pipeline_yaml_then_the_override() {
         let conn = crate::db::open_in_memory().expect("open");
         let dir = std::env::temp_dir().join(format!("claw-ci-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("Cargo.toml"), "[package]\nname=\"x\"\n").unwrap();
 
-        // No override → the rust-bin kind recipe (fmt/clippy/test) with the build floor appended.
-        let recipe: Vec<String> = checks_for(&conn, "ws", "projects/x", &dir)
-            .into_iter()
-            .map(|c| c.name)
-            .collect();
-        assert_eq!(recipe, ["fmt", "clippy", "test", "build"]);
+        // No pipeline.yaml and no override → nothing runs. There is no auto-detected recipe and no
+        // floor: a project's CI is exactly what its config says, or empty.
+        assert!(checks_for(&conn, "ws", "projects/x", &dir).is_empty());
 
-        // Override wins the base, but the floor (fmt·test·build) still runs — an override can't
-        // drop the gate on a cargo project.
+        // The per-repo override is the escape hatch → a single `custom` check, nothing forced with it.
         settings::set(&conn, &override_key("ws", "projects/x"), "make ci").unwrap();
         let resolved: Vec<String> = checks_for(&conn, "ws", "projects/x", &dir)
             .into_iter()
             .map(|c| c.name)
             .collect();
-        assert_eq!(resolved, ["custom", "fmt", "test", "build"]);
-    }
+        assert_eq!(resolved, ["custom"]);
 
-    #[test]
-    fn the_floor_holds_even_when_pipeline_yaml_trims_it() {
-        let conn = crate::db::open_in_memory().expect("open");
-        let base = std::env::temp_dir().join(format!("claw-ci-floor-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-
-        // A cargo project whose pipeline.yaml keeps only `test` still runs fmt + build (the floor);
-        // the file's `test` is not duplicated.
-        let cargo = base.join("cargo");
-        std::fs::create_dir_all(&cargo).unwrap();
-        std::fs::write(cargo.join("Cargo.toml"), "[package]\nname=\"x\"\n").unwrap();
-        std::fs::write(cargo.join("pipeline.yaml"), "checks:\n  - cargo test\n").unwrap();
-        let names: Vec<String> = checks_for(&conn, "ws", "projects/cargo", &cargo)
-            .into_iter()
-            .map(|c| c.name)
-            .collect();
-        assert_eq!(names, ["test", "fmt", "build"]);
-
-        // A non-cargo project has no floor: its pipeline.yaml checks stand alone (nothing forced).
-        let docs = base.join("docs");
-        std::fs::create_dir_all(&docs).unwrap();
+        // pipeline.yaml is the sole source of truth: exactly its checks, in order, and it wins over
+        // the override — nothing is appended (no floor).
         std::fs::write(
-            docs.join("pipeline.yaml"),
-            "checks:\n  - name: spell\n    run: aspell check\n",
+            dir.join("pipeline.yaml"),
+            "checks:\n  - cargo fmt --check\n  - cargo test\n",
         )
         .unwrap();
-        let docs_names: Vec<String> = checks_for(&conn, "ws", "projects/docs", &docs)
+        let names: Vec<String> = checks_for(&conn, "ws", "projects/x", &dir)
             .into_iter()
             .map(|c| c.name)
             .collect();
-        assert_eq!(docs_names, ["spell"]);
+        assert_eq!(names, ["fmt", "test"]);
     }
 
     fn outcome(repo: &str, check: &str, ok: bool) -> CheckOutcome {
@@ -385,7 +323,7 @@ mod tests {
     }
 
     // End-to-end runner check (runs real cargo — slow, so explicit). Proves the runner drives
-    // the kind recipe, parses exit codes, and captures a red tail. Run with:
+    // a pipeline.yaml's checks, parses exit codes, and captures a red tail. Run with:
     //   cargo test -- --ignored runs_cargo_checks
     #[test]
     #[ignore = "runs cargo (fmt/clippy/test) — slow; run explicitly"]
@@ -397,6 +335,12 @@ mod tests {
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"ci_smoke\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+        )
+        .unwrap();
+        // Checks come only from pipeline.yaml now — the crate declares the cargo trio itself.
+        std::fs::write(
+            dir.join("pipeline.yaml"),
+            "checks:\n  - cargo fmt --check\n  - cargo clippy --all-targets -- -D warnings\n  - cargo test\n",
         )
         .unwrap();
         // A clean, formatted, clippy-clean crate with a passing test.

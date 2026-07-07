@@ -4,7 +4,6 @@
 //! agent's turn in the workspace dir and posts `Command::TaskFinished` back, which the
 //! (DB-owning) bridge thread persists and projects.
 
-use std::path::Path;
 use std::time::Duration;
 
 use rwire::{ChangeSet, SharedServerState};
@@ -141,23 +140,22 @@ fn notify_sandbox_provisioning(conn: &rusqlite::Connection, task: &Task) {
     }
 }
 
-/// The `pipeline.yaml` maintenance contract (P4b), appended to every buildable project's layer:
-/// the producer keeps the recipe honest so the checks it's judged by track how the project really
-/// builds, tests, and serves.
+/// The `pipeline.yaml` contract, injected into every task that touches a project: `pipeline.yaml`
+/// is the sole source for the project's CI checks + preview command (there is no hidden default),
+/// so the producer keeps it honest, and any preview server must honour the preview env contract.
 const PIPELINE_NOTE: &str = "## The pipeline\n\nThis project's CI checks and preview command live in \
-     a `pipeline.yaml` at its root — the recipe your pass is judged by. Read it, and when you change \
-     how the project builds, tests, or serves (a new check, a renamed script, a different preview \
-     command), update `pipeline.yaml` in the same pass so the checks and preview stay honest. claw \
-     always runs a `fmt`·`test`·`build` floor regardless of the file, so trimming a check can't \
-     weaken the gate — keep the recipe complete rather than minimal.";
+     a `pipeline.yaml` at its root — the checks your pass is judged by, and the sole source: there is \
+     no hidden default, so a check that isn't in `pipeline.yaml` does not run. Read it, and when you \
+     change how the project builds, tests, or serves, update `pipeline.yaml` in the same pass (create \
+     it if the project has none) so the recipe stays honest. When the project serves a preview, its \
+     server must honour `$CLAW_BIND` (the address to bind) and `$CLAW_PREVIEW_BASE` (the base path to \
+     mount under), or the preview won't connect.";
 
-/// The project layer for a task's run (P1): the kind conventions + machine contracts for the
-/// repo it works in. The target project is the first non-meta repo the request touched, else
-/// the first `projects/<name>` named in the spec; `None` (no layer) when neither resolves or
-/// the kind has no guidance. Buildable kinds also carry the [`PIPELINE_NOTE`] (P4b).
-fn project_layer(conn: &rusqlite::Connection, task: &Task, workspace_dir: &Path) -> Option<String> {
-    let project = task
-        .request_id
+/// The project layer for a task's run: the [`PIPELINE_NOTE`] contract for the repo it works in. The
+/// target project is the first non-meta repo the request touched, else the first `projects/<name>`
+/// named in the spec; `None` (no layer) when the task touches no project.
+fn project_layer(conn: &rusqlite::Connection, task: &Task) -> Option<String> {
+    task.request_id
         .as_deref()
         .and_then(|id| db::requests::repos_for(conn, id).ok())
         .and_then(|repos| {
@@ -166,11 +164,19 @@ fn project_layer(conn: &rusqlite::Connection, task: &Task, workspace_dir: &Path)
                 .find(|r| !r.repo.is_empty())
                 .map(|r| r.repo.trim_start_matches("projects/").to_owned())
         })
-        .or_else(|| crate::kinds::project_in_spec(&task.spec))?;
-    let dir = workspace_dir.join("projects").join(&project);
-    let kind = crate::kinds::kind_for(conn, &task.workspace_id, &project, &dir);
-    let layer = kind.prompt_layer()?;
-    Some(format!("{layer}\n\n{PIPELINE_NOTE}"))
+        .or_else(|| project_in_spec(&task.spec))
+        .map(|_project| PIPELINE_NOTE.to_owned())
+}
+
+/// The first `projects/<name>` mentioned in a task spec — the repo a non-request-bound task works
+/// in. Returns the bare `<name>`; `None` when the spec names no project.
+fn project_in_spec(spec: &str) -> Option<String> {
+    let idx = spec.find("projects/")?;
+    let name: String = spec[idx + "projects/".len()..]
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    (!name.is_empty()).then_some(name)
 }
 
 /// Launch the task's **current step's** producer/stage run on a worker thread (self-posting
@@ -257,7 +263,7 @@ fn launch_current(conn: &rusqlite::Connection, task: &Task) {
             Some(&workspace_dir),
             &inference.agent_name,
             inference.agent_prompt.clone(),
-            project_layer(conn, task, &workspace_dir),
+            project_layer(conn, task),
             memory_text,
         );
         let mut messages = super::replay::producer_thread(
@@ -343,7 +349,7 @@ fn launch_validator(conn: &rusqlite::Connection, task: &Task, step: &Step, outpu
             Some(&workspace_dir),
             &inference.agent_name,
             inference.agent_prompt.clone(),
-            project_layer(conn, task, &workspace_dir),
+            project_layer(conn, task),
             workspace::standards_layer(&workspace_dir),
         );
         let files = workspace::list_files(&workspace_dir, 200);
@@ -549,8 +555,8 @@ const CHECKS_CAP_CHARS: usize = 2_000;
 /// reviewer's `max_iterations` so machine retries and reviewer retries stay independent.
 const MAX_CHECK_RETRIES: usize = 2;
 
-/// Run the pass's per-repo CI (P1b): the repos it committed, each judged by its kind's recipe
-/// in the task's lane. `pass_commits` is the `[{repo,sha}]` the sweep produced.
+/// Run the pass's per-repo CI (P1b): the repos it committed, each judged by its `pipeline.yaml`
+/// checks in the task's lane. `pass_commits` is the `[{repo,sha}]` the sweep produced.
 fn run_pass_checks(
     conn: &rusqlite::Connection,
     task: &Task,
@@ -1151,8 +1157,8 @@ pub fn finished(
         }
     }
 
-    // Machine checks (P1b): after a producer pass commits, each touched repo's kind runs its
-    // CI recipe in the lane — the machine judgement the reviewer and the macro gate see, and
+    // Machine checks (P1b): after a producer pass commits, each touched repo runs its
+    // pipeline.yaml checks in the lane — the machine judgement the reviewer and the macro gate see, and
     // the fail-fast signal below. Validators are read-only and never checked; a pass that
     // committed nothing has nothing to check.
     let check_outcomes = if matches!(role, RunRole::Producer) && !pass_commits.is_empty() {

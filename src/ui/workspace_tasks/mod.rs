@@ -267,7 +267,7 @@ fn request_badge(status: &str) -> ElementBuilder {
 }
 
 /// The Projects strip (P1): the durable axis below the in-flight Requests rail — every
-/// `projects/*` repo with its kind and open-request count, each a link to its project page.
+/// `projects/*` repo with its open-request count, each a link to its project page.
 fn projects_section(app: &App, workspace_id: &str) -> ElementBuilder {
     if app.projects.is_empty() {
         return el(El::Div).st([St::DisplayNone]);
@@ -297,12 +297,6 @@ fn projects_section(app: &App, workspace_id: &str) -> ElementBuilder {
                     ])
                     .hover([St::TextAccent])
                     .text(&project.name),
-                Badge::new()
-                    .intent(BadgeIntent::Primary)
-                    .shape(BadgeShape::Square)
-                    .fill(BadgeFill::Outline)
-                    .text(project.kind_slug.clone())
-                    .build(),
                 el(El::Span).st([St::TextXs, St::TextLow]).text(&open),
             ])
     }));

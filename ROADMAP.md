@@ -12,6 +12,15 @@
 > **Companion: rwire `RELEASE_ROADMAP.md`** (Phases 5–6, executed by the rwire agent) — the framework
 > improvements P4a and P5c adopt. Improve the framework first; claw consumes the result.
 
+> **Update (2026-07-07) — the kind system is removed.** `pipeline.yaml` is now the **sole** source of
+> a project's CI checks + preview command (with the per-repo `checks`/`preview` override as the only
+> fallback). There is no `ProjectKind`, no auto-detection, no un-trimmable floor, and no kind
+> badge/override UI: a project's pipeline is exactly what its config file says, or nothing. The rwire
+> template's `projects/hello` ships a **literal** `pipeline.yaml`; the producer prompt keeps one
+> kind-agnostic note (maintain `pipeline.yaml` + honour the `$CLAW_BIND`/`$CLAW_PREVIEW_BASE` preview
+> contract). Every P1/P4b mention of kinds below (detection, the floor, the badge/override) is
+> superseded by this.
+
 ## Shipped foundation (Platform I, P0–P3)
 
 > **P0 isola on** — agent `bash` + machine checks run in per-lane isola sandboxes
@@ -158,20 +167,18 @@ the gate.
 
 - [x] **Read a root `pipeline.yaml`** — shipped `1098d2d` + `6d89ab5`: `src/pipeline.rs` reads a
       project-root `pipeline.yaml` (checks + preview) via `serde_yml`; `ci::checks_for` and
-      `preview::command_for` consult it first, then the per-repo override, then the kind recipe (safe
-      fallback when absent/malformed). `kinds::detect` **seeds** the first draft — the rwire
-      template's `projects/hello` ships one. The `settings` override families stay as legacy fallback
-      rather than being deleted; the file simply wins. *Site*: `src/pipeline.rs`, `ci.rs`,
-      `bridge/preview.rs`, `bridge/template.rs`.
+      `preview::command_for` consult it first, then the per-repo override. *(As of 2026-07-07 this is
+      the whole chain — the kind-recipe fallback and detection-based seed were removed; the rwire
+      template's `projects/hello` ships a **literal** `pipeline.yaml`.)* *Site*: `src/pipeline.rs`,
+      `ci.rs`, `bridge/preview.rs`, `bridge/template.rs`.
 - [x] **The agents own it** — shipped `a664c5f`: the producer's project layer appends a
       `PIPELINE_NOTE` (read + maintain `pipeline.yaml` in the same pass); the rwire `STANDARDS.md`
       carries the matching review rule. *Site*: `scheduler/mod.rs`, `bridge/template.rs`.
-- [x] **claw enforces the floor** — shipped `bded391`: `ProjectKind::floor()` (cargo kinds
-      `fmt`·`test`·`build`; others empty) is merged into `ci::checks_for` on top of the resolved
-      base, so the floor always runs and gates — feeding *both* the per-pass gate and the macro gate
-      (`control.rs`) from one resolution point. An agent can't trim a check to weaken it; `build` is
-      the kind-derived floor stage, not an editable field. Degrades to an empty floor for non-cargo
-      kinds. *Site*: `kinds.rs`, `ci.rs`.
+- [x] ~~**claw enforces the floor**~~ — shipped `bded391`, **removed 2026-07-07** with the kind
+      system. The un-trimmable `fmt`·`test`·`build` floor was `ProjectKind::floor()` merged into
+      `ci::checks_for`; now `pipeline.yaml` is the sole source and there is no forced floor — a
+      project's gate is exactly its config's checks (reviewable in the diff), or empty. *Site (was)*:
+      `kinds.rs`, `ci.rs`.
 
 ### P4c — Persisted CI/CD logs
 
@@ -320,6 +327,7 @@ verified to support `merge-tree --write-tree`.
   `develop`. The persona text is **drafted** (see the session memory `relay-devops-persona-draft`);
   wiring is a new `agent_groups` row + `agent_prompts.body`, assignable as a workspace owner/member.
   Deferred deliberately: its full value depends on the Release surface, and if Relay is to *drive* a
-  Release (`develop → main`) or flip `kind` itself, those need **new agent tools** (a release tool +
-  a kind-override tool) that only make sense once P5a/P5b exist. Finish CI/CD first, then refine +
-  wire the persona.
+  Release (`develop → main`), that needs a **new agent tool** (a release tool) that only makes sense
+  once P5a/P5b exist. *(The kind-override tool once imagined here is moot — kinds were removed
+  2026-07-07; the pipeline is `pipeline.yaml`, which the agents already own and edit.)* Finish CI/CD
+  first, then refine + wire the persona.

@@ -831,17 +831,12 @@ pub struct RequestCardView {
     pub preview_live: bool,
 }
 
-/// The project page (P1): a projection over a directory, its derived kind, and the requests
-/// that touched it — no project table. `kind_slug` is the effective kind (override or
-/// detected); `requests` is the changelog in ask-language.
+/// The project page (P1): a projection over a directory and the requests that touched it — no
+/// project table. `requests` is the changelog in ask-language.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProjectDetail {
     pub workspace_id: String,
     pub name: String,
-    /// The effective kind's slug (`rwire-app`/`rust-bin`/…) — override if set, else detected.
-    pub kind_slug: String,
-    /// Whether the kind came from an operator override (vs detection) — shown in settings.
-    pub kind_overridden: bool,
     pub requests: Vec<ProjectRequestEntry>,
     /// The repo's local branches (P5c), `develop` first — the branch switcher's options.
     pub branches: Vec<String>,
@@ -907,11 +902,10 @@ pub struct ProjectRequestEntry {
 }
 
 /// A project card in the Work tab's Projects strip (P1) — the durable axis beside the
-/// in-flight Requests rail. Derived: name + kind + how many open requests touch it.
+/// in-flight Requests rail. Derived: name + how many open requests touch it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProjectCardView {
     pub name: String,
-    pub kind_slug: String,
     pub open_requests: usize,
 }
 
