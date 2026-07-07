@@ -269,16 +269,22 @@ project page that is the CI/CD cockpit.
 
 ### P5c — The project page as CI/CD control center
 
-- [ ] **Branch switcher → per-branch pipeline · logs · preview · files.** `ProjectDetail` gains a
-      branch list, a per-branch pipeline (floor + extra checks, statuses + durations), the logs
-      drawer, the live preview link (`port_for`), and a **read-only file tree of the selected branch**
-      rendered with rwire's upstream `FileTree` (rwire F2, read-only mode) over
-      `git show <branch>:<path>` / the worktree-less tree. CI grows a **branch dimension** (today
-      `CheckOutcome` is per-run, aggregated per request). *Depends on* rwire F2. *Site*:
-      `ui/project_page.rs`, `state/views.rs`, `bridge/requests/view.rs`, `ci.rs`.
-- [ ] **Migrate `ui/files.rs` onto the upstream `FileExplorer`** (rwire F2, managed mode) — delete the
-      local two-pane scaffolding; the Files tab and the branch tree share one component. *Site*:
-      `ui/files.rs`.
+- [x] **Branch switcher → per-branch pipeline · logs · preview · files.** `ProjectDetail` gained a
+      branch list + switcher, a **read-only `FileTree`** of the selected branch (new
+      `gitops::inspect` — `local_branches` via `for-each-ref`, `ref_tree` via `ls-tree -rt`, no
+      checkout), the **per-branch CI pipeline** with **durations** (each run's `checks_row`, so a
+      badge opens its full log through the shared logs drawer), and the develop-staging **preview
+      link** (`preview::staging_key` + `port_for`). The **branch dimension is derived-on-read**, not a
+      new table: a run's branch is ground truth (`run → task.request_id → request.branch`, NULL ⇒
+      develop's free lane), so `branch_pipeline` keys the existing per-run checks by branch —
+      `req/*` → the request's producer runs, `develop` → `free_lane_producer_runs`. `project_page.rs`
+      split into a module dir (`tree`/`pipeline`); drawer extracted to shared `ui/log_drawer.rs`.
+      *Shipped `c1b1930` · `93727bb` · `3daf615`.* *Deferred:* a file-content viewer (`on_select` →
+      `git show <ref>:<path>`); running CI on develop directly (its pipeline stays empty until a
+      free-lane pass lands); route `?branch=` deep-linking.
+- [ ] **Migrate `ui/files.rs` onto the upstream `FileExplorer`** (rwire F2, managed mode) — **BLOCKED:
+      rwire never shipped a `FileExplorer` (only `FileTree` + `TreeView`), so there is nothing to
+      migrate onto. Deferred until the component exists.** *Site*: `ui/files.rs`.
 
 ## Backlog (harvested, scheduled by pull)
 
