@@ -4,6 +4,7 @@
 //! operator can override detection here. Split into submodules as the surface grew:
 //! [`tree`] owns the branch file browser.
 
+mod pipeline;
 mod tree;
 
 use rwire::{El, ElementBuilder, Link, St, el, handler, renderer};
@@ -26,9 +27,11 @@ fn body(app: &App) -> ElementBuilder {
     let sections = vec![
         header(app, detail),
         tree::switcher(detail),
+        pipeline::pipeline_panel(detail),
         settings_panel(detail),
         tree::files_panel(detail),
         requests_panel(detail),
+        crate::ui::log_drawer::drawer(app),
     ];
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg, St::MaxW80rem])

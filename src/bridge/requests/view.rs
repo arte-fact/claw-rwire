@@ -110,6 +110,7 @@ pub(crate) fn load_project_detail(
     let branches = project_branches(&dir);
     let selected = choose_branch(&branches, branch);
     let tree = project_tree(&dir, &selected);
+    let pipeline = branch_pipeline(conn, workspace, &format!("projects/{project}"), &selected);
     let detail = crate::state::ProjectDetail {
         workspace_id: workspace.to_owned(),
         name: project.to_owned(),
@@ -119,6 +120,7 @@ pub(crate) fn load_project_detail(
         branches,
         selected_branch: selected,
         tree,
+        pipeline,
     };
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_PROJECT_DETAIL]),
@@ -151,6 +153,77 @@ fn choose_branch(branches: &[String], requested: Option<&str>) -> String {
                 .cloned()
         })
         .unwrap_or_default()
+}
+
+/// How many recent free-lane producer runs to scan for develop's pipeline.
+const DEVELOP_SCAN_LIMIT: i64 = 25;
+/// How many runs to surface on develop's pipeline (a short recent history).
+const DEVELOP_SHOW: usize = 5;
+
+/// The selected branch's CI as pipeline entries (P5c), newest first. A run's branch is ground
+/// truth — the pass physically ran on it — so this derives the true per-branch dimension from the
+/// recorded runs: `req/*` → the request's tasks' latest checked producer runs; `develop` → the
+/// free lane's recent producer runs; `main`/other → empty (no producer pass lands there).
+fn branch_pipeline(
+    conn: &Connection,
+    workspace: &str,
+    repo: &str,
+    branch: &str,
+) -> Vec<crate::state::BranchPipelineRun> {
+    if branch == gitops::DEVELOP {
+        return db::task_runs::free_lane_producer_runs(conn, workspace, DEVELOP_SCAN_LIMIT)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|run| {
+                pipeline_run(&run.run_id, &run.task_title, run.checks.as_deref(), repo)
+            })
+            .take(DEVELOP_SHOW)
+            .collect();
+    }
+    let Some(request_id) = request_for_branch(conn, repo, branch) else {
+        return Vec::new();
+    };
+    db::tasks::list_for_request(conn, &request_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|task| {
+            let runs = db::task_runs::list_for_task(conn, &task.id).unwrap_or_default();
+            let run = runs
+                .iter()
+                .rev()
+                .find(|r| r.role == "producer" && r.checks.is_some())?;
+            pipeline_run(&run.id, &task.title, run.checks.as_deref(), repo)
+        })
+        .collect()
+}
+
+/// The request whose lane branch is `branch` and that touched `repo` — the branch's owning request.
+fn request_for_branch(conn: &Connection, repo: &str, branch: &str) -> Option<String> {
+    db::requests::requests_touching(conn, repo)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|r| r.branch.as_deref() == Some(branch))
+        .map(|r| r.id)
+}
+
+/// One run's checks as a pipeline entry, filtered to `repo`; `None` when the run checked nothing
+/// in this repo.
+fn pipeline_run(
+    run_id: &str,
+    task_title: &str,
+    checks_json: Option<&str>,
+    repo: &str,
+) -> Option<crate::state::BranchPipelineRun> {
+    let checks: Vec<crate::state::CheckBadgeView> = crate::ci::outcomes_from_json(checks_json)
+        .into_iter()
+        .filter(|outcome| outcome.repo == repo)
+        .map(crate::bridge::tasks::check_badge)
+        .collect();
+    (!checks.is_empty()).then(|| crate::state::BranchPipelineRun {
+        run_id: run_id.to_owned(),
+        task_title: task_title.to_owned(),
+        checks,
+    })
 }
 
 /// A branch's file tree as view entries (P5c), capped so a huge repo can't blow one frame: drop
@@ -449,7 +522,8 @@ fn short(sha: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::choose_branch;
+    use super::{branch_pipeline, choose_branch};
+    use crate::db::{open_in_memory, task_runs, tasks, workspaces};
 
     fn branches(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()
@@ -468,5 +542,89 @@ mod tests {
         assert_eq!(choose_branch(&branches(&["main", "wip"]), None), "main");
         // No branches at all → empty.
         assert_eq!(choose_branch(&[], None), "");
+    }
+
+    /// Seed a free-lane task (no request → ran on develop) with one producer run + checks JSON.
+    fn seed_free_lane_run(
+        conn: &rusqlite::Connection,
+        task: &str,
+        run: &str,
+        title: &str,
+        checks: &str,
+    ) {
+        tasks::create(
+            conn,
+            &tasks::NewTask {
+                id: task,
+                workspace_id: "ws",
+                agent: None,
+                title,
+                spec: "do",
+                schedule: None,
+                origin_chat: None,
+                max_retries: None,
+            },
+        )
+        .expect("task");
+        task_runs::append(
+            conn,
+            &task_runs::NewRun {
+                id: run,
+                task_id: task,
+                position: 0,
+                role: "producer",
+                agent: None,
+                output: None,
+                verdict: None,
+                feedback: None,
+                iteration: 0,
+                ok: true,
+                transcript: None,
+                attempt: 0,
+                memory: None,
+                commits: None,
+                checks: Some(checks),
+            },
+        )
+        .expect("run");
+    }
+
+    #[test]
+    fn branch_pipeline_surfaces_free_lane_producer_checks_on_develop() {
+        let conn = open_in_memory().expect("db");
+        workspaces::create(&conn, "ws", "Project").expect("ws");
+        seed_free_lane_run(
+            &conn,
+            "t1",
+            "r1",
+            "Add feature",
+            r#"[{"repo":"projects/site","check":"clippy","ok":true,"tail":"","duration_ms":1500}]"#,
+        );
+
+        let pipeline = branch_pipeline(&conn, "ws", "projects/site", "develop");
+        assert_eq!(pipeline.len(), 1);
+        assert_eq!(pipeline[0].run_id, "r1");
+        assert_eq!(pipeline[0].task_title, "Add feature");
+        assert_eq!(pipeline[0].checks.len(), 1);
+        assert_eq!(pipeline[0].checks[0].check, "clippy");
+        // duration_ms parses (serde) and formats.
+        assert_eq!(pipeline[0].checks[0].duration, "1.5s");
+    }
+
+    #[test]
+    fn branch_pipeline_is_empty_off_develop_and_for_other_repos() {
+        let conn = open_in_memory().expect("db");
+        workspaces::create(&conn, "ws", "Project").expect("ws");
+        seed_free_lane_run(
+            &conn,
+            "t1",
+            "r1",
+            "t",
+            r#"[{"repo":"projects/site","check":"test","ok":true,"tail":""}]"#,
+        );
+        // No producer pass lands on main.
+        assert!(branch_pipeline(&conn, "ws", "projects/site", "main").is_empty());
+        // The run checked projects/site, so another repo's develop pipeline is empty.
+        assert!(branch_pipeline(&conn, "ws", "projects/other", "develop").is_empty());
     }
 }

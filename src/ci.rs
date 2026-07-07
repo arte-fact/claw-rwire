@@ -41,6 +41,10 @@ pub struct CheckOutcome {
     /// fetches it on demand.
     #[serde(skip)]
     pub log: String,
+    /// Wall-clock the check took, in ms (P5c). `serde(default)` so runs recorded before P5c (no
+    /// field in their `checks` JSON) parse to 0 = "unknown".
+    #[serde(default)]
+    pub duration_ms: u64,
 }
 
 /// Whether a set of outcomes is all-green (an empty set is vacuously green — a repo with no
@@ -132,7 +136,9 @@ pub fn run_for_repos(
             } else {
                 format!("cd {} && {}", single_quote(repo), check.command)
             };
+            let started = std::time::Instant::now();
             let result = exec::run_in(strategy, &command, CHECK_TIMEOUT);
+            let duration_ms = started.elapsed().as_millis() as u64;
             let ok = passed(&result);
             outcomes.push(CheckOutcome {
                 repo: repo.clone(),
@@ -141,6 +147,7 @@ pub fn run_for_repos(
                 tail: if ok { String::new() } else { tail(&result) },
                 // The whole output (P4c) — persisted to `ci_logs` by the scheduler for the drawer.
                 log: result.trim_end().to_owned(),
+                duration_ms,
             });
         }
     }
@@ -373,6 +380,7 @@ mod tests {
             ok,
             tail: String::new(),
             log: String::new(),
+            duration_ms: 0,
         }
     }
 

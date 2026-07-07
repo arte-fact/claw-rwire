@@ -137,11 +137,16 @@ pub(crate) fn checks_row(
                 BadgeIntent::Error
             };
             let mark = if check.ok { "✓" } else { "✗" };
+            let text = if check.duration.is_empty() {
+                format!("{mark} {}", check.label)
+            } else {
+                format!("{mark} {} · {}", check.label, check.duration)
+            };
             let badge = Badge::new()
                 .shape(BadgeShape::Square)
                 .fill(BadgeFill::Outline)
                 .intent(intent)
-                .text(format!("{mark} {}", check.label))
+                .text(text)
                 .build();
             let payload = serde_json::json!({
                 "run": run_id,
@@ -699,6 +704,7 @@ mod tests {
             tail: "error".to_owned(),
             repo: "projects/app".to_owned(),
             check: "clippy".to_owned(),
+            duration: String::new(),
         }];
         let row = checks_row("run-7", &checks, "k");
         // The badge is a button (P4c) — a click opens the drawer, so it must carry the run + repo +

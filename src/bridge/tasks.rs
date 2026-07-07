@@ -244,21 +244,35 @@ pub fn refresh_detail_if_open(
 fn check_badges(checks_json: Option<&str>) -> Vec<crate::state::CheckBadgeView> {
     crate::ci::outcomes_from_json(checks_json)
         .into_iter()
-        .map(|outcome| {
-            let label = if outcome.repo.is_empty() {
-                outcome.check.clone()
-            } else {
-                format!("{} ({})", outcome.check, outcome.repo)
-            };
-            crate::state::CheckBadgeView {
-                label,
-                ok: outcome.ok,
-                tail: outcome.tail,
-                repo: outcome.repo,
-                check: outcome.check,
-            }
-        })
+        .map(check_badge)
         .collect()
+}
+
+/// One CI outcome as a badge view-model — the shared mapping the task thread and the project
+/// page's branch pipeline (P5c) both use, so labels + durations read identically.
+pub(crate) fn check_badge(outcome: crate::ci::CheckOutcome) -> crate::state::CheckBadgeView {
+    let label = if outcome.repo.is_empty() {
+        outcome.check.clone()
+    } else {
+        format!("{} ({})", outcome.check, outcome.repo)
+    };
+    crate::state::CheckBadgeView {
+        label,
+        ok: outcome.ok,
+        tail: outcome.tail,
+        repo: outcome.repo,
+        check: outcome.check,
+        duration: format_duration(outcome.duration_ms),
+    }
+}
+
+/// A check's wall-clock as a compact label (`"820ms"`, `"2.3s"`), empty when unknown (0).
+fn format_duration(ms: u64) -> String {
+    match ms {
+        0 => String::new(),
+        _ if ms < 1000 => format!("{ms}ms"),
+        _ => format!("{:.1}s", ms as f64 / 1000.0),
+    }
 }
 
 /// The files a run's pass commits touched, each addressable for a pre-pass restore (G3).

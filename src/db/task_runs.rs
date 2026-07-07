@@ -97,6 +97,37 @@ pub fn list_for_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Vec<T
     rows.collect()
 }
 
+/// A producer run on the **free lane** (a task with no request ran on develop's canonical tree)
+/// with its task's title — develop's CI for the project page (P5c). Newest first; only runs that
+/// recorded checks.
+pub struct FreeLaneRun {
+    pub run_id: String,
+    pub task_title: String,
+    pub checks: Option<String>,
+}
+
+pub fn free_lane_producer_runs(
+    conn: &Connection,
+    workspace_id: &str,
+    limit: i64,
+) -> rusqlite::Result<Vec<FreeLaneRun>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, t.title, r.checks
+           FROM task_runs r JOIN tasks t ON t.id = r.task_id
+          WHERE t.workspace_id = ?1 AND t.request_id IS NULL
+            AND r.role = 'producer' AND r.checks IS NOT NULL
+          ORDER BY r.created_at DESC, r.id DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![workspace_id, limit], |row| {
+        Ok(FreeLaneRun {
+            run_id: row.get(0)?,
+            task_title: row.get(1)?,
+            checks: row.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
 /// A task's runs for one **attempt** only, oldest first — the chained context the scheduler
 /// feeds the next step, so a restart (a fresh attempt) never inherits an earlier attempt's work.
 pub fn list_for_task_attempt(

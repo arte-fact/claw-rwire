@@ -485,6 +485,8 @@ pub struct CheckBadgeView {
     pub repo: String,
     /// The check name (`fmt`/`clippy`/`test`/`custom`) — the other half of the `ci_logs` key.
     pub check: String,
+    /// Preformatted wall-clock (P5c), e.g. `"2.3s"` — empty when unknown (0ms / pre-P5c run).
+    pub duration: String,
 }
 
 /// The logs drawer's contents (P4c): one CI check's full output, opened from its badge on the task
@@ -832,11 +834,23 @@ pub struct ProjectDetail {
     pub requests: Vec<ProjectRequestEntry>,
     /// The repo's local branches (P5c), `develop` first — the branch switcher's options.
     pub branches: Vec<String>,
-    /// The branch currently being browsed (P5c) — drives `tree` (and later the pipeline/preview).
+    /// The branch currently being browsed (P5c) — drives `tree`, `pipeline`, `preview_uri`.
     pub selected_branch: String,
     /// The selected branch's file tree (P5c), pre-order — a read-only browser rendered with
     /// rwire's `FileTree`. Empty for an unborn/unreadable ref.
     pub tree: Vec<ProjectTreeEntry>,
+    /// The selected branch's CI (P5c): one entry per producer run that checked this repo on the
+    /// branch, newest first. Empty when the branch has no recorded checks (`main`, a fresh branch).
+    pub pipeline: Vec<BranchPipelineRun>,
+}
+
+/// One producer run's checks on the selected branch (P5c) — carries the `task_runs.id` so each
+/// badge opens that run's full log through the P4c drawer.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BranchPipelineRun {
+    pub run_id: String,
+    pub task_title: String,
+    pub checks: Vec<CheckBadgeView>,
 }
 
 /// One node of a project branch's file tree (P5c) — a claw mirror of rwire's `FsEntry`, which

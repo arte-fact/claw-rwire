@@ -13,6 +13,7 @@ mod archived;
 mod chat;
 mod dashboard;
 mod files;
+mod log_drawer;
 mod logs;
 mod memory;
 mod project_page;
