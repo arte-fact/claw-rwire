@@ -176,10 +176,12 @@ pub enum Command {
     LoadRequestDetail {
         request_id: String,
     },
-    /// Project a project's page (`/w/:wid/projects/:pid` opening, P1).
+    /// Project a project's page (`/w/:wid/projects/:pid` opening, P1). `branch` is the branch to
+    /// browse (P5c) — `None` on first open (defaults to develop), `Some` from the switcher.
     LoadProjectDetail {
         workspace: String,
         project: String,
+        branch: Option<String>,
     },
     /// Set (or clear, with an empty slug) a project's kind override (P1).
     SetProjectKind {
@@ -632,9 +634,17 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::LoadRequestDetail { request_id } => {
             requests::load_detail(conn, shared, &request_id)
         }
-        Command::LoadProjectDetail { workspace, project } => {
-            requests::view::load_project_detail(conn, shared, &workspace, &project)
-        }
+        Command::LoadProjectDetail {
+            workspace,
+            project,
+            branch,
+        } => requests::view::load_project_detail(
+            conn,
+            shared,
+            &workspace,
+            &project,
+            branch.as_deref(),
+        ),
         Command::SetProjectKind {
             workspace,
             project,

@@ -622,3 +622,53 @@ fn symlinked_project_dirs_are_not_workspace_property() {
         "external repo untouched"
     );
 }
+
+#[test]
+fn local_branches_lists_develop_main_and_new_branches() {
+    let dir = scratch("branches").join("projects/site");
+    ensure_project_repo(&dir).expect("repo");
+    let branches = local_branches(&dir).expect("branches");
+    assert!(branches.contains(&"develop".to_owned()), "{branches:?}");
+    assert!(branches.contains(&"main".to_owned()), "{branches:?}");
+    // A request lane branch appears once cut.
+    git(&dir, &["branch", "req/aa-x", "develop"]).expect("branch");
+    assert!(
+        local_branches(&dir)
+            .expect("branches")
+            .contains(&"req/aa-x".to_owned())
+    );
+}
+
+#[test]
+fn local_branches_of_a_commitless_repo_is_empty() {
+    let dir = scratch("empty-branches");
+    git(&dir, &["init", "--initial-branch", "main"]).expect("init");
+    assert!(local_branches(&dir).expect("branches").is_empty());
+}
+
+#[test]
+fn ref_tree_is_preorder_with_dirs_and_depth() {
+    let dir = scratch("reftree").join("projects/site");
+    ensure_project_repo(&dir).expect("repo"); // seeds .gitignore on develop
+    write(&dir, "README.md", "# x");
+    write(&dir, "src/main.rs", "fn main() {}");
+    git(&dir, &["add", "-A"]).expect("add");
+    commit(&dir, None, "seed").expect("commit");
+
+    let tree = ref_tree(&dir, "HEAD").expect("tree");
+    let rels: Vec<&str> = tree.iter().map(|e| e.rel.as_str()).collect();
+    // Pre-order: git sorts by name per level ('.' < 'R' < 's'), and `-rt` places each dir
+    // immediately before its subtree — the exact shape FileTree consumes.
+    assert_eq!(rels, [".gitignore", "README.md", "src", "src/main.rs"]);
+    let src = tree.iter().find(|e| e.rel == "src").expect("src dir");
+    assert!(src.is_dir && src.depth == 0);
+    let main = tree.iter().find(|e| e.rel == "src/main.rs").expect("main");
+    assert!(!main.is_dir && main.depth == 1 && main.name == "main.rs");
+}
+
+#[test]
+fn ref_tree_of_a_bad_ref_errs() {
+    let dir = scratch("badref").join("projects/site");
+    ensure_project_repo(&dir).expect("repo");
+    assert!(ref_tree(&dir, "no-such-ref").is_err());
+}

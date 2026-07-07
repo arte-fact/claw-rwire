@@ -680,6 +680,7 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
         bridge::send(Command::LoadProjectDetail {
             workspace: wid.to_owned(),
             project: pid.to_owned(),
+            branch: None,
         });
     }
     if let Some(params) = RoutePattern::new("/w/:wid/tasks/:tid").matches(path) {

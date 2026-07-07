@@ -5,6 +5,7 @@
 //! the async runtime), and commits are authored `claw <agent-id@claw>` so history shows
 //! which agent made each pass.
 
+mod inspect;
 mod requests;
 mod sweep;
 mod task_tree;
@@ -12,9 +13,10 @@ mod task_tree;
 mod tests;
 mod worktrees;
 
+pub use inspect::{local_branches, ref_tree};
 pub use requests::{
-    RequestRef, abandon_branch, branch_exists, deliver_repo, has_remote, push_refs, restore_file,
-    revert_merge,
+    DEVELOP, RequestRef, abandon_branch, branch_exists, deliver_repo, has_remote, push_refs,
+    restore_file, revert_merge,
 };
 pub use sweep::{commit_pass, ensure_meta_repo, ensure_project_repo, repos};
 pub use task_tree::{reset_task_tree, snapshot_task_bases};

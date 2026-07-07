@@ -830,6 +830,24 @@ pub struct ProjectDetail {
     /// Whether the kind came from an operator override (vs detection) — shown in settings.
     pub kind_overridden: bool,
     pub requests: Vec<ProjectRequestEntry>,
+    /// The repo's local branches (P5c), `develop` first — the branch switcher's options.
+    pub branches: Vec<String>,
+    /// The branch currently being browsed (P5c) — drives `tree` (and later the pipeline/preview).
+    pub selected_branch: String,
+    /// The selected branch's file tree (P5c), pre-order — a read-only browser rendered with
+    /// rwire's `FileTree`. Empty for an unborn/unreadable ref.
+    pub tree: Vec<ProjectTreeEntry>,
+}
+
+/// One node of a project branch's file tree (P5c) — a claw mirror of rwire's `FsEntry`, which
+/// derives only `Clone`/`Debug` and so can't be a `ProjectDetail` field; mapped to `FsEntry` at
+/// render time.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProjectTreeEntry {
+    pub rel: String,
+    pub name: String,
+    pub is_dir: bool,
+    pub depth: usize,
 }
 
 /// One row of a project's request history.

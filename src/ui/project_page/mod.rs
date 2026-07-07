@@ -1,8 +1,10 @@
-//! The project page (P1): `/w/:wid/projects/:pid` — a project's identity in one scroll.
-//! Projects are derived (no table), so this is a read-model over the directory's kind and
-//! the requests that touched it. Kind is the paved-road bundle; the operator can override
-//! detection here. CI-on-develop and preview/staging panels arrive with P1b/P2 — this ships
-//! the skeleton the UX proposal (§3) calls for, no dead cells.
+//! The project page (P1 → P5c): `/w/:wid/projects/:pid` — a project's control center. A
+//! read-model over the directory's kind, its branches' file trees + CI pipelines (P5c), and the
+//! requests that touched it (projects are derived, no table). Kind is the paved-road bundle; the
+//! operator can override detection here. Split into submodules as the surface grew:
+//! [`tree`] owns the branch file browser.
+
+mod tree;
 
 use rwire::{El, ElementBuilder, Link, St, el, handler, renderer};
 use rwire_components::{Badge, BadgeFill, BadgeIntent, BadgeShape, Select, Text};
@@ -21,8 +23,13 @@ fn body(app: &App) -> ElementBuilder {
     let Some(detail) = &app.project_detail else {
         return Text::body("Loading the project…").muted().build();
     };
-    let mut sections = vec![header(app, detail), settings_panel(detail)];
-    sections.push(requests_panel(detail));
+    let sections = vec![
+        header(app, detail),
+        tree::switcher(detail),
+        settings_panel(detail),
+        tree::files_panel(detail),
+        requests_panel(detail),
+    ];
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg, St::MaxW80rem])
         .append(sections)
@@ -159,7 +166,8 @@ fn status_badge(status: &str) -> ElementBuilder {
 }
 
 /// A bordered panel — label over content in a hairline box (the request page's `section`).
-fn panel(title: &str, content: ElementBuilder) -> ElementBuilder {
+/// Shared with the page's submodules.
+pub(super) fn panel(title: &str, content: ElementBuilder) -> ElementBuilder {
     el(El::Div)
         .st([
             St::BorderDefault,

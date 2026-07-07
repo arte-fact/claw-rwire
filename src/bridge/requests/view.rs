@@ -1,6 +1,8 @@
 //! Request projections (G2): the request page detail and the board's Requests rail —
 //! read-models over `requests`/`request_repos`/`tasks` plus live git diffs.
 
+use std::path::Path;
+
 use rusqlite::Connection;
 use rwire::{ChangeSet, SharedServerState};
 
@@ -86,6 +88,7 @@ pub(crate) fn load_project_detail(
     shared: &SharedServerState,
     workspace: &str,
     project: &str,
+    branch: Option<&str>,
 ) {
     let dir = crate::workspace::dir_for(&data_dir(), workspace)
         .join("projects")
@@ -104,17 +107,70 @@ pub(crate) fn load_project_detail(
             status: r.status.as_str().to_owned(),
         })
         .collect();
+    let branches = project_branches(&dir);
+    let selected = choose_branch(&branches, branch);
+    let tree = project_tree(&dir, &selected);
     let detail = crate::state::ProjectDetail {
         workspace_id: workspace.to_owned(),
         name: project.to_owned(),
         kind_slug: kind.slug().to_owned(),
         kind_overridden: overridden,
         requests,
+        branches,
+        selected_branch: selected,
+        tree,
     };
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_PROJECT_DETAIL]),
         move |app| app.project_detail = Some(detail),
     );
+}
+
+/// A project repo's local branches with `develop` pinned first (the integration branch is the
+/// default view); the rest keep git's recency order.
+fn project_branches(dir: &Path) -> Vec<String> {
+    let mut branches = gitops::local_branches(dir).unwrap_or_default();
+    if let Some(pos) = branches.iter().position(|b| b == gitops::DEVELOP) {
+        branches.remove(pos);
+        branches.insert(0, gitops::DEVELOP.to_owned());
+    }
+    branches
+}
+
+/// Which branch to browse: the requested one if it exists, else `develop`, else the first branch,
+/// else empty (a repo with no commits).
+fn choose_branch(branches: &[String], requested: Option<&str>) -> String {
+    requested
+        .filter(|b| branches.iter().any(|known| known == b))
+        .map(str::to_owned)
+        .or_else(|| {
+            branches
+                .iter()
+                .find(|b| b.as_str() == gitops::DEVELOP)
+                .or_else(|| branches.first())
+                .cloned()
+        })
+        .unwrap_or_default()
+}
+
+/// A branch's file tree as view entries (P5c), capped so a huge repo can't blow one frame: drop
+/// anything deeper than `TREE_MAX_DEPTH`, then truncate to `TREE_MAX_ENTRIES`. Both cut from the
+/// tail, so `FileTree`'s pre-order contiguity survives. An unreadable ref yields an empty tree.
+fn project_tree(dir: &Path, reference: &str) -> Vec<crate::state::ProjectTreeEntry> {
+    const TREE_MAX_DEPTH: usize = 6;
+    const TREE_MAX_ENTRIES: usize = 1500;
+    gitops::ref_tree(dir, reference)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| entry.depth <= TREE_MAX_DEPTH)
+        .take(TREE_MAX_ENTRIES)
+        .map(|entry| crate::state::ProjectTreeEntry {
+            rel: entry.rel,
+            name: entry.name,
+            is_dir: entry.is_dir,
+            depth: entry.depth,
+        })
+        .collect()
 }
 
 /// Set (or clear) a project's kind override (P1), then re-project the page. An empty slug
@@ -132,7 +188,8 @@ pub(crate) fn set_project_kind(
     } else {
         db::settings::set(conn, &key, slug.trim())
     };
-    load_project_detail(conn, shared, workspace, project);
+    // Re-project on the default branch — a kind change is a settings act, not a branch switch.
+    load_project_detail(conn, shared, workspace, project, None);
 }
 
 /// Project the request page (`Command::LoadRequestDetail`).
@@ -388,4 +445,28 @@ fn repo_label(rel: &str) -> String {
 
 fn short(sha: &str) -> String {
     sha.chars().take(8).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::choose_branch;
+
+    fn branches(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn choose_branch_honors_a_valid_request_else_defaults_to_develop() {
+        let b = branches(&["develop", "main", "req/aa-x"]);
+        // A valid requested branch wins.
+        assert_eq!(choose_branch(&b, Some("req/aa-x")), "req/aa-x");
+        // An unknown request falls back to develop.
+        assert_eq!(choose_branch(&b, Some("gone")), "develop");
+        // No request → develop.
+        assert_eq!(choose_branch(&b, None), "develop");
+        // No develop → the first branch.
+        assert_eq!(choose_branch(&branches(&["main", "wip"]), None), "main");
+        // No branches at all → empty.
+        assert_eq!(choose_branch(&[], None), "");
+    }
 }
