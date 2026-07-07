@@ -854,6 +854,13 @@ pub struct ProjectDetail {
     /// The main-staging preview URL (P5a) when the released line's server is live; empty otherwise
     /// (no Release yet, or a non-web project). Shown in the Release panel regardless of browsed branch.
     pub main_preview_uri: String,
+    /// Whether a Release would conflict (P5a) — `develop` and `main` have diverged incompatibly.
+    /// Distinct from `!releasable` (which is also `false` when there's simply nothing to release).
+    pub release_conflict: bool,
+    /// Local `main` commits not yet pushed to `origin/main` (P5a sync). `0` when in sync or no remote.
+    pub origin_ahead: usize,
+    /// `origin/main` commits not yet local (P5a sync) — fetched but not merged. `0` when none.
+    pub origin_behind: usize,
 }
 
 /// One producer run's checks on the selected branch (P5c) — carries the `task_runs.id` so each

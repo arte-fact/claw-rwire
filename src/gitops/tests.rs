@@ -841,3 +841,26 @@ fn sync_main_worktree_checks_out_detached_main_and_refreshes_to_its_tip() {
         "the worktree reset --hard to the freshly-released main"
     );
 }
+
+#[test]
+fn origin_divergence_counts_unpushed_commits_and_is_none_without_a_tracking_ref() {
+    let origin = scratch("origin-div-remote");
+    git(&origin, &["init", "--initial-branch", MAIN]).expect("init");
+    commit_on(&origin, "a.txt", "1\n", "seed on main");
+
+    let workdir = scratch("origin-div-work");
+    let local = workdir.join("clone");
+    git(
+        &workdir,
+        &["clone", &origin.to_string_lossy(), &local.to_string_lossy()],
+    )
+    .expect("clone");
+
+    // A fresh clone is in sync with origin/main.
+    assert_eq!(origin_divergence(&local, MAIN), Some((0, 0)));
+    // A local commit is one ahead, none behind.
+    commit_on(&local, "b.txt", "2\n", "local work");
+    assert_eq!(origin_divergence(&local, MAIN), Some((1, 0)));
+    // A branch with no origin/<branch> tracking ref reports nothing rather than a spurious 0/0.
+    assert_eq!(origin_divergence(&local, "no-such-branch"), None);
+}

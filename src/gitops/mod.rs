@@ -15,7 +15,7 @@ mod tests;
 mod worktrees;
 
 pub use inspect::{local_branches, ref_tree};
-pub use merge::{MAIN, MergeOutcome, divergence, would_conflict};
+pub use merge::{MAIN, MergeOutcome, divergence, origin_divergence, would_conflict};
 pub use requests::{
     DEVELOP, RequestRef, abandon_branch, branch_exists, deliver_repo, has_remote, push_branch,
     push_refs, release_repo, restore_file, revert_merge,

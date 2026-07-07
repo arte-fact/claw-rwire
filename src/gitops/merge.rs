@@ -134,6 +134,15 @@ pub fn divergence(dir: &Path, a: &str, b: &str) -> Result<(usize, usize), GitErr
     Ok((ahead, behind))
 }
 
+/// `(ahead, behind)` of a local `branch` vs its `origin/<branch>` remote-tracking ref (P5a sync):
+/// local commits not yet pushed, and fetched-but-not-merged remote commits. `None` when the tracking
+/// ref doesn't resolve — no remote, or the branch was never pushed/fetched — so the caller shows
+/// nothing rather than a spurious `0/0`. Reflects the last push/fetch; it does not hit the network.
+#[must_use]
+pub fn origin_divergence(dir: &Path, branch: &str) -> Option<(usize, usize)> {
+    divergence(dir, branch, &format!("origin/{branch}")).ok()
+}
+
 /// Whether merging `from` into `into` would conflict — a dry `merge-tree` that computes the
 /// merge but commits nothing. `false` when `from` is already an ancestor of `into`.
 pub fn would_conflict(dir: &Path, into: &str, from: &str) -> Result<bool, GitError> {

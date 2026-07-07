@@ -112,8 +112,10 @@ pub(crate) fn load_project_detail(
     let tree = project_tree(&dir, &selected);
     let pipeline = branch_pipeline(conn, workspace, &format!("projects/{project}"), &selected);
     let preview_uri = staging_preview_uri(workspace, project, &selected);
-    let (develop_ahead, releasable) = release_status(&dir);
+    let (develop_ahead, releasable, release_conflict) = release_status(&dir);
     let main_preview_uri = main_preview_uri(workspace, project);
+    let (origin_ahead, origin_behind) =
+        gitops::origin_divergence(&dir, gitops::MAIN).unwrap_or((0, 0));
     let detail = crate::state::ProjectDetail {
         workspace_id: workspace.to_owned(),
         name: project.to_owned(),
@@ -128,6 +130,9 @@ pub(crate) fn load_project_detail(
         develop_ahead,
         releasable,
         main_preview_uri,
+        release_conflict,
+        origin_ahead,
+        origin_behind,
     };
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_PROJECT_DETAIL]),
@@ -204,19 +209,20 @@ fn branch_pipeline(
         .collect()
 }
 
-/// Release readiness (P5a): `(develop_ahead, releasable)` — how many commits `develop` leads `main`
-/// by, and whether a Release can run now (develop leads main and the merge is conflict-free). A repo
-/// missing either branch is not releasable.
-fn release_status(dir: &Path) -> (usize, bool) {
+/// Release readiness (P5a): `(develop_ahead, releasable, release_conflict)` — how many commits
+/// `develop` leads `main` by, whether a Release can run now (develop leads main **and** the merge is
+/// definitely conflict-free), and whether the merge would definitely conflict. A repo missing either
+/// branch, or a repo whose conflict check errors, is neither releasable nor flagged as conflicting.
+fn release_status(dir: &Path) -> (usize, bool, bool) {
     if !gitops::branch_exists(dir, gitops::MAIN) || !gitops::branch_exists(dir, gitops::DEVELOP) {
-        return (0, false);
+        return (0, false, false);
     }
     let ahead = gitops::divergence(dir, gitops::DEVELOP, gitops::MAIN)
         .map(|(ahead, _behind)| ahead)
         .unwrap_or(0);
-    let releasable =
-        ahead > 0 && !gitops::would_conflict(dir, gitops::MAIN, gitops::DEVELOP).unwrap_or(true);
-    (ahead, releasable)
+    let conflict = gitops::would_conflict(dir, gitops::MAIN, gitops::DEVELOP);
+    let releasable = ahead > 0 && matches!(conflict, Ok(false));
+    (ahead, releasable, conflict.unwrap_or(false))
 }
 
 /// The develop-staging preview URL when browsing develop and its server is live; empty otherwise
