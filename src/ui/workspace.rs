@@ -150,9 +150,12 @@ fn tab_link(tab: WsTab, path: &str, active: bool) -> ElementBuilder {
 
 // ── Sections ────────────────────────────────────────────────────────────────────
 
-/// The Files section — the workspace's two-pane browser/editor (scoped via the route).
+/// The Files section — the workspace's two-pane browser/editor (scoped via the route). The flex
+/// tokens go on the `#[renderer]` wrapper here (not inside `files::section`): the synced region is
+/// the flex item that must fill the shell, or the `FileEditor`'s `SplitPane` loses its bounded
+/// height and stacks the tree above the editor.
 pub fn files_section() -> ElementBuilder {
-    files::section()
+    files::section().st([St::Flex1, St::MinH0, St::DisplayFlex, St::FlexCol])
 }
 
 /// The Overview (default) section: owner, the team roster, and a pointer to the brief.

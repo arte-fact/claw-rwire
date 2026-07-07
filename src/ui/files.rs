@@ -22,11 +22,13 @@ pub fn section(app: &App) -> ElementBuilder {
     let Some(snap) = files::snapshot_for(workspace) else {
         return placeholder("Opening the workspace…");
     };
+    // The kit's root is already `Flex1/MinH0/FlexCol`; the flex tokens that matter go on the
+    // `#[renderer]` wrapper (see `files_section`), or the synced region collapses to `height:auto`
+    // and the SplitPane loses its bounded height (stacking the tree above the editor).
     FileEditor::new(&app.editor, snap.as_ref())
         .on_event(editor_event())
         .managed(true)
         .build()
-        .st([St::Flex1, St::MinH0, St::DisplayFlex, St::FlexCol])
 }
 
 /// The kit's single dispatcher: every tree click, edit, save, and managed op routes here. The kit
