@@ -529,14 +529,16 @@ pub struct TaskDetail {
     pub runs: Vec<RunView>,
 }
 
-/// A run's phase label: the role as a verb (`producer→Produce`, `validator→Review`, else
-/// `Stage`), plus the loop iteration when past the first. Shared by the run-chain entries and
-/// the agent thread's conversational turns, so a phase reads identically on both.
+/// A run's phase label: the role as a verb (`producer→Produce`, `validator→Review`,
+/// `planning→Plan`, else `Stage`), plus the loop iteration when past the first. Shared by the
+/// run-chain entries and the agent thread's conversational turns, so a phase reads identically on
+/// both.
 #[must_use]
 pub fn role_phase(role: &str, iteration: i64) -> String {
     let base = match role {
         "validator" => "Review",
         "producer" => "Produce",
+        "planning" => "Plan",
         _ => "Stage",
     };
     if iteration > 0 {
@@ -977,4 +979,19 @@ pub struct RestorableFile {
 pub struct ToastView {
     pub id: u64,
     pub message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::role_phase;
+
+    #[test]
+    fn role_phase_names_each_role_and_the_planner() {
+        assert_eq!(role_phase("producer", 0), "Produce");
+        assert_eq!(role_phase("validator", 0), "Review");
+        assert_eq!(role_phase("planning", 0), "Plan");
+        assert_eq!(role_phase("stage", 0), "Stage");
+        // The loop iteration is appended past the first pass.
+        assert_eq!(role_phase("validator", 1), "Review · iter 2");
+    }
 }

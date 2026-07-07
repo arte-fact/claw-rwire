@@ -863,8 +863,9 @@ fn summarize_invocations(invocations: &[agent::ToolInvocation]) -> String {
 }
 
 /// Serialize a run's tool calls to JSON for the persisted transcript — so a completed task's
-/// detail can show the full story (what files, what commands), not just the summary text.
-fn transcript_json(invocations: &[agent::ToolInvocation]) -> Option<String> {
+/// detail can show the full story (what files, what commands), not just the summary text. Shared
+/// with the planning turn's persistence (`bridge::orchestrate`).
+pub(crate) fn transcript_json(invocations: &[agent::ToolInvocation]) -> Option<String> {
     if invocations.is_empty() {
         return None;
     }

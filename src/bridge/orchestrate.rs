@@ -87,11 +87,11 @@ fn launch_planning(
     brief_text: &str,
     origin_chat: &str,
 ) {
-    let owner = match workspaces::get(conn, workspace).ok().flatten() {
-        Some(ws) => ws.owner,
-        None => return log_line(format!("orchestrate: unknown workspace {workspace:?}")),
+    let Some(ws) = workspaces::get(conn, workspace).ok().flatten() else {
+        return log_line(format!("orchestrate: unknown workspace {workspace:?}"));
     };
-    let Some(owner) = owner else {
+    let workspace_name = ws.name.clone();
+    let Some(owner) = ws.owner else {
         return log_line(format!(
             "orchestrate: workspace {workspace:?} has no owner to plan"
         ));
@@ -138,18 +138,49 @@ fn launch_planning(
     let messages = agent::build_messages(&system_prompt, std::slice::from_ref(&brief));
     let toolbox = PlanningToolbox::new(planning_conn, workspace, Some(plan_id.to_owned()));
 
+    // The plan gate task's title labels the live activity feed while this turn streams.
+    let task_title = db::tasks::get(conn, plan_id)
+        .ok()
+        .flatten()
+        .map(|task| task.title)
+        .unwrap_or_else(|| "planning".to_owned());
+    let ctx = crate::state::ProgressCtx {
+        task_id: plan_id.to_owned(),
+        task: task_title,
+        agent: inference.agent_name.clone(),
+        workspace_id: workspace.to_owned(),
+        workspace: workspace_name,
+    };
+
     let workspace = workspace.to_owned();
     let origin_chat = origin_chat.to_owned();
     let plan_id = plan_id.to_owned();
     std::thread::spawn(move || {
-        let result = agent::run_turn(&inference, messages, &toolbox)
-            .map(|turn| turn.reply.unwrap_or_default())
-            .map_err(|err| err.to_string());
+        // Stream the planning turn (P4d) exactly like a producer pass: each tool call + the reply
+        // folds into `App.live_turns` keyed by the plan task, so the operator watches it live. A
+        // plan turn takes no operator steering, so the poller is a constant empty.
+        let mut sink = |event| {
+            send(Command::AgentProgress {
+                ctx: ctx.clone(),
+                event,
+            })
+        };
+        let (result, transcript) =
+            match agent::run_turn_steered(&inference, messages, &toolbox, &mut sink, &|| {
+                Vec::<String>::new()
+            }) {
+                Ok(turn) => (
+                    Ok(turn.reply.unwrap_or_default()),
+                    super::scheduler::transcript_json(&turn.invocations),
+                ),
+                Err(err) => (Err(err.to_string()), None),
+            };
         send(Command::AskPlanned {
             workspace,
             origin_chat,
             plan_id,
             result,
+            transcript,
         });
         // Keep the context-window cache warm from planning workers too (per-process cache).
         super::warm_context_cache(&inference);
@@ -197,7 +228,15 @@ pub fn planned(
     origin_chat: &str,
     plan_id: &str,
     result: Result<String, String>,
+    transcript: Option<String>,
 ) {
+    // Persist the planning turn as a run against the plan task (P4d): the proposal now has a
+    // forensic "why", scrollable like a producer pass, and attributed to the owner so it reads in
+    // the owner's agent thread with a `Plan` tag. Then retire the live typewriter — the persisted
+    // run is the source of truth.
+    record_planning_run(conn, workspace, plan_id, &result, transcript.as_deref());
+    super::live::clear_live_turn(shared, plan_id);
+
     let auto_approve = workspaces::get(conn, workspace)
         .ok()
         .flatten()
@@ -258,6 +297,49 @@ pub fn planned(
     );
 }
 
+/// Append the planning turn's `task_runs` row (P4d) against the plan task — role `planning`,
+/// attributed to the workspace owner, carrying the reply as output and the tool calls as the
+/// transcript. Best-effort: a failed insert never blocks the plan.
+fn record_planning_run(
+    conn: &rusqlite::Connection,
+    workspace: &str,
+    plan_id: &str,
+    result: &Result<String, String>,
+    transcript: Option<&str>,
+) {
+    let Ok(run_id) = crate::id::new_id() else {
+        return;
+    };
+    let owner = workspaces::get(conn, workspace)
+        .ok()
+        .flatten()
+        .and_then(|ws| ws.owner);
+    let (ok, output) = match result {
+        Ok(reply) => (true, reply.as_str()),
+        Err(err) => (false, err.as_str()),
+    };
+    let _ = db::task_runs::append(
+        conn,
+        &db::task_runs::NewRun {
+            id: &run_id,
+            task_id: plan_id,
+            position: 0,
+            role: "planning",
+            agent: owner.as_deref(),
+            output: Some(output),
+            verdict: None,
+            feedback: None,
+            iteration: 0,
+            ok,
+            transcript,
+            attempt: 0,
+            memory: None,
+            commits: None,
+            checks: None,
+        },
+    );
+}
+
 /// A Request's short title — the ask's first line, capped (no `Plan:` prefix; the request
 /// names the *ask*, not the gate).
 fn request_title(request: &str) -> String {
@@ -278,4 +360,54 @@ fn plan_title(request: &str) -> String {
         capped
     };
     format!("Plan: {capped}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::record_planning_run;
+
+    #[test]
+    fn a_planning_turn_persists_a_run_against_the_plan_task() {
+        let conn = crate::db::open_in_memory().expect("db");
+        crate::db::workspaces::create(&conn, "ws", "Workspace").unwrap();
+        crate::db::tasks::create_plan(&conn, "plan-1", "ws", "Plan: build X", "build X", None)
+            .unwrap();
+
+        record_planning_run(
+            &conn,
+            "ws",
+            "plan-1",
+            &Ok("Here is the plan.".to_owned()),
+            Some(r#"[{"name":"propose_tasks","ok":true}]"#),
+        );
+
+        let runs = crate::db::task_runs::list_for_task(&conn, "plan-1").unwrap();
+        assert_eq!(runs.len(), 1, "the planning turn is recorded as one run");
+        let run = &runs[0];
+        assert_eq!(run.role, "planning");
+        assert!(run.ok);
+        assert_eq!(run.output.as_deref(), Some("Here is the plan."));
+        assert!(run.transcript.is_some(), "the tool calls are kept");
+    }
+
+    #[test]
+    fn a_failed_planning_turn_is_recorded_as_a_red_run() {
+        let conn = crate::db::open_in_memory().expect("db");
+        crate::db::workspaces::create(&conn, "ws", "Workspace").unwrap();
+        crate::db::tasks::create_plan(&conn, "plan-2", "ws", "Plan: build Y", "build Y", None)
+            .unwrap();
+
+        record_planning_run(
+            &conn,
+            "ws",
+            "plan-2",
+            &Err("endpoint down".to_owned()),
+            None,
+        );
+
+        let runs = crate::db::task_runs::list_for_task(&conn, "plan-2").unwrap();
+        assert_eq!(runs.len(), 1);
+        assert!(!runs[0].ok, "a planning failure records a red run");
+        assert_eq!(runs[0].output.as_deref(), Some("endpoint down"));
+    }
 }

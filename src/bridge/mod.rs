@@ -373,6 +373,9 @@ pub enum Command {
         origin_chat: String,
         plan_id: String,
         result: Result<String, String>,
+        /// The planning turn's tool calls as JSON (P4d) — persisted on the plan's run so the
+        /// proposal has a forensic "why". `None` when the turn ran no tools or errored.
+        transcript: Option<String>,
     },
     /// The concierge's notify turn produced a completion message — append it to the origin
     /// chat and project (no error banner / activity: a background notice is unobtrusive).
@@ -792,7 +795,16 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             origin_chat,
             plan_id,
             result,
-        } => orchestrate::planned(conn, shared, &workspace, &origin_chat, &plan_id, result),
+            transcript,
+        } => orchestrate::planned(
+            conn,
+            shared,
+            &workspace,
+            &origin_chat,
+            &plan_id,
+            result,
+            transcript,
+        ),
         Command::Notified { chat, text } => chat_turn::notified(conn, shared, &chat, &text),
         Command::UpdateMemory {
             agent_id,
