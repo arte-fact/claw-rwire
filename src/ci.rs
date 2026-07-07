@@ -33,8 +33,14 @@ pub struct CheckOutcome {
     /// or `custom` for an operator override.
     pub check: String,
     pub ok: bool,
-    /// The failure tail when red; empty when green.
+    /// The failure tail when red; empty when green — a capped glance stored in the run's `checks`
+    /// JSON and shown inline on the check badge.
     pub tail: String,
+    /// The check's **full** output (P4c). In-memory only (`serde(skip)`, so it never bloats the
+    /// `checks` JSON): the scheduler persists it to `ci_logs` keyed by the run, and the logs drawer
+    /// fetches it on demand.
+    #[serde(skip)]
+    pub log: String,
 }
 
 /// Whether a set of outcomes is all-green (an empty set is vacuously green — a repo with no
@@ -133,6 +139,8 @@ pub fn run_for_repos(
                 check: check.name,
                 ok,
                 tail: if ok { String::new() } else { tail(&result) },
+                // The whole output (P4c) — persisted to `ci_logs` by the scheduler for the drawer.
+                log: result.trim_end().to_owned(),
             });
         }
     }
@@ -364,6 +372,7 @@ mod tests {
             check: check.to_owned(),
             ok,
             tail: String::new(),
+            log: String::new(),
         }
     }
 

@@ -1194,6 +1194,19 @@ pub fn finished(
                 checks: checks_json.as_deref(),
             },
         );
+        // Persist each check's full output for the logs drawer (P4c). Kept out of the `checks` JSON
+        // above (which holds only the capped tail), so the run projection stays light.
+        for outcome in &check_outcomes {
+            if !outcome.log.is_empty() {
+                let _ = db::ci_logs::insert(
+                    conn,
+                    run_id,
+                    &outcome.repo,
+                    &outcome.check,
+                    &outcome.log,
+                );
+            }
+        }
     }
     // The run is recorded — the persisted transcript supersedes the live typewriter buffer.
     super::clear_live_turn(shared, id);

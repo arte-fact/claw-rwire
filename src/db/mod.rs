@@ -5,6 +5,7 @@ pub mod agent_prompts;
 pub mod agent_tools;
 pub mod agents;
 pub mod chat;
+pub mod ci_logs;
 pub mod endpoints;
 pub mod pipeline;
 pub mod requests;

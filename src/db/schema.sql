@@ -293,6 +293,18 @@ CREATE TABLE IF NOT EXISTS task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs ON task_runs(task_id, id);
 
+-- Full CI check logs (P4c): the whole output of each check. Kept OUT of `task_runs.checks` (which
+-- stores only a capped tail) so the run projection stays light; the logs drawer fetches one row on
+-- demand. Keyed by the run + repo + check; ON DELETE CASCADE matches the run's lifetime.
+CREATE TABLE IF NOT EXISTS ci_logs (
+  run_id      TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+  repo        TEXT NOT NULL,
+  check_name  TEXT NOT NULL,
+  log         TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  PRIMARY KEY (run_id, repo, check_name)
+);
+
 CREATE TABLE IF NOT EXISTS connectors (
   id             TEXT PRIMARY KEY,
   kind           TEXT NOT NULL UNIQUE,
