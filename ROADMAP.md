@@ -339,6 +339,16 @@ verified to support `merge-tree --write-tree`.
 - **Error taxonomy (L6):** user-actionable vs telemetry, so toasts don't train the operator to dismiss.
 - **Output-only requests confuse the macro review:** an empty branch diff reads as "the work never
   happened" — when the diff is empty, feed the tasks' final outputs into the validation brief.
+- **Validating-gate fixes (shipped 2026-07-07):** two request-lifecycle gaps a parked request exposed.
+  (1) *The CI gate was stale* — `request_checks` unioned each task's latest checked producer run, so an
+  intermediate task's since-fixed red poisoned the gate forever (the page stuck on "Deliver anyway"
+  over a green branch). Now the gate is the latest outcome **per `(repo, check)` across the request**,
+  newest wins (`ci::dedupe_latest` + `task_runs::check_runs_for_request`) — a later green re-check
+  supersedes an earlier red; a never-re-checked red stays red. (2) *No revise path from `validating`* —
+  the page offered only Deliver/Abandon. Added a **"Request changes"** action (`Command::RequestChanges`
+  → `control::request_changes` + an inline feedback form): it re-opens the work as one fresh pending
+  pass on the same branch (builds on it, not a tree-resetting restart), flips to `executing`, and the
+  normal build→review→`begin_validation` machinery re-parks it `validating` with a fresh verdict + gate.
 - **P3 success metric (still open):** a fresh "build me an X" ask in an rwire-template workspace
   ships a previewable app with zero operator touches between plan approval and Deliver — the
   deterministic pieces are green; needs one agent-driven request to Deliver.

@@ -371,6 +371,107 @@ pub(crate) fn abandon(conn: &Connection, shared: &SharedServerState, request_id:
     refresh(conn, shared, &request);
 }
 
+/// Send a `validating` request back to the agents to revise (G3): re-open the work as one fresh
+/// pending pass on the same branch — carrying the owner's feedback — and flip back to `Executing`
+/// so the normal build → review → macro-validate machinery re-runs. Unlike Abandon (drop the branch)
+/// or Deliver (merge it), this keeps the branch and its work: a **new** task (not a `restart`, which
+/// would reset the tree to base) runs from the branch HEAD, so the producer builds on what's there,
+/// fixes what's flagged, and the request re-parks `validating` with a fresh verdict + gate.
+pub(crate) fn request_changes(
+    conn: &Connection,
+    shared: &SharedServerState,
+    request_id: &str,
+    feedback: &str,
+) {
+    let Ok(Some(request)) = db::requests::get(conn, request_id) else {
+        return;
+    };
+    if request.status != RequestStatus::Validating {
+        return; // resolved (delivered/abandoned) since the page loaded — ignore a stale click
+    }
+    let feedback = feedback.trim();
+    // Reuse the producer that built the work: the most recent non-plan task's agent (its build
+    // tasks all ran as that producer); the owner (`None`) if the request has no such task.
+    let tasks = db::tasks::list_for_request(conn, request_id).unwrap_or_default();
+    let agent = tasks
+        .iter()
+        .rev()
+        .find(|task| !task.is_plan)
+        .and_then(|task| task.agent.clone());
+    let verdict = request.validation.as_deref().unwrap_or("(none recorded)");
+    let asked = if feedback.is_empty() {
+        "(address the reviewer's verdict above)"
+    } else {
+        feedback
+    };
+    let spec = format!(
+        "The delivered work for this request needs revision before it can ship. The work is ALREADY \
+         on this request's branch — build on it, fix exactly what's flagged below, keep what already \
+         works, and make the project build and its checks pass.\n\nThe original ask (the \
+         contract):\n{}\n\nThe reviewer's verdict:\n{verdict}\n\nThe owner's requested \
+         changes:\n{asked}",
+        request.ask
+    );
+    let Ok(task_id) = crate::id::new_id() else {
+        return log_line(format!(
+            "requests: request_changes id for {request_id} failed"
+        ));
+    };
+    if let Err(err) = db::tasks::create(
+        conn,
+        &db::tasks::NewTask {
+            id: &task_id,
+            workspace_id: &request.workspace_id,
+            agent: agent.as_deref(),
+            title: &format!("Revise: {}", request.title),
+            spec: &spec,
+            schedule: None,
+            origin_chat: request.origin_chat.as_deref(),
+            max_retries: None,
+        },
+    ) {
+        return log_line(format!(
+            "requests: request_changes create {request_id}: {err}"
+        ));
+    }
+    if let Err(err) = db::tasks::set_request(conn, &task_id, request_id) {
+        return log_line(format!(
+            "requests: request_changes attach {request_id}: {err}"
+        ));
+    }
+    // Record the trail on the page, then re-arm: `Executing` restores the request's lane and
+    // re-enables `maybe_deliver`'s re-validation when the new pass lands.
+    let trail = if feedback.is_empty() {
+        "changes requested — re-delegated by you".to_owned()
+    } else {
+        format!(
+            "changes requested — {}",
+            crate::text::first_line_capped(feedback, 200)
+        )
+    };
+    let _ = db::requests::set_validation(conn, request_id, &trail);
+    if let Err(err) = db::requests::set_status(conn, request_id, RequestStatus::Executing) {
+        return log_line(format!(
+            "requests: request_changes activate {request_id}: {err}"
+        ));
+    }
+    let note = if feedback.is_empty() {
+        format!(
+            "↩️ Sent **{}** back to the agents to revise — it'll re-run on its branch, then \
+             return for your review.",
+            request.title
+        )
+    } else {
+        format!(
+            "↩️ Sent **{}** back to the agents with your changes — it'll re-run on its branch, \
+             then return for your review.\n\n> {feedback}",
+            request.title
+        )
+    };
+    ping(conn, &request, &note);
+    refresh(conn, shared, &request);
+}
+
 /// Post-delivery rollback: `git revert -m1 <merge>` on develop per repo — honest history.
 pub(crate) fn rollback(conn: &Connection, shared: &SharedServerState, request_id: &str) {
     let Ok(Some(request)) = db::requests::get(conn, request_id) else {

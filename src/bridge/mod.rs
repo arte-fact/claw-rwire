@@ -219,6 +219,12 @@ pub enum Command {
     RequestAbandon {
         id: String,
     },
+    /// Send a `validating` request back to the agents to revise, with the owner's feedback (G3):
+    /// re-opens the work as a fresh pass on the same branch instead of Deliver/Abandon.
+    RequestChanges {
+        id: String,
+        feedback: String,
+    },
     RequestRollback {
         id: String,
     },
@@ -661,6 +667,9 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         } => requests::control::on_validated(conn, shared, &request_id, &decision, &note),
         Command::RequestDeliver { id } => requests::control::deliver_now(conn, shared, &id),
         Command::RequestAbandon { id } => requests::control::abandon(conn, shared, &id),
+        Command::RequestChanges { id, feedback } => {
+            requests::control::request_changes(conn, shared, &id, &feedback)
+        }
         Command::RequestRollback { id } => requests::control::rollback(conn, shared, &id),
         Command::RequestPush { id } => requests::control::push(conn, shared, &id),
         Command::RestoreFile {

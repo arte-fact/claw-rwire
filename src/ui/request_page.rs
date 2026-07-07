@@ -2,9 +2,9 @@
 //! status + branch, the ask verbatim, the task timeline with per-task diff activity, the
 //! repos it touched (branch point → merge), and the global diff against the branch point.
 
-use rwire::{At, El, ElementBuilder, Link, St, el, handler, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, Link, St, el, handler, renderer};
 use rwire_components::{
-    Badge, BadgeFill, BadgeIntent, BadgeShape, Breadcrumb, Button, ButtonSize, StatusDot,
+    Badge, BadgeFill, BadgeIntent, BadgeShape, Breadcrumb, Button, ButtonSize, Input, StatusDot,
     StatusDotIntent, Text,
 };
 
@@ -55,6 +55,14 @@ fn body(app: &App) -> ElementBuilder {
                     St::BreakWords,
                 ])
                 .text(&detail.validation),
+        ));
+    }
+    // A parked (`validating`) request can go back to the agents to revise instead of only
+    // Deliver/Abandon — the third gate move, placed right under the verdict the owner just read.
+    if detail.status == "validating" {
+        story.push(section(
+            "Request changes",
+            request_changes_form(detail.id.as_str()),
         ));
     }
     if !detail.tasks.is_empty() {
@@ -439,12 +447,49 @@ fn control(button: Button, on_click: rwire::HandlerSpec, id: &str) -> ElementBui
         .data("request", id)
 }
 
+/// The revise affordance for a `validating` request: a feedback field + submit that re-delegates the
+/// work to the agents (mirrors the task-level `review_gate`). Feedback is optional — a blank submit
+/// still re-runs, falling back to the reviewer's recorded verdict.
+fn request_changes_form(id: &str) -> ElementBuilder {
+    el(El::Form)
+        .on(Ev::Submit, request_changes())
+        // WFull or the form collapses to ~0 in its flex-col section (the width-spanning rule).
+        .st([St::WFull, St::DisplayFlex, St::ItemsCenter, St::GapSm])
+        .append([
+            crate::ui::widgets::hidden("request", id),
+            Input::text()
+                .name("feedback")
+                .placeholder("What to change…")
+                .autocomplete("off")
+                .build()
+                .st([St::Flex1, St::MinW0]),
+            Button::outline("Request changes".to_owned())
+                .size(ButtonSize::Sm)
+                .build()
+                .at(At::Type, Av::Submit),
+        ])
+}
+
 #[handler]
 fn deliver(app: &mut App, ctx: &EventContext) {
     let _ = app;
     if let Some(id) = ctx.data("request") {
         bridge::send(Command::RequestDeliver { id: id.to_owned() });
     }
+}
+
+#[handler]
+fn request_changes(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    let Some(id) = ctx
+        .field("request")
+        .map(str::to_owned)
+        .filter(|id| !id.is_empty())
+    else {
+        return;
+    };
+    let feedback = ctx.field("feedback").unwrap_or_default().trim().to_owned();
+    bridge::send(Command::RequestChanges { id, feedback });
 }
 
 #[handler]
