@@ -383,21 +383,17 @@ fn build_detail(conn: &Connection, request_id: &str) -> Option<RequestDetail> {
     })
 }
 
-/// The request's latest machine-check outcomes (P1b): each task's most recent checked producer
-/// pass, unioned — the CI verdict the macro gate and the request page read.
+/// The request's machine-check verdict (P1b): the **latest outcome per `(repo, check)`** across all
+/// its producer passes, newest wins — the branch's *current* CI state, what the macro gate and the
+/// request page read. Newest-per-key (not a per-task union) so an intermediate task's stale red is
+/// superseded when a later sibling task re-checks the same repo green on the same branch — otherwise
+/// a since-fixed failure would poison the gate forever.
 pub(crate) fn request_checks(conn: &Connection, request_id: &str) -> Vec<crate::ci::CheckOutcome> {
-    let mut outcomes = Vec::new();
-    for task in db::tasks::list_for_request(conn, request_id).unwrap_or_default() {
-        let runs = db::task_runs::list_for_task(conn, &task.id).unwrap_or_default();
-        if let Some(latest) = runs
-            .iter()
-            .rev()
-            .find(|run| run.role == "producer" && run.checks.is_some())
-        {
-            outcomes.extend(crate::ci::outcomes_from_json(latest.checks.as_deref()));
-        }
-    }
-    outcomes
+    let runs = db::task_runs::check_runs_for_request(conn, request_id).unwrap_or_default();
+    crate::ci::dedupe_latest(
+        runs.iter()
+            .flat_map(|checks| crate::ci::outcomes_from_json(Some(checks))),
+    )
 }
 
 /// The request's CI summary line + gate signal (P1b): `("", None)` when nothing was checked,
@@ -567,7 +563,7 @@ fn short(sha: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{branch_pipeline, choose_branch};
+    use super::{branch_pipeline, choose_branch, request_checks_summary};
     use crate::db::{open_in_memory, task_runs, tasks, workspaces};
 
     fn branches(names: &[&str]) -> Vec<String> {
@@ -671,5 +667,109 @@ mod tests {
         assert!(branch_pipeline(&conn, "ws", "projects/site", "main").is_empty());
         // The run checked projects/site, so another repo's develop pipeline is empty.
         assert!(branch_pipeline(&conn, "ws", "projects/other", "develop").is_empty());
+    }
+
+    /// Seed a request task with one producer run + checks JSON at an explicit `created_at` (so the
+    /// newest-wins ordering is deterministic, not wall-clock-dependent).
+    fn seed_request_run(
+        conn: &rusqlite::Connection,
+        task: &str,
+        request: &str,
+        run: &str,
+        checks: &str,
+        created_at: &str,
+    ) {
+        tasks::create(
+            conn,
+            &tasks::NewTask {
+                id: task,
+                workspace_id: "ws",
+                agent: None,
+                title: "build",
+                spec: "do",
+                schedule: None,
+                origin_chat: None,
+                max_retries: None,
+            },
+        )
+        .expect("task");
+        tasks::set_request(conn, task, request).expect("set request");
+        task_runs::append(
+            conn,
+            &task_runs::NewRun {
+                id: run,
+                task_id: task,
+                position: 0,
+                role: "producer",
+                agent: None,
+                output: None,
+                verdict: None,
+                feedback: None,
+                iteration: 0,
+                ok: true,
+                transcript: None,
+                attempt: 0,
+                memory: None,
+                commits: None,
+                checks: Some(checks),
+            },
+        )
+        .expect("run");
+        conn.execute(
+            "UPDATE task_runs SET created_at = ?2 WHERE id = ?1",
+            rusqlite::params![run, created_at],
+        )
+        .expect("stamp");
+    }
+
+    #[test]
+    fn request_gate_supersedes_a_since_fixed_red_with_a_later_green() {
+        // The regression: an intermediate task's producer pass left (empire, test) red; a later
+        // sibling task re-checked the same repo green on the same branch. The gate must be green —
+        // the per-task-union bug returned Some(false) here.
+        let conn = open_in_memory().expect("db");
+        workspaces::create(&conn, "ws", "Project").expect("ws");
+        seed_request_run(
+            &conn,
+            "t_templates",
+            "req1",
+            "r_red",
+            r#"[{"repo":"projects/empire","check":"fmt","ok":false,"tail":"x"},{"repo":"projects/empire","check":"test","ok":false,"tail":"x"}]"#,
+            "2026-07-07T15:09:00.000Z",
+        );
+        seed_request_run(
+            &conn,
+            "t_review",
+            "req1",
+            "r_green",
+            r#"[{"repo":"projects/empire","check":"fmt","ok":true,"tail":""},{"repo":"projects/empire","check":"test","ok":true,"tail":""}]"#,
+            "2026-07-07T15:38:00.000Z",
+        );
+        assert_eq!(request_checks_summary(&conn, "req1").1, Some(true));
+    }
+
+    #[test]
+    fn request_gate_keeps_a_repo_no_later_pass_re_checked() {
+        // repo `api` went green in the newest pass, but `web` was red earlier and never re-checked —
+        // its last real verdict stands, so the gate stays red.
+        let conn = open_in_memory().expect("db");
+        workspaces::create(&conn, "ws", "Project").expect("ws");
+        seed_request_run(
+            &conn,
+            "t_web",
+            "req1",
+            "r_web_red",
+            r#"[{"repo":"projects/web","check":"test","ok":false,"tail":"x"}]"#,
+            "2026-07-07T15:09:00.000Z",
+        );
+        seed_request_run(
+            &conn,
+            "t_api",
+            "req1",
+            "r_api_green",
+            r#"[{"repo":"projects/api","check":"test","ok":true,"tail":""}]"#,
+            "2026-07-07T15:38:00.000Z",
+        );
+        assert_eq!(request_checks_summary(&conn, "req1").1, Some(false));
     }
 }

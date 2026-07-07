@@ -128,6 +128,25 @@ pub fn free_lane_producer_runs(
     rows.collect()
 }
 
+/// The `checks` JSON of every producer run under a request, **newest first** — its CI gate reads the
+/// latest outcome per `(repo, check)` across these (see `crate::ci::dedupe_latest`). Only runs that
+/// recorded checks; ordered by `created_at` (ms precision) then `id` DESC, so a later pass supersedes
+/// an earlier one on the same branch (a stale red an intermediate task left is overridden by a green
+/// re-check a later sibling task ran).
+pub fn check_runs_for_request(
+    conn: &Connection,
+    request_id: &str,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.checks
+           FROM task_runs r JOIN tasks t ON t.id = r.task_id
+          WHERE t.request_id = ?1 AND r.role = 'producer' AND r.checks IS NOT NULL
+          ORDER BY r.created_at DESC, r.id DESC",
+    )?;
+    let rows = stmt.query_map(params![request_id], |row| row.get::<_, String>(0))?;
+    rows.collect()
+}
+
 /// A task's runs for one **attempt** only, oldest first — the chained context the scheduler
 /// feeds the next step, so a restart (a fresh attempt) never inherits an earlier attempt's work.
 pub fn list_for_task_attempt(

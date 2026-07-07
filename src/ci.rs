@@ -110,6 +110,23 @@ pub fn failed_names(outcomes: &[CheckOutcome]) -> Vec<String> {
     names
 }
 
+/// Collapse outcomes ordered **newest-first** to the latest per `(repo, check)`: the first outcome
+/// seen for a key wins; later (older) ones for the same key are dropped. This is how a request's gate
+/// reflects the branch's *current* state rather than a stale union — a `(repo, check)` re-run green by
+/// a later pass supersedes an earlier red, while a key no later pass re-checked keeps its last real
+/// verdict. Order of first appearance is preserved.
+#[must_use]
+pub fn dedupe_latest(newest_first: impl IntoIterator<Item = CheckOutcome>) -> Vec<CheckOutcome> {
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut latest: Vec<CheckOutcome> = Vec::new();
+    for outcome in newest_first {
+        if seen.insert((outcome.repo.clone(), outcome.check.clone())) {
+            latest.push(outcome);
+        }
+    }
+    latest
+}
+
 /// Run every touched repo's checks and collect the outcomes. `lane_root` is the task's lane
 /// tree; `strategy` is the exec strategy built from that root (host or the lane's sandbox);
 /// `repos` are the lane-root-relative repos the pass committed (from `parse_commits`). Checks
@@ -266,6 +283,37 @@ mod tests {
             failed_names(&outcomes),
             ["projects/x:clippy", "projects/x:test", "test"]
         );
+    }
+
+    #[test]
+    fn dedupe_latest_supersedes_an_older_red_with_a_newer_green() {
+        // Newest-first: the Review pass (green fmt+test) precedes the Templates pass (red fmt+test)
+        // for the same repo. The gate must reflect the newest per (repo, check) → all green.
+        let newest_first = [
+            outcome("projects/empire", "fmt", true),
+            outcome("projects/empire", "test", true),
+            outcome("projects/empire", "fmt", false),
+            outcome("projects/empire", "test", false),
+        ];
+        let latest = dedupe_latest(newest_first);
+        assert!(
+            all_green(&latest),
+            "a later green pass supersedes the stale red"
+        );
+        assert_eq!(latest.len(), 2, "one outcome per (repo, check)");
+    }
+
+    #[test]
+    fn dedupe_latest_keeps_a_key_no_later_pass_re_checked() {
+        // repo `a` went green in the newest pass; repo `b` was red earlier and never re-checked —
+        // it must stay red (its last real verdict), so the gate is not all-green.
+        let newest_first = [
+            outcome("projects/a", "test", true),
+            outcome("projects/b", "test", false),
+        ];
+        let latest = dedupe_latest(newest_first);
+        assert!(!all_green(&latest));
+        assert_eq!(failed_names(&latest), ["projects/b:test"]);
     }
 
     #[test]
