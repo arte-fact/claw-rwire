@@ -240,7 +240,7 @@ editor hardening flows upstream.
 The "make it a place" axis: two branches you can preview, an optional origin you manage in-app, and a
 project page that is the CI/CD cockpit.
 
-### P5a — develop → main + Release
+### P5a — develop → main + Release ✅ shipped
 
 *Approach (locked):* **keystone first** — a working-tree-less merge is the foundation, applied to the
 new Release path (`develop → main`, no canonical-tree/free-lane entanglement) while `deliver`
@@ -249,21 +249,21 @@ treelessly; **previews still need a materialized tree**, so `main` gets a persis
 Release is **project-level** (a project = one repo) and lives on the project page. Host git 2.43
 verified to support `merge-tree --write-tree`.
 
-- [ ] **Slice 1 — Keystone primitives** (`gitops/merge.rs`): `MAIN` const + `ensure_main`;
+- [x] **Slice 1 — Keystone primitives** (`gitops/merge.rs`): `MAIN` const + `ensure_main`;
       `merge_treeless(dir, into, from, msg) -> MergeOutcome{Merged|UpToDate|Conflict}` via
       `merge-tree --write-tree` → `commit-tree` → `update-ref <new> <old>` (CAS, no checkout);
       `divergence` (`rev-list --left-right --count`) + `would_conflict` (dry merge-tree). Real-git
       tests. *Site*: `gitops/merge.rs`, `gitops/mod.rs`.
-- [ ] **Slice 2 — Release action** (`develop → main`, CI-gated): `release_repo` = treeless
+- [x] **Slice 2 — Release action** (`develop → main`, CI-gated): `release_repo` = treeless
       `develop→main`; `Command::ReleaseProject` + `control::release_project` (**live floor gate** via
       `ci::run_for_repos`+`all_green`, then merge, then push `main` **iff** an origin exists — not
       automatic); a project-page **Release panel**. *Site*: `gitops/requests.rs`, `bridge/requests`,
       `bridge/mod.rs`, `ui/project_page/`, `state/views.rs` (`develop_ahead`/`releasable`).
-- [ ] **Slice 3 — `main` is previewable**: a persistent per-project **`main` worktree** (canonical
+- [x] **Slice 3 — `main` is previewable**: a persistent per-project **`main` worktree** (canonical
       tree is on develop); `main_staging_*` + `start_main_staging` beside develop-staging;
       `refresh_main_staging` after a Release. *Site*: `bridge/preview.rs`, `gitops/worktrees.rs`,
       `ui/project_page/pipeline.rs`.
-- [ ] **Slice 4 — Sync status**: `develop_ahead`, a **release-conflict** signal (dry merge-tree), and
+- [x] **Slice 4 — Sync status**: `develop_ahead`, a **release-conflict** signal (dry merge-tree), and
       **ahead/behind origin** (`rev-list --count main...origin/main`) on the project page; the Release
       button is conflict-aware. *Site*: `gitops`, `bridge/requests/view.rs`, `state/views.rs`,
       `ui/project_page/`.
@@ -271,14 +271,14 @@ verified to support `merge-tree --write-tree`.
   off the canonical tree — a clean follow-on now that the primitive exists; fully closes the
   free-lane-dirt race. Not on this critical path.
 
-### P5b — Origin + admin SSH keys
+### P5b — Origin + admin SSH keys ✅ shipped
 
-- [ ] **Slice 5 — Admin SSH-key store**: private keys as **server-side files** under `<data_dir>/ssh/`
+- [x] **Slice 5 — Admin SSH-key store**: private keys as **server-side files** under `<data_dir>/ssh/`
       (0600) with a **metadata-only** `ssh_keys(name, fingerprint, created_at)` table — no private
       material in the DB (satisfies "out of the normal DB export" for free). A System-page column +
       drawer mirroring endpoints, with a **write-only projection** (fingerprint only, never the key).
       *Site*: `db/ssh_keys.rs`, `db/schema.sql`, `ui/system_map/`, `bridge/admin.rs`.
-- [ ] **Slice 6 — Per-project remote + key**: `settings` keys `project.{ws}.{name}.origin`/`.ssh_key`
+- [x] **Slice 6 — Per-project remote + key**: `settings` keys `project.{ws}.{name}.origin`/`.ssh_key`
       (mirror `kind_key`), set from a project-page **Remote panel**; generalize `push_refs` →
       `push <remote-url> <ref>` with `GIT_SSH_COMMAND='ssh -i <key>'`, replacing the hardcoded
       `origin` refspec; Release/request push both route through it (no origin ⇒ Release just advances
