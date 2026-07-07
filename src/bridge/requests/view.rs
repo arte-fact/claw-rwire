@@ -111,6 +111,7 @@ pub(crate) fn load_project_detail(
     let selected = choose_branch(&branches, branch);
     let tree = project_tree(&dir, &selected);
     let pipeline = branch_pipeline(conn, workspace, &format!("projects/{project}"), &selected);
+    let preview_uri = staging_preview_uri(workspace, project, &selected);
     let detail = crate::state::ProjectDetail {
         workspace_id: workspace.to_owned(),
         name: project.to_owned(),
@@ -121,6 +122,7 @@ pub(crate) fn load_project_detail(
         selected_branch: selected,
         tree,
         pipeline,
+        preview_uri,
     };
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_PROJECT_DETAIL]),
@@ -195,6 +197,19 @@ fn branch_pipeline(
             pipeline_run(&run.id, &task.title, run.checks.as_deref(), repo)
         })
         .collect()
+}
+
+/// The develop-staging preview URL when browsing develop and its server is live; empty otherwise
+/// (other branches have no project-page preview — a request lane's preview lives on its request page).
+fn staging_preview_uri(workspace: &str, project: &str, branch: &str) -> String {
+    if branch != gitops::DEVELOP {
+        return String::new();
+    }
+    let key = crate::bridge::preview::staging_key(workspace, project);
+    match crate::bridge::preview::port_for(&key) {
+        Some(_) => format!("{}/", crate::bridge::preview::uri_for(&key)),
+        None => String::new(),
+    }
 }
 
 /// The request whose lane branch is `branch` and that touched `repo` — the branch's owning request.

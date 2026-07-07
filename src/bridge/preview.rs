@@ -412,6 +412,13 @@ pub fn request_key(workspace_id: &str, request_id: &str) -> String {
     key_for(workspace_id, short_of_request(request_id))
 }
 
+/// The develop-staging preview key for a project (`<ws>-staging-<name>`) — the long-lived preview
+/// the project page (P5c) links to when browsing develop.
+#[must_use]
+pub fn staging_key(workspace_id: &str, project: &str) -> String {
+    key_for(workspace_id, staging_short(project))
+}
+
 /// The supervisor / proxy key for a (workspace, short): globally unique, URL-safe.
 #[must_use]
 pub fn key_for(workspace: &str, short: impl AsRef<str>) -> String {
@@ -623,6 +630,8 @@ mod tests {
         assert_eq!(staging_short(""), "staging-root");
         // A staging key stays a single `/preview/<key>` path segment.
         assert!(!key_for("ws", staging_short("projects/site")).contains('/'));
+        // The public staging_key composes ws + the staging short (P5c project-page preview).
+        assert_eq!(staging_key("ws", "projects/site"), "ws-staging-site");
     }
 
     #[test]

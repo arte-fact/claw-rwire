@@ -842,6 +842,9 @@ pub struct ProjectDetail {
     /// The selected branch's CI (P5c): one entry per producer run that checked this repo on the
     /// branch, newest first. Empty when the branch has no recorded checks (`main`, a fresh branch).
     pub pipeline: Vec<BranchPipelineRun>,
+    /// The develop-staging preview URL (P5c) when browsing develop and its server is live; empty
+    /// otherwise (no per-branch preview for other branches — those live on the request page).
+    pub preview_uri: String,
 }
 
 /// One producer run's checks on the selected branch (P5c) — carries the `task_runs.id` so each
