@@ -177,11 +177,13 @@ fn timeline(app: &App) -> ElementBuilder {
                     AgentThreadItem::Memory { time, note } => Row::Memory { time, note, key },
                 });
             }
-            let mut transcript = ChatTranscript::new().items_plain(rows.iter()).on_load_older(
-                expand_thread(),
-                thread.truncated as u32,
-                thread.truncated > 0,
-            );
+            let mut transcript = ChatTranscript::new()
+                .items_plain(rows.iter())
+                .on_load_older(
+                    expand_thread(),
+                    thread.truncated as u32,
+                    thread.truncated > 0,
+                );
             // The empty state is the transcript's only when nothing streams either: the live tail is
             // a sibling region, so a bare "no activity" must not sit above a running turn.
             if thread.items.is_empty() && thread.live.is_empty() {
@@ -194,7 +196,9 @@ fn timeline(app: &App) -> ElementBuilder {
             transcript.build()
         }
     };
-    el(El::Div).id(&format!("agent-thread-{key}")).append([inner])
+    el(El::Div)
+        .id(&format!("agent-thread-{key}"))
+        .append([inner])
 }
 
 /// One agent-thread row adapted to rwire's `ChatItem`. A `Turn` carries the full entry chrome

@@ -52,6 +52,9 @@ pub struct App {
     pub web_agent: Option<String>,
     /// The System Map drawer's current target, or `None` when it's closed.
     pub editing: Option<Editing>,
+    /// The CI logs drawer's contents (P4c), or `None` when it's closed — set when a check badge on
+    /// the task thread is opened, cleared on close.
+    pub log_drawer: Option<LogDrawerView>,
     /// Models discovered from the agent draft's selected endpoint (`/v1/models`),
     /// populating the agent form's model dropdown. Empty until an endpoint is chosen.
     pub endpoint_models: Vec<String>,

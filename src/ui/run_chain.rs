@@ -6,7 +6,7 @@
 //! `verdict_chip` the thread builds its authored entries from.
 
 use rwire::style::Style;
-use rwire::{At, El, ElementBuilder, St, el, handler};
+use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler};
 use rwire_components::{Badge, BadgeFill, BadgeIntent, BadgeShape, Text};
 use serde_json::Value;
 
@@ -123,7 +123,11 @@ pub(crate) fn diff_row(
 /// A pass's machine checks (P1b) as a badge strip — one square outline badge per check,
 /// green `✓` / red `✗` — the machine verdict at a glance. Red checks with a failure tail add a
 /// disclosure below revealing the tails (the signature the reviewer/operator expands).
-pub(crate) fn checks_row(checks: &[crate::state::CheckBadgeView], key: &str) -> ElementBuilder {
+pub(crate) fn checks_row(
+    run_id: &str,
+    checks: &[crate::state::CheckBadgeView],
+    key: &str,
+) -> ElementBuilder {
     let badges: Vec<ElementBuilder> = checks
         .iter()
         .map(|check| {
@@ -133,12 +137,26 @@ pub(crate) fn checks_row(checks: &[crate::state::CheckBadgeView], key: &str) -> 
                 BadgeIntent::Error
             };
             let mark = if check.ok { "✓" } else { "✗" };
-            Badge::new()
+            let badge = Badge::new()
                 .shape(BadgeShape::Square)
                 .fill(BadgeFill::Outline)
                 .intent(intent)
                 .text(format!("{mark} {}", check.label))
-                .build()
+                .build();
+            let payload = serde_json::json!({
+                "run": run_id,
+                "repo": check.repo,
+                "check": check.check,
+            })
+            .to_string();
+            // The whole badge is a button — a click opens this check's full log (P4c) in the drawer.
+            el(El::Button)
+                .at(At::Type, Av::Button)
+                .at_str(At::AriaLabel, &format!("View the {} log", check.label))
+                .st([St::BorderNone, St::BgTransparent, St::P0, St::CursorPointer])
+                .data("log", &payload)
+                .on(Ev::Click, open_check_log())
+                .append([badge])
         })
         .collect();
     let strip = el(El::Div)
@@ -477,6 +495,31 @@ fn restore_file(app: &mut App, ctx: &EventContext) {
     });
 }
 
+/// Open a check's full log (P4c): the badge carries `{run, repo, check}` as one JSON `data`
+/// payload; forward it to the bridge, which fetches from `ci_logs` and fills the logs drawer.
+#[handler]
+fn open_check_log(app: &mut App, ctx: &EventContext) {
+    let _ = app;
+    let Some(payload) = ctx.data("log") else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return;
+    };
+    let field = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    crate::bridge::send(crate::bridge::Command::LoadCheckLog {
+        run_id: field("run"),
+        repo: field("repo"),
+        check: field("check"),
+    });
+}
+
 /// An `edit` call's `old_string` → `new_string` as coloured diff rows (a `path` header + `+`/`-`/
 /// context lines), or `None` if the arguments don't parse as an edit.
 fn edit_diff_rows(tool: &ToolCardView) -> Option<Vec<ElementBuilder>> {
@@ -552,6 +595,7 @@ mod tests {
 
     fn run(role: &str, iteration: i64) -> RunView {
         RunView {
+            id: "run-x".to_owned(),
             role: role.to_owned(),
             agent: "Forge".to_owned(),
             output: String::new(),
@@ -637,6 +681,33 @@ mod tests {
     fn has_data_tool(element: &ElementBuilder) -> bool {
         element.attributes().iter().any(|(k, _)| k == "data-tool")
             || element.children().iter().any(has_data_tool)
+    }
+
+    /// The first `data-log` payload anywhere in the subtree — the fetch key a check badge carries.
+    fn find_data_log(element: &ElementBuilder) -> Option<String> {
+        if let Some((_, v)) = element.attributes().iter().find(|(k, _)| k == "data-log") {
+            return Some(v.clone());
+        }
+        element.children().iter().find_map(find_data_log)
+    }
+
+    #[test]
+    fn checks_row_badge_is_a_clickable_button_carrying_its_log_key() {
+        let checks = vec![crate::state::CheckBadgeView {
+            label: "clippy (projects/app)".to_owned(),
+            ok: false,
+            tail: "error".to_owned(),
+            repo: "projects/app".to_owned(),
+            check: "clippy".to_owned(),
+        }];
+        let row = checks_row("run-7", &checks, "k");
+        // The badge is a button (P4c) — a click opens the drawer, so it must carry the run + repo +
+        // check the bridge fetches the full log by.
+        let payload = find_data_log(&row).expect("a check badge carries a data-log payload");
+        let value: Value = serde_json::from_str(&payload).expect("data-log is JSON");
+        assert_eq!(value["run"], "run-7");
+        assert_eq!(value["repo"], "projects/app");
+        assert_eq!(value["check"], "clippy");
     }
 
     #[test]

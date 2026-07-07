@@ -441,6 +441,8 @@ pub struct ProposedTask {
 /// One run in a task's chain, for the detail view's transcript (Phase F-4).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunView {
+    /// The `task_runs.id` — the key the logs drawer fetches a check's full log by (P4c).
+    pub id: String,
     /// `stage` / `producer` / `validator`.
     pub role: String,
     /// The agent's display name, or "you" for a human verdict.
@@ -478,6 +480,20 @@ pub struct CheckBadgeView {
     pub ok: bool,
     /// The failure tail (empty when green).
     pub tail: String,
+    /// The repo this check ran in (empty for a meta-repo check) — half the `ci_logs` key the
+    /// badge opens its full log by (P4c).
+    pub repo: String,
+    /// The check name (`fmt`/`clippy`/`test`/`custom`) — the other half of the `ci_logs` key.
+    pub check: String,
+}
+
+/// The logs drawer's contents (P4c): one CI check's full output, opened from its badge on the task
+/// thread. `title` names the check (+ repo); `log` is the whole captured output, or a placeholder
+/// when none was stored.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LogDrawerView {
+    pub title: String,
+    pub log: String,
 }
 
 /// A task's detail view: its spec, status, and the full run chain (the audit trail).

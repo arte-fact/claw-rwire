@@ -10,7 +10,8 @@ use std::borrow::Cow;
 use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
 use rwire_components::{
     Avatar, AvatarSize, Breadcrumb, Button, ButtonSize, ChatAuthor, ChatEntry, ChatItem,
-    ChatItemCtx, ChatScroll, ChatTag, ChatTranscript, Input, StatusDot, StatusDotIntent, Text,
+    ChatItemCtx, ChatScroll, ChatTag, ChatTranscript, Drawer, DrawerPosition, Input, StatusDot,
+    StatusDotIntent, Text,
 };
 
 use crate::bridge::{self, Command};
@@ -38,7 +39,49 @@ fn body(app: &App) -> ElementBuilder {
             St::FlexCol,
             St::GapSm,
         ])
-        .append([header(app, detail), page_thread(app, detail)])
+        .append([
+            header(app, detail),
+            page_thread(app, detail),
+            log_drawer(app),
+        ])
+}
+
+/// The CI logs drawer (P4c): one check's full output, opened from its badge on the thread and
+/// closed from its own header. A right-side overlay, so it never reflows the thread underneath.
+fn log_drawer(app: &App) -> ElementBuilder {
+    let body = match &app.log_drawer {
+        Some(view) => el(El::Div)
+            .st([
+                St::WFull,
+                St::PSm,
+                St::BgApp,
+                St::WhitespacePreWrap,
+                St::BreakWords,
+                St::TextXs,
+                St::OverflowYAuto,
+            ])
+            .text(&view.log),
+        None => el(El::Div),
+    };
+    let title = app
+        .log_drawer
+        .as_ref()
+        .map(|view| view.title.clone())
+        .unwrap_or_default();
+    Drawer::new()
+        .position(DrawerPosition::Right)
+        .open(app.log_drawer.is_some())
+        .title(title)
+        .on_close(dismiss_log_drawer())
+        .content(body)
+        .build()
+}
+
+/// Close the logs drawer — clears `App.log_drawer` via the bridge.
+#[handler]
+fn dismiss_log_drawer(app: &mut App) {
+    let _ = app;
+    bridge::send(Command::CloseLogDrawer);
 }
 
 /// The page's first line: breadcrumb (workspace › request › task) with the status badge on
@@ -187,10 +230,7 @@ impl ChatItem for ThreadRow<'_> {
 
     fn body(&self, _ctx: &ChatItemCtx<Self>) -> ElementBuilder {
         match self {
-            ThreadRow::Plan {
-                proposed,
-                awaiting,
-            } => proposed_view(proposed, *awaiting),
+            ThreadRow::Plan { proposed, awaiting } => proposed_view(proposed, *awaiting),
             ThreadRow::Run { run, index } => run_body(run, &format!("a{index}")),
         }
     }
@@ -239,6 +279,7 @@ fn run_body(run: &RunView, key: &str) -> ElementBuilder {
     if !run.checks.is_empty() {
         // The machine verdict on this pass (P1b) — a badge strip, red tails behind a disclosure.
         body.push(crate::ui::run_chain::checks_row(
+            &run.id,
             &run.checks,
             &format!("{key}.checks"),
         ));

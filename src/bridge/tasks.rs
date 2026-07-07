@@ -92,6 +92,7 @@ pub(super) fn run_view(
     run: crate::db::task_runs::TaskRun,
 ) -> crate::state::RunView {
     crate::state::RunView {
+        id: run.id,
         agent: display_name(names, run.agent.as_deref()),
         role: run.role,
         output: run.output.unwrap_or_default(),
@@ -190,6 +191,33 @@ pub fn load_detail(conn: &rusqlite::Connection, shared: &SharedServerState, task
     );
 }
 
+/// Open the CI logs drawer on one check's full log (P4c): fetch it from `ci_logs` by the run it
+/// belongs to plus its repo + check name, and project it into `App.log_drawer`. A missing log (an
+/// old run predating P4c, or a check that emitted nothing) shows a placeholder.
+pub fn load_check_log(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    run_id: &str,
+    repo: &str,
+    check: &str,
+) {
+    let title = if repo.is_empty() {
+        check.to_owned()
+    } else {
+        format!("{check} ({repo})")
+    };
+    let log = crate::db::ci_logs::fetch(conn, run_id, repo, check)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "(no log was captured for this check)".to_owned());
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_LOG_DRAWER]),
+        move |app| {
+            app.log_drawer = Some(crate::state::LogDrawerView { title, log });
+        },
+    );
+}
+
 /// Re-project the detail **only if it's the one currently open** — so a task finishing /
 /// advancing updates the open detail live without hijacking a different task's view.
 pub fn refresh_detail_if_open(
@@ -216,14 +244,19 @@ pub fn refresh_detail_if_open(
 fn check_badges(checks_json: Option<&str>) -> Vec<crate::state::CheckBadgeView> {
     crate::ci::outcomes_from_json(checks_json)
         .into_iter()
-        .map(|outcome| crate::state::CheckBadgeView {
-            label: if outcome.repo.is_empty() {
-                outcome.check
+        .map(|outcome| {
+            let label = if outcome.repo.is_empty() {
+                outcome.check.clone()
             } else {
                 format!("{} ({})", outcome.check, outcome.repo)
-            },
-            ok: outcome.ok,
-            tail: outcome.tail,
+            };
+            crate::state::CheckBadgeView {
+                label,
+                ok: outcome.ok,
+                tail: outcome.tail,
+                repo: outcome.repo,
+                check: outcome.check,
+            }
         })
         .collect()
 }

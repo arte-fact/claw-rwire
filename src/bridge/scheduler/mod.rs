@@ -1198,13 +1198,8 @@ pub fn finished(
         // above (which holds only the capped tail), so the run projection stays light.
         for outcome in &check_outcomes {
             if !outcome.log.is_empty() {
-                let _ = db::ci_logs::insert(
-                    conn,
-                    run_id,
-                    &outcome.repo,
-                    &outcome.check,
-                    &outcome.log,
-                );
+                let _ =
+                    db::ci_logs::insert(conn, run_id, &outcome.repo, &outcome.check, &outcome.log);
             }
         }
     }

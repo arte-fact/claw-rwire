@@ -143,6 +143,15 @@ pub enum Command {
     /// Close the System Map drawer (sent on navigation so it doesn't persist across
     /// route changes — `editing` is shared state).
     CloseDrawer,
+    /// Open the CI logs drawer (P4c) on one check's full log — fetched from `ci_logs` by the run
+    /// the badge belongs to plus its repo + check name.
+    LoadCheckLog {
+        run_id: String,
+        repo: String,
+        check: String,
+    },
+    /// Close the CI logs drawer.
+    CloseLogDrawer,
     /// Set the workspace the current route is in (`/w/:wid…`), or `None` off any workspace
     /// route — projected into `App.active_workspace` for the sidebar + workspace views.
     SetActiveWorkspace {
@@ -609,6 +618,12 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::DeleteWorkspace { id } => admin::delete_workspace(conn, shared, &id),
         Command::DiscoverModels { endpoint } => admin::discover_models(conn, shared, &endpoint),
         Command::CloseDrawer => close_drawer(shared),
+        Command::LoadCheckLog {
+            run_id,
+            repo,
+            check,
+        } => tasks::load_check_log(conn, shared, &run_id, &repo, &check),
+        Command::CloseLogDrawer => close_log_drawer(shared),
         Command::SetActiveWorkspace { id } => set_active_workspace(shared, id),
         Command::LoadBrief { workspace } => files::load_brief(conn, shared, &workspace),
         Command::LoadTasks { workspace } => tasks::load(conn, shared, &workspace),
@@ -806,6 +821,13 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
 fn close_drawer(shared: &SharedServerState) {
     shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_EDITING]), |app| {
         app.editing = None;
+    });
+}
+
+/// Clear the CI logs drawer (P4c) — its close button sends this.
+fn close_log_drawer(shared: &SharedServerState) {
+    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_LOG_DRAWER]), |app| {
+        app.log_drawer = None;
     });
 }
 
