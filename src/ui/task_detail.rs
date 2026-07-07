@@ -437,9 +437,16 @@ fn proposed_view(proposed: &[ProposedTask], awaiting: bool) -> ElementBuilder {
                 ])
         })
         .collect();
+    // Point back to the "why" (P4d): the planning run that produced this breakdown is on this same
+    // thread (its Plan-tagged entry), so the operator can read the reasoning behind the tasks.
+    let caption = el(El::Div)
+        .st([St::TextXs, St::TextMuted, St::Italic])
+        .text(
+            "Proposed by the owner's planning turn — its reasoning is the Plan run in this thread.",
+        );
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
-        .append(cards)
+        .append(std::iter::once(caption).chain(cards))
 }
 
 /// The status-appropriate run-control buttons: Stop while live, Start/Restart when stopped,

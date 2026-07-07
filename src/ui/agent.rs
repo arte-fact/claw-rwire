@@ -283,22 +283,43 @@ impl ChatItem for Row<'_> {
 /// token flush repaints just this tail. Self-hides when the agent has nothing running.
 #[renderer]
 fn live_tail(app: &App) -> ElementBuilder {
-    let Some(thread) = app.agent_thread.as_ref().filter(|t| !t.live.is_empty()) else {
+    let Some(thread) = app.agent_thread.as_ref() else {
         return el(El::Div).st([St::DisplayNone]);
     };
-    let entries: Vec<ElementBuilder> = thread
+    let stream_for = |task_id: &str| -> &[LiveItem] {
+        app.live_turns
+            .iter()
+            .find(|turn| turn.task_id == task_id)
+            .map(|turn| turn.items.as_slice())
+            .unwrap_or(&[])
+    };
+    let mut entries: Vec<ElementBuilder> = thread
         .live
         .iter()
         .map(|live| {
-            let items: &[LiveItem] = app
-                .live_turns
-                .iter()
-                .find(|turn| turn.task_id == live.task_id)
-                .map(|turn| turn.items.as_slice())
-                .unwrap_or(&[]);
-            stream_entry(&thread.agent_name, &live.tag, live_stream_body(items))
+            stream_entry(
+                &thread.agent_name,
+                &live.tag,
+                live_stream_body(stream_for(&live.task_id)),
+            )
         })
         .collect();
+    // The owner's in-flight planning turn (P4d) streams here too, so its working life reads
+    // producing · reviewing · planning live — matched to this thread by workspace + agent.
+    for plan in app
+        .planning_live
+        .iter()
+        .filter(|p| p.workspace_id == thread.workspace_id && p.agent == thread.agent_name)
+    {
+        entries.push(stream_entry(
+            &thread.agent_name,
+            "Plan",
+            live_stream_body(stream_for(&plan.plan_id)),
+        ));
+    }
+    if entries.is_empty() {
+        return el(El::Div).st([St::DisplayNone]);
+    }
     el(El::Div)
         .id(&format!(
             "agent-live-{}-{}",

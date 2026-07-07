@@ -175,6 +175,7 @@ fn launch_planning(
         plan_id: plan_id.to_owned(),
         chat_id: origin_chat.to_owned(),
         request_id,
+        workspace_id: workspace.to_owned(),
         agent: inference.agent_name.clone(),
     };
     shared.update_shared_changed::<App>(

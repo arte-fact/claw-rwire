@@ -207,27 +207,33 @@ because it is invisible. Producer runs already solved this: they stream via `run
 (`live_entry`/`live_stream_body`). Give the planner the same treatment — legibility over the one turn
 that shapes everything downstream. (Rides on P4a's `ChatEntry`; no rwire dependency of its own.)
 
-- [ ] **Stream the planning turn**: switch `launch_planning` from `run_turn` to `run_turn_steered`
-      with a live sink, reusing the producer stream path — tool calls and the reply arrive as they
-      happen, not all at once at the end. *Site*: `bridge/orchestrate.rs`, `bridge/live.rs`.
-- [ ] **A planning presence where the request lives**: the concierge (`origin_chat`) and the plan/
-      request page show a live "*owner* is planning…" entry streaming its work — the same live entry
-      the board shows for a producer, rendered through P4a's `ChatEntry`. Retires the opaque status
-      wait. *Site*: `ui/chat.rs`, `ui/request_page.rs`.
-- [ ] **Persist the planning turn as a run**: record it in `task_runs` (`RunKind::Planning`) against
-      the plan task, with its transcript — so the proposal has a forensic "why", scrollable like a
-      producer pass, instead of an ephemeral one-shot. *Site*: `bridge/orchestrate.rs`, `db/task_runs.rs`.
-- [ ] **The planner in the owner's thread**: the owner agent's thread (`ui/agent.rs`) includes its
-      planning turns as authored entries (a `Plan` phase tag), so its working life reads producing ·
-      reviewing · **planning**, not just the first two. *Site*: `bridge/agent_thread.rs`, `ui/agent.rs`.
-- [ ] **The proposal points back**: `proposed_view` links each proposed breakdown to the planning run
-      that produced it — "why these tasks" is one click from the plan. *Site*: `ui/task_detail.rs`,
-      `ui/request_page.rs`.
-- [ ] **Speed the wait, not just its perception** (secondary): the planning turn is a light three-tool
-      loop (`propose_tasks` / `list_tasks` / `cancel_task`) — the latency is the LLM round(s) + a cold
-      context cache, not the toolbox. Consider a faster model for the planning role and cache-warming;
-      the streaming above makes whatever wait remains legible. *Site*: `db/resolution.rs` (per-role
-      model), `bridge/orchestrate.rs`.
+- [x] **Stream the planning turn** — shipped `19055b2`: `launch_planning` runs the owner through
+      `run_turn_steered` with a sink posting `Command::AgentProgress{ctx.task_id = plan_id}`, reusing
+      the producer stream path — tool calls + the reply fold into `App.live_turns` as they happen.
+      *Site*: `bridge/orchestrate.rs`.
+- [x] **A planning presence where the request lives** — shipped `17fa565`: an `App.planning_live`
+      projection ({plan_id, chat_id, request_id, workspace_id, agent}) bridges chat/request →
+      `live_turns`; the concierge (transcript `live_tail`) and the request page (own synced region)
+      show the owner's live "*Plan*" stream, and the plan detail's `live_entry` streams it too (its
+      running-only gate relaxed for the `awaiting` plan). *Site*: `ui/chat.rs`, `ui/request_page.rs`,
+      `ui/task_detail.rs`, `state/`.
+- [x] **Persist the planning turn as a run** — shipped `19055b2`: `planned()` appends a `task_runs`
+      row (role `planning`, attributed to the owner, reply + tool transcript) via `record_planning_run`;
+      `build_detail` lists it unfiltered, so it's the forensic "why" on the plan's thread. *Site*:
+      `bridge/orchestrate.rs`, `db/task_runs.rs`.
+- [x] **The planner in the owner's thread** — shipped `19055b2` (persisted) + slice 3 (live): the
+      persisted run surfaces via `recent_by_agent` with a `role_phase("planning") → "Plan"` tag, and
+      the owner thread's `live_tail` also streams the in-flight plan turn (matched by workspace +
+      agent) — its working life reads producing · reviewing · **planning**. *Site*:
+      `state/views.rs`, `ui/agent.rs`.
+- [x] **The proposal points back** — shipped in slice 3: `proposed_view` captions the breakdown as
+      proposed by the owner's planning turn, whose reasoning is the Plan-tagged run in the same thread
+      (the request page's plan link already leads there). *Site*: `ui/task_detail.rs`.
+- [~] **Speed the wait, not just its perception** (secondary): the box's real value — a *legible*
+      wait — is delivered by the streaming above; `warm_context_cache` still runs from planning
+      workers. A **faster per-role planning model is deferred**: `resolve_for_agent` has no per-role
+      model hook, so it needs net-new config (schema + UI) out of proportion for a secondary box.
+      *Site (deferred)*: `db/resolution.rs`.
 
 ### P4e — Integrate rwire's text editor (queued)
 

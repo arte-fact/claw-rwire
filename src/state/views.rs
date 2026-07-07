@@ -159,6 +159,7 @@ pub struct PlanningLive {
     pub plan_id: String,
     pub chat_id: String,
     pub request_id: String,
+    pub workspace_id: String,
     pub agent: String,
 }
 
