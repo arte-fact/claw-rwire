@@ -234,6 +234,7 @@ dependencies = [
  "rusqlite",
  "rwire",
  "rwire-components",
+ "rwire-editor",
  "rwire-markdown",
  "rwire-themes",
  "serde",
@@ -1075,6 +1076,15 @@ name = "rwire-components"
 version = "0.1.0"
 dependencies = [
  "rwire",
+]
+
+[[package]]
+name = "rwire-editor"
+version = "0.1.0"
+dependencies = [
+ "rwire",
+ "rwire-components",
+ "rwire-markdown",
 ]
 
 [[package]]

@@ -26,8 +26,6 @@ pub enum WorkspaceError {
     RootUnavailable,
     #[error("no such file or directory")]
     NotFound,
-    #[error("not a directory")]
-    NotADirectory,
     #[error("not a file")]
     NotAFile,
     #[error("file is not valid UTF-8 text")]
@@ -36,8 +34,6 @@ pub enum WorkspaceError {
     TooLarge,
     #[error("the workspace root itself cannot be the target")]
     InvalidName,
-    #[error("a file or directory already exists there")]
-    Exists,
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }

@@ -8,6 +8,7 @@
 //! benign (the desktop sidebar ignores `nav_open` via a breakpoint override anyway).
 
 use rwire::State;
+use rwire_editor::FileEditorState;
 mod views;
 pub use views::*;
 
@@ -136,31 +137,13 @@ pub struct App {
     pub workflow_locked: bool,
     /// The step whose inline edit form is open (the Workflow editor), or `None`.
     pub editing_step: Option<String>,
-    /// Files view: the id of the workspace being browsed.
+    /// Files view: the id of the workspace being browsed — keys the `FileEditor` snapshot cache
+    /// (`bridge::files`) that the editor renders + resolves paths through.
     pub files_workspace: Option<String>,
-    /// Files view: the current directory, relative to the workspace root (`""` = root).
-    pub files_path: String,
-    /// Files view: entries of `files_path` (dirs first). Legacy flat listing (kept for callers
-    /// that still read it); the browser renders [`Self::files_tree`].
-    pub files_entries: Vec<FileEntry>,
-    /// Files view: the workspace tree — root plus the children of every expanded folder, flattened
-    /// with depth for indented rendering.
-    pub files_tree: Vec<FileNode>,
-    /// Files view: the file open in the editor pane, if any.
-    pub files_open: Option<OpenFile>,
-    /// Files view: editor mode — `true` = rendered View (Markdown / highlighted code), `false` =
-    /// raw Edit (the textarea). Reset to View each time a file opens. Pure UI state.
-    pub files_view_mode: bool,
-    /// Files view: which inline create prompt is open (`"file"` / `"folder"`), if any.
-    pub files_creating: Option<String>,
-    /// Files view: the controlled name input in the inline create prompt.
-    pub files_new_name: String,
-    /// Files view: the entry path currently being renamed (its row shows an input).
-    pub files_rename: Option<String>,
-    /// Files view: the entry path awaiting a delete confirm.
-    pub files_pending_delete: Option<String>,
-    /// Files view: a transient error/result banner (jailed path, write failure, …).
-    pub files_error: Option<String>,
+    /// Files view: the `rwire_editor::FileEditor` state — open file, working copy, dirty/undo,
+    /// pending create/rename/delete, autosave flag. The kit owns the whole surface; the tree
+    /// itself lives in the cached `FsSnapshot`, not here.
+    pub editor: FileEditorState,
     /// Chat ids with an in-flight agent run (drives the sidebar busy dots).
     pub running: Vec<String>,
     /// Recent run-lifecycle events for the Activity board (newest first, capped).

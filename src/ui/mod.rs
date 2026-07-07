@@ -643,15 +643,12 @@ pub fn on_route(app: &mut App, ctx: &EventContext) {
         });
         bridge::send(Command::LoadSettings);
     }
-    // Entering a workspace's Files tab lists that workspace's root.
+    // Entering a workspace's Files tab scans it into the FileEditor snapshot cache.
     if let Some(wid) = RoutePattern::new("/w/:wid/files")
         .matches(path)
         .and_then(|params| params.get("wid").map(str::to_owned))
     {
-        bridge::send(Command::ListDir {
-            workspace: wid,
-            path: String::new(),
-        });
+        bridge::send(Command::OpenFiles { workspace: wid });
     }
     // Entering a workspace's Tasks tab — or its landing board (`/w/:wid`) — projects its lane and
     // the pipeline (so the board's column headers can open the in-situ step editor).

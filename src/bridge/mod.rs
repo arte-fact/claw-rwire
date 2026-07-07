@@ -20,7 +20,7 @@ mod agent_thread;
 mod boot;
 mod chat_turn;
 pub(crate) use chat_turn::wrap_memory;
-mod files;
+pub(crate) mod files;
 mod live;
 pub(crate) use live::{clear_live_turn, live_progress, push_activity};
 mod memory;
@@ -421,42 +421,11 @@ pub enum Command {
         content: String,
     },
     // ── Files view (browse + edit a workspace) ──
-    /// Select a directory + (re)project the tree (the `/w/:wid/files` tab + breadcrumb navigation).
-    ListDir {
+    /// Open the `/w/:wid/files` tab: scan the workspace into the `FileEditor` snapshot cache and
+    /// point the editor at it. Browsing + edit/create/rename/delete are then owned by the kit
+    /// (jailed, in-handler IO) — no per-operation commands.
+    OpenFiles {
         workspace: String,
-        path: String,
-    },
-    /// Toggle a folder's expansion in the tree (and select it as the create target).
-    ToggleDir {
-        workspace: String,
-        path: String,
-    },
-    /// Read a file into the editor pane.
-    OpenFile {
-        workspace: String,
-        path: String,
-    },
-    /// Save (or create) a file with the given content.
-    WriteFile {
-        workspace: String,
-        path: String,
-        content: String,
-    },
-    /// Create a directory.
-    NewFolder {
-        workspace: String,
-        path: String,
-    },
-    /// Delete a file or directory.
-    DeleteEntry {
-        workspace: String,
-        path: String,
-    },
-    /// Rename/move an entry.
-    RenameEntry {
-        workspace: String,
-        from: String,
-        to: String,
     },
 }
 
@@ -846,27 +815,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::SaveBrief { workspace, content } => {
             files::save_brief(conn, shared, &workspace, &content)
         }
-        Command::ListDir { workspace, path } => files::list_dir(conn, shared, &workspace, &path),
-        Command::ToggleDir { workspace, path } => {
-            files::toggle_dir(conn, shared, &workspace, &path)
-        }
-        Command::OpenFile { workspace, path } => files::open_file(conn, shared, &workspace, &path),
-        Command::WriteFile {
-            workspace,
-            path,
-            content,
-        } => files::write_file(conn, shared, &workspace, &path, &content),
-        Command::NewFolder { workspace, path } => {
-            files::new_folder(conn, shared, &workspace, &path)
-        }
-        Command::DeleteEntry { workspace, path } => {
-            files::delete_entry(conn, shared, &workspace, &path)
-        }
-        Command::RenameEntry {
-            workspace,
-            from,
-            to,
-        } => files::rename_entry(conn, shared, &workspace, &from, &to),
+        Command::OpenFiles { workspace } => files::open_files(conn, shared, &workspace),
     }
 }
 

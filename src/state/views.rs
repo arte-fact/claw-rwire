@@ -754,48 +754,6 @@ pub struct ToolCatalogEntry {
     pub name: String,
 }
 
-/// What a Files-view entry is. Mirrors `workspace::ops::EntryKind` as a UI-side value.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum FileKind {
-    Dir,
-    #[default]
-    File,
-    Symlink,
-}
-
-/// One row in the Files view's directory listing.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct FileEntry {
-    pub name: String,
-    pub kind: FileKind,
-    pub size: u64,
-}
-
-/// One node in the Files view's tree (a flattened, depth-tagged listing — root plus the children
-/// of every expanded folder, in display order). The bridge owns which folders are expanded.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct FileNode {
-    pub name: String,
-    /// Workspace-relative path (the create/open/rename/delete target).
-    pub path: String,
-    pub kind: FileKind,
-    pub size: u64,
-    /// Nesting depth from the root (0 = top level) — the row's indent.
-    pub depth: usize,
-    /// For a directory: whether it's expanded (its children follow). Always false for files.
-    pub expanded: bool,
-}
-
-/// The file open in the Files view's right pane. `editable` is false for binary/oversized
-/// files, with `note` explaining why; the editor is then replaced by that note.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct OpenFile {
-    pub path: String,
-    pub content: String,
-    pub editable: bool,
-    pub note: Option<String>,
-}
-
 /// What the System Map's right drawer is editing, if open. Endpoints/Channel keep the
 /// row *key* (the drawer reads current values from `App`); the agent form is
 /// *controlled* — it carries a live draft so it can re-render (when discovered models
