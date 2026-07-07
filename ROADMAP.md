@@ -312,9 +312,23 @@ verified to support `merge-tree --write-tree`.
       *Shipped `c1b1930` · `93727bb` · `3daf615`.* *Deferred:* a file-content viewer (`on_select` →
       `git show <ref>:<path>`); running CI on develop directly (its pipeline stays empty until a
       free-lane pass lands); route `?branch=` deep-linking.
-- [ ] **Migrate `ui/files.rs` onto the upstream `FileExplorer`** (rwire F2, managed mode) — **BLOCKED:
-      rwire never shipped a `FileExplorer` (only `FileTree` + `TreeView`), so there is nothing to
-      migrate onto. Deferred until the component exists.** *Site*: `ui/files.rs`.
+- [x] **Migrate `ui/files.rs` onto the upstream FileEditor kit** (rwire F2, managed mode) — rwire shipped
+      `libs/rwire-editor` (`FileEditor` + `FsSnapshot`; design locked 2026-07-07), so the migration
+      landed: 776 hand-rolled lines → one `#[renderer]` + one `apply` dispatcher over a per-workspace
+      `FsSnapshot` cached in `bridge::files` (`OpenFiles` command; the snapshot can't live on `App`).
+      Gains dirty tracking, undo/redo, ⌘S/F2/Del shortcuts, toggleable autosave (default manual), an
+      mtime conflict banner, image preview, and an unsaved-changes guard. The old file `Command`s +
+      `files_*` state + single-entry `workspace::ops` are removed; the jail (`workspace::path`) +
+      `read_text`/`write_text`/`list_files` stay for the agent tools. **Five upstream fixes it forced,
+      all committed locally in `../rwire` (never pushed):** `FsSnapshot::scan_ignoring` +
+      config-preserving `rescan` (prune `target`/`node_modules`/`dist` on scan **and** rescan);
+      `Clone`+`Debug` on `FileEditorState` (host embedding); a `type=submit` confirm button +
+      `data-enter-submit` on the create/rename name-form (a single-input form had no way to submit, so
+      create/rename were unreachable); and a Select-no-op when the file is already open (a row-action
+      click bubbles to the row's select, which re-`open`ed and cleared the pending op). *Shipped `587dda5`
+      · `415b52f` (claw) + `ab95e9a`·`b923c1d`·`1137e82` (rwire, local).* *Site*: `ui/files.rs`,
+      `bridge/files.rs`. *Live-verified:* browse (build dirs pruned), view (markdown), edit, save-to-disk,
+      create, rename, delete all work on the Rwire workspace.
 
 ## Backlog (harvested, scheduled by pull)
 
