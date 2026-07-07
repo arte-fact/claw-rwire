@@ -7,7 +7,7 @@
 mod pipeline;
 mod tree;
 
-use rwire::{El, ElementBuilder, Link, St, el, handler, renderer};
+use rwire::{El, ElementBuilder, EventContext, Link, St, el, handler, renderer};
 use rwire_components::{Badge, BadgeFill, BadgeIntent, BadgeShape, Select, Text};
 
 use crate::bridge::{self, Command};
@@ -77,6 +77,7 @@ fn settings_panel(detail: &ProjectDetail) -> ElementBuilder {
         "detected"
     };
     let select = Select::new()
+        .name("kind")
         .option("auto", "Auto-detect")
         .option("rwire-app", "rwire-app")
         .option("rust-bin", "rust-bin")
@@ -88,8 +89,7 @@ fn settings_panel(detail: &ProjectDetail) -> ElementBuilder {
         } else {
             "auto".to_owned()
         })
-        .on_change(set_kind())
-        .data("project", &detail.name);
+        .on_change(set_kind());
     panel(
         "Kind",
         el(El::Div)
@@ -195,21 +195,73 @@ pub(super) fn panel(title: &str, content: ElementBuilder) -> ElementBuilder {
 
 #[handler]
 fn set_kind(app: &mut App, ctx: &EventContext) {
-    let Some(detail) = &app.project_detail else {
-        return;
-    };
-    let project = ctx.data("project").unwrap_or(&detail.name).to_owned();
-    let workspace = detail.workspace_id.clone();
-    // "auto" clears the override (empty slug); any real slug pins it.
-    let value = ctx.text().unwrap_or_default().to_owned();
+    if let Some(command) = kind_command(app.project_detail.as_ref(), ctx) {
+        bridge::send(command);
+    }
+}
+
+/// The pure core: a `<select>` change delivers a `Form` payload, so the value is read with
+/// `ctx.field(name)`, not `ctx.text()` (which is `None` for a select — the bug this guards).
+/// "auto" clears the override (empty slug); any real slug pins it.
+fn kind_command(detail: Option<&ProjectDetail>, ctx: &EventContext) -> Option<Command> {
+    let detail = detail?;
+    let value = ctx.field("kind").unwrap_or_default();
     let slug = if value == "auto" {
         String::new()
     } else {
-        value
+        value.to_owned()
     };
-    bridge::send(Command::SetProjectKind {
-        workspace,
-        project,
+    Some(Command::SetProjectKind {
+        workspace: detail.workspace_id.clone(),
+        project: detail.name.clone(),
         slug,
-    });
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn form(fields: serde_json::Value) -> EventContext {
+        EventContext::new(json!({ "t": "form", "v": fields }).to_string().into_bytes())
+    }
+
+    fn detail() -> ProjectDetail {
+        ProjectDetail {
+            workspace_id: "ws-1".to_owned(),
+            name: "site".to_owned(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn picking_a_kind_pins_that_slug() {
+        // The bug this guards: a <select> change is a Form payload read via ctx.field. The old
+        // ctx.text() read None here, so a pick always cleared the override instead of pinning it.
+        match kind_command(Some(&detail()), &form(json!({ "kind": "rust-bin" }))) {
+            Some(Command::SetProjectKind {
+                workspace,
+                project,
+                slug,
+            }) => {
+                assert_eq!((workspace.as_str(), project.as_str()), ("ws-1", "site"));
+                assert_eq!(slug, "rust-bin");
+            }
+            _ => panic!("expected SetProjectKind pinning the slug"),
+        }
+    }
+
+    #[test]
+    fn auto_clears_the_override() {
+        match kind_command(Some(&detail()), &form(json!({ "kind": "auto" }))) {
+            Some(Command::SetProjectKind { slug, .. }) => assert_eq!(slug, ""),
+            _ => panic!("expected SetProjectKind clearing the override"),
+        }
+    }
+
+    #[test]
+    fn a_kind_change_without_a_loaded_project_is_ignored() {
+        assert!(kind_command(None, &form(json!({ "kind": "rust-bin" }))).is_none());
+    }
 }
