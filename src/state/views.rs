@@ -845,6 +845,12 @@ pub struct ProjectDetail {
     /// The develop-staging preview URL (P5c) when browsing develop and its server is live; empty
     /// otherwise (no per-branch preview for other branches — those live on the request page).
     pub preview_uri: String,
+    /// Commits on `develop` not yet on `main` (P5a) — how much a Release would advance the release
+    /// line. `0` means `main` is already up to date with `develop`.
+    pub develop_ahead: usize,
+    /// Whether a Release can run right now (P5a): `develop` leads `main` and the merge is
+    /// conflict-free. `false` disables/annotates the Release control.
+    pub releasable: bool,
 }
 
 /// One producer run's checks on the selected branch (P5c) — carries the `task_runs.id` so each

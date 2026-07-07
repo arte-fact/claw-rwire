@@ -189,6 +189,12 @@ pub enum Command {
         project: String,
         slug: String,
     },
+    /// Release a project (P5a): CI-gate `develop`, merge it into `main` (working-tree-less), and
+    /// push `main` iff an origin exists.
+    ReleaseProject {
+        workspace: String,
+        project: String,
+    },
     /// The request-level macro review's verdict came back (G3, worker → bridge).
     RequestValidated {
         request_id: String,
@@ -650,6 +656,9 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             project,
             slug,
         } => requests::view::set_project_kind(conn, shared, &workspace, &project, &slug),
+        Command::ReleaseProject { workspace, project } => {
+            requests::control::release_project(conn, shared, &workspace, &project)
+        }
         Command::RequestValidated {
             request_id,
             decision,

@@ -5,6 +5,7 @@
 //! [`tree`] owns the branch file browser.
 
 mod pipeline;
+mod release;
 mod tree;
 
 use rwire::{El, ElementBuilder, EventContext, Link, St, el, handler, renderer};
@@ -28,6 +29,7 @@ fn body(app: &App) -> ElementBuilder {
         header(app, detail),
         tree::switcher(detail),
         pipeline::pipeline_panel(detail),
+        release::release_panel(detail),
         settings_panel(detail),
         tree::files_panel(detail),
         requests_panel(detail),

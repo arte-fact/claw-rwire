@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::merge::{ensure_main, merge_treeless};
 use super::requests::branch_exists;
 use super::sweep::{META_REPO, ensure_project_repo};
 use super::*;
@@ -671,4 +672,134 @@ fn ref_tree_of_a_bad_ref_errs() {
     let dir = scratch("badref").join("projects/site");
     ensure_project_repo(&dir).expect("repo");
     assert!(ref_tree(&dir, "no-such-ref").is_err());
+}
+
+// ── Keystone: working-tree-less merge (P5a) ─────────────────────────────────────
+
+/// A sovereign project repo (born on `main`, HEAD on `develop`) for the merge tests.
+fn merge_repo(name: &str) -> PathBuf {
+    let dir = scratch(name).join("projects/site");
+    ensure_project_repo(&dir).expect("repo");
+    dir
+}
+
+/// Commit `content` at `rel` on the currently checked-out branch; returns the commit id.
+fn commit_on(dir: &Path, rel: &str, content: &str, message: &str) -> String {
+    write(dir, rel, content);
+    commit_all(dir, None, message).expect("commit")
+}
+
+#[test]
+fn merge_treeless_advances_the_ref_to_a_two_parent_commit_without_touching_the_tree() {
+    let dir = merge_repo("merge-clean");
+    let dev = commit_on(&dir, "feature.txt", "shipped\n", "feat"); // develop leads main by one
+    let main_before = git(&dir, &["rev-parse", MAIN]).expect("main");
+    let head_before = head(&dir).expect("head");
+
+    let merged =
+        match merge_treeless(&dir, MAIN, DEVELOP, "Release: develop → main").expect("merge") {
+            MergeOutcome::Merged(oid) => oid,
+            other => panic!("expected Merged, got {other:?}"),
+        };
+
+    // `main` advanced to the new merge commit...
+    assert_eq!(git(&dir, &["rev-parse", MAIN]).expect("main"), merged);
+    assert_ne!(merged, main_before);
+    // ...a two-parent merge of (old main, develop)...
+    let parents = git(&dir, &["rev-list", "--parents", "-n", "1", MAIN]).expect("parents");
+    let parents: Vec<&str> = parents.split_whitespace().skip(1).collect();
+    assert_eq!(parents, [main_before.as_str(), dev.as_str()]);
+    // ...authored `claw`...
+    let author = git(&dir, &["log", "-1", "--format=%an <%ae>", MAIN]).expect("author");
+    assert_eq!(author, "claw <claw@claw>");
+    // ...and the working tree never left develop.
+    assert_eq!(current_branch(&dir).expect("branch"), DEVELOP);
+    assert_eq!(head(&dir).expect("head"), head_before);
+    assert!(!is_dirty(&dir).expect("clean"));
+}
+
+#[test]
+fn merge_treeless_reports_conflicts_and_leaves_the_ref_untouched() {
+    let dir = merge_repo("merge-conflict");
+    commit_on(&dir, "clash.txt", "from develop\n", "dev side");
+    git(&dir, &["checkout", MAIN]).expect("checkout main");
+    commit_on(&dir, "clash.txt", "from main\n", "main side");
+    git(&dir, &["checkout", DEVELOP]).expect("back to develop");
+    let main_before = git(&dir, &["rev-parse", MAIN]).expect("main");
+
+    match merge_treeless(&dir, MAIN, DEVELOP, "Release").expect("merge") {
+        MergeOutcome::Conflict(paths) => assert_eq!(paths, ["clash.txt"]),
+        other => panic!("expected Conflict, got {other:?}"),
+    }
+    assert_eq!(git(&dir, &["rev-parse", MAIN]).expect("main"), main_before);
+    assert!(would_conflict(&dir, MAIN, DEVELOP).expect("would_conflict"));
+}
+
+#[test]
+fn merge_treeless_is_up_to_date_when_from_is_already_merged() {
+    let dir = merge_repo("merge-uptodate");
+    // develop == main at birth → nothing to merge.
+    assert_eq!(
+        merge_treeless(&dir, MAIN, DEVELOP, "Release").expect("merge"),
+        MergeOutcome::UpToDate
+    );
+    // main advances past develop → develop still an ancestor → still up to date.
+    git(&dir, &["checkout", MAIN]).expect("main");
+    commit_on(&dir, "hotfix.txt", "fix\n", "hotfix");
+    git(&dir, &["checkout", DEVELOP]).expect("develop");
+    assert_eq!(
+        merge_treeless(&dir, MAIN, DEVELOP, "Release").expect("merge"),
+        MergeOutcome::UpToDate
+    );
+    assert!(!would_conflict(&dir, MAIN, DEVELOP).expect("would_conflict"));
+}
+
+#[test]
+fn divergence_counts_each_side() {
+    let dir = merge_repo("divergence");
+    commit_on(&dir, "a.txt", "1\n", "dev1");
+    commit_on(&dir, "b.txt", "2\n", "dev2");
+    git(&dir, &["checkout", MAIN]).expect("main");
+    commit_on(&dir, "c.txt", "3\n", "main1");
+    git(&dir, &["checkout", DEVELOP]).expect("develop");
+    // develop leads main by 2; main leads develop by 1.
+    assert_eq!(divergence(&dir, DEVELOP, MAIN).expect("divergence"), (2, 1));
+}
+
+#[test]
+fn ensure_main_is_idempotent_when_the_release_branch_exists() {
+    let dir = merge_repo("ensure-main");
+    assert!(branch_exists(&dir, MAIN));
+    ensure_main(&dir).expect("idempotent");
+    assert!(branch_exists(&dir, MAIN));
+}
+
+#[test]
+fn ensure_main_creates_the_release_branch_when_absent() {
+    let dir = scratch("ensure-main-create").join("projects/site");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    git(&dir, &["init", "--initial-branch", "develop"]).expect("init");
+    commit_on(&dir, "f.txt", "x\n", "base");
+    assert!(!branch_exists(&dir, MAIN));
+    ensure_main(&dir).expect("create");
+    assert!(branch_exists(&dir, MAIN));
+}
+
+#[test]
+fn release_repo_advances_main_to_develop_then_is_idempotent() {
+    let dir = merge_repo("release");
+    commit_on(&dir, "shipped.txt", "v1\n", "feature");
+    let dev = git(&dir, &["rev-parse", DEVELOP]).expect("develop");
+
+    match release_repo(&dir, "Release site: develop → main").expect("release") {
+        MergeOutcome::Merged(_) => {}
+        other => panic!("expected Merged, got {other:?}"),
+    }
+    // main now contains develop's work — develop is an ancestor of the new main.
+    assert!(git(&dir, &["merge-base", "--is-ancestor", &dev, MAIN]).is_ok());
+    // a second release with no new develop commits is a no-op.
+    assert_eq!(
+        release_repo(&dir, "again").expect("release"),
+        MergeOutcome::UpToDate
+    );
 }

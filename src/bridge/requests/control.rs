@@ -461,6 +461,61 @@ pub(crate) fn push(conn: &Connection, shared: &SharedServerState, request_id: &s
     refresh(conn, shared, &request);
 }
 
+/// Release a project (P5a): CI-gate `develop` live, merge it into `main` **working-tree-less** (the
+/// keystone — the canonical develop tree and any running preview are untouched), and push `main`
+/// iff an origin exists. Project-level (a project is one repo), decoupled from requests — reported
+/// via a toast, then the project page re-projects so its Release panel reflects the new state.
+pub(crate) fn release_project(
+    conn: &Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    project: &str,
+) {
+    let root = workspace::dir_for(&data_dir(), workspace);
+    let repo = format!("projects/{project}");
+    let Ok(dir) = gitops::repo_dir(&root, &repo) else {
+        return;
+    };
+
+    // Live floor gate: develop's checks must be green right now (the canonical tree is on develop).
+    let strategy = super::super::exec_strategy_for(&root);
+    let checks =
+        crate::ci::run_for_repos(conn, workspace, &root, &strategy, std::slice::from_ref(&repo));
+    if !crate::ci::all_green(&checks) {
+        let names = crate::ci::failed_names(&checks).join(", ");
+        super::super::tasks::surface(
+            shared,
+            format!("Release held for {project} — develop checks red: {names}"),
+        );
+        return;
+    }
+
+    let note = match gitops::release_repo(&dir, &format!("Release {project}: develop → main")) {
+        Ok(gitops::MergeOutcome::Merged(_)) => {
+            if !gitops::has_remote(&dir) {
+                format!(
+                    "🚀 Released {project} — develop → main. No origin set, so main advanced \
+                     locally only."
+                )
+            } else if gitops::push_branch(&dir, gitops::MAIN).is_ok() {
+                format!("🚀 Released {project} — develop → main, pushed to origin.")
+            } else {
+                format!("🚀 Released {project} — develop → main. ⚠️ Push to origin failed.")
+            }
+        }
+        Ok(gitops::MergeOutcome::UpToDate) => {
+            format!("{project} is already released — main is up to date with develop.")
+        }
+        Ok(gitops::MergeOutcome::Conflict(paths)) => format!(
+            "Release of {project} conflicts on {} — resolve on develop first.",
+            paths.join(", ")
+        ),
+        Err(err) => format!("Release of {project} failed: {err}"),
+    };
+    super::super::tasks::surface(shared, note);
+    super::view::load_project_detail(conn, shared, workspace, project, None);
+}
+
 /// Per-file restore from a run's diff (G3): put one path back to its pre-pass state. The
 /// restored content sits in the working tree — the task's lane's tree (G4), so an open
 /// request takes the restore on its branch and the next pass commit records it.

@@ -6,6 +6,7 @@
 //! which agent made each pass.
 
 mod inspect;
+mod merge;
 mod requests;
 mod sweep;
 mod task_tree;
@@ -14,9 +15,10 @@ mod tests;
 mod worktrees;
 
 pub use inspect::{local_branches, ref_tree};
+pub use merge::{MAIN, MergeOutcome, divergence, would_conflict};
 pub use requests::{
-    DEVELOP, RequestRef, abandon_branch, branch_exists, deliver_repo, has_remote, push_refs,
-    restore_file, revert_merge,
+    DEVELOP, RequestRef, abandon_branch, branch_exists, deliver_repo, has_remote, push_branch,
+    push_refs, release_repo, restore_file, revert_merge,
 };
 pub use sweep::{commit_pass, ensure_meta_repo, ensure_project_repo, repos};
 pub use task_tree::{reset_task_tree, snapshot_task_bases};
@@ -58,23 +60,44 @@ pub fn repo_dir(root: &Path, repo: &str) -> Result<PathBuf, GitError> {
 /// - The host user's global/system git config is cut off (aliases, credential helpers, a
 ///   redirected hooksPath) — identity is passed per-commit, so nothing ambient is needed.
 fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
+    let run = git_run(dir, &[], args)?;
+    if !run.ok {
+        return Err(GitError::Command {
+            args: args.join(" "),
+            stderr: run.stderr,
+        });
+    }
+    Ok(run.stdout)
+}
+
+/// A git invocation's result when the non-zero exit is itself meaningful (e.g. `merge-tree`'s
+/// conflict signal) — [`git`] turns that into an error, this keeps it as data.
+struct GitRun {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+}
+
+/// The shared spawn: hermetic env + optional leading `-c` config, returning the outcome without
+/// treating a non-zero exit as an error. `cfg` slots between the always-on `core.hooksPath` and
+/// the command args (how identity rides `commit-tree`).
+fn git_run(dir: &Path, cfg: &[&str], args: &[&str]) -> Result<GitRun, GitError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "core.hooksPath=/dev/null"])
+        .args(cfg)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .output()
         .map_err(GitError::Spawn)?;
-    if !output.status.success() {
-        return Err(GitError::Command {
-            args: args.join(" "),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        });
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    Ok(GitRun {
+        ok: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    })
 }
 
 /// Whether `dir` is the top level of a git repo (its own `.git`, not an ancestor's).

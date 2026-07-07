@@ -1,9 +1,11 @@
 //! Request-branch git flow (G1): cut `req/<short-id>-<slug>` from `develop` at a request's
 //! first touch of a repo, land its pass commits there, and deliver with a `--no-ff` merge
-//! back to `develop`. `main` is release-only and never touched here.
+//! back to `develop`. `develop` is the integration line; `main` is the release line, advanced
+//! only by [`release_repo`] (P5a) via a working-tree-less merge — never by the request flow.
 
 use std::path::Path;
 
+use super::merge::{MAIN, MergeOutcome, ensure_main, merge_treeless};
 use super::{GitError, current_branch, git, git_as, head, is_dirty};
 
 /// The git flow integration branch requests cut from and merge back to.
@@ -79,6 +81,15 @@ pub fn deliver_repo(dir: &Path, branch: &str, message: &str) -> Result<String, G
     head(dir)
 }
 
+/// Release one repo (P5a): merge `develop` into `main` **without a checkout** (the keystone), so
+/// the canonical develop tree and any running preview are untouched. Returns whether `main`
+/// advanced, was already up to date, or would conflict — the caller reports it and, on a real
+/// advance, pushes `main` iff an origin exists.
+pub fn release_repo(dir: &Path, message: &str) -> Result<MergeOutcome, GitError> {
+    ensure_main(dir)?;
+    merge_treeless(dir, MAIN, DEVELOP, message)
+}
+
 /// Whether the repo has any remote configured — the Push affordance's visibility.
 #[must_use]
 pub fn has_remote(dir: &Path) -> bool {
@@ -92,6 +103,12 @@ pub fn has_remote(dir: &Path) -> bool {
 /// so ssh-agent / file remotes work; https credential helpers are deliberately cut off.
 pub fn push_refs(dir: &Path, branch: &str) -> Result<String, GitError> {
     git(dir, &["push", "origin", DEVELOP, branch])
+}
+
+/// Push one branch to `origin` — the release push (P5a). Hermetic like all harness git; a
+/// per-project remote + chosen key replaces the hardcoded `origin` in P5b.
+pub fn push_branch(dir: &Path, branch: &str) -> Result<String, GitError> {
+    git(dir, &["push", "origin", branch])
 }
 
 /// Post-delivery rollback (G3): revert the delivery merge on `develop` — a new commit,
