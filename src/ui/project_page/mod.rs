@@ -200,12 +200,11 @@ fn set_kind(app: &mut App, ctx: &EventContext) {
     }
 }
 
-/// The pure core: a `<select>` change delivers a `Form` payload, so the value is read with
-/// `ctx.field(name)`, not `ctx.text()` (which is `None` for a select — the bug this guards).
+/// The pure core: a `<select>` change delivers its value as a `Text` payload (`ctx.text()`).
 /// "auto" clears the override (empty slug); any real slug pins it.
 fn kind_command(detail: Option<&ProjectDetail>, ctx: &EventContext) -> Option<Command> {
     let detail = detail?;
-    let value = ctx.field("kind").unwrap_or_default();
+    let value = ctx.text().unwrap_or_default();
     let slug = if value == "auto" {
         String::new()
     } else {
@@ -221,11 +220,6 @@ fn kind_command(detail: Option<&ProjectDetail>, ctx: &EventContext) -> Option<Co
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    fn form(fields: serde_json::Value) -> EventContext {
-        EventContext::new(json!({ "t": "form", "v": fields }).to_string().into_bytes())
-    }
 
     fn detail() -> ProjectDetail {
         ProjectDetail {
@@ -237,9 +231,7 @@ mod tests {
 
     #[test]
     fn picking_a_kind_pins_that_slug() {
-        // The bug this guards: a <select> change is a Form payload read via ctx.field. The old
-        // ctx.text() read None here, so a pick always cleared the override instead of pinning it.
-        match kind_command(Some(&detail()), &form(json!({ "kind": "rust-bin" }))) {
+        match kind_command(Some(&detail()), &EventContext::from_text("rust-bin")) {
             Some(Command::SetProjectKind {
                 workspace,
                 project,
@@ -254,7 +246,7 @@ mod tests {
 
     #[test]
     fn auto_clears_the_override() {
-        match kind_command(Some(&detail()), &form(json!({ "kind": "auto" }))) {
+        match kind_command(Some(&detail()), &EventContext::from_text("auto")) {
             Some(Command::SetProjectKind { slug, .. }) => assert_eq!(slug, ""),
             _ => panic!("expected SetProjectKind clearing the override"),
         }
@@ -262,6 +254,6 @@ mod tests {
 
     #[test]
     fn a_kind_change_without_a_loaded_project_is_ignored() {
-        assert!(kind_command(None, &form(json!({ "kind": "rust-bin" }))).is_none());
+        assert!(kind_command(None, &EventContext::from_text("rust-bin")).is_none());
     }
 }

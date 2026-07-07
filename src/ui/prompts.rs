@@ -210,7 +210,8 @@ fn text_block(content: &str) -> ElementBuilder {
 
 #[handler]
 fn pick_agent(app: &mut App, ctx: &EventContext) {
-    let agent = ctx.field("agent").map(str::to_owned);
+    // A `<select>` change delivers its value as a `Text` payload (`ctx.text()`).
+    let agent = ctx.text().map(str::to_owned);
     bridge::send(Command::LoadPrompt {
         agent,
         run: app.prompt_run,

@@ -74,11 +74,12 @@ fn switch_branch(app: &mut App, ctx: &EventContext) {
     }
 }
 
-/// The pure core: a `<select>` change delivers a `Form` payload, so the value is read with
-/// `ctx.field(name)`, not `ctx.text()` (which is `None` for a select — the bug this guards).
+/// The pure core: a `<select>` change delivers its value as a `Text` payload (`ctx.text()`), the
+/// same as an input. (The value was being dropped because `Select` wraps its `<select>` in a div
+/// for the arrow; the runtime now reads the real control from the event target.)
 fn branch_command(detail: Option<&ProjectDetail>, ctx: &EventContext) -> Option<Command> {
     let detail = detail?;
-    let branch = ctx.field("branch")?;
+    let branch = ctx.text()?;
     Some(Command::LoadProjectDetail {
         workspace: detail.workspace_id.clone(),
         project: detail.name.clone(),
@@ -89,11 +90,6 @@ fn branch_command(detail: Option<&ProjectDetail>, ctx: &EventContext) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    fn form(fields: serde_json::Value) -> EventContext {
-        EventContext::new(json!({ "t": "form", "v": fields }).to_string().into_bytes())
-    }
 
     fn detail() -> ProjectDetail {
         ProjectDetail {
@@ -105,9 +101,7 @@ mod tests {
 
     #[test]
     fn a_branch_pick_re_projects_for_that_branch() {
-        // The bug this guards: a <select> change is a Form payload read via ctx.field. The old
-        // ctx.text() read None here, so the switcher silently did nothing.
-        match branch_command(Some(&detail()), &form(json!({ "branch": "main" }))) {
+        match branch_command(Some(&detail()), &EventContext::from_text("main")) {
             Some(Command::LoadProjectDetail {
                 workspace,
                 project,
@@ -121,14 +115,12 @@ mod tests {
     }
 
     #[test]
-    fn a_text_payload_yields_no_command() {
-        // A select never delivers Text; the old ctx.text() path is what broke, so reading it must
-        // find nothing.
-        assert!(branch_command(Some(&detail()), &EventContext::from_text("main")).is_none());
+    fn a_payload_without_a_value_yields_no_command() {
+        assert!(branch_command(Some(&detail()), &EventContext::new(Vec::new())).is_none());
     }
 
     #[test]
     fn a_switch_without_a_loaded_project_is_ignored() {
-        assert!(branch_command(None, &form(json!({ "branch": "main" }))).is_none());
+        assert!(branch_command(None, &EventContext::from_text("main")).is_none());
     }
 }

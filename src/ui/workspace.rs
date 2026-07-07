@@ -445,10 +445,10 @@ fn delete_block(armed: bool) -> ElementBuilder {
 
 // Each interactive control resolves to at most one `Command` through a pure `*_command` decision,
 // split out from the thin `#[handler]` so the payload-reading — the easy-to-get-wrong part — is
-// unit-tested below. The accessor is dictated by the DOM event: an `<input>` change carries a
-// `Text` payload (`ctx.text()`), a `<select>` change carries a `Form` payload (`ctx.field(name)`,
-// keyed by the control's `name`), and a click carries `Data` (`ctx.data(key)`). Reaching for the
-// wrong one silently yields `None` — which is exactly how owner selection was clearing the owner.
+// unit-tested below. The accessor is dictated by the DOM event: an `<input>` or `<select>` change
+// carries a `Text` payload (`ctx.text()`, the control's value), a `<form>` submit carries a `Form`
+// payload (`ctx.field(name)`, keyed per field), and a click carries `Data` (`ctx.data(key)`).
+// Reaching for the wrong one silently yields `None`.
 
 #[handler]
 fn rename(app: &mut App, ctx: &EventContext) {
@@ -480,12 +480,12 @@ fn rename_command(active: Option<&str>, ctx: &EventContext) -> Option<Command> {
 }
 
 /// Set — or, on the blank `— no owner —` option, clear — the active workspace's owner from the
-/// owner `<select>`. Reads `ctx.field("owner")`: a `<select>` change delivers a `Form` payload, so
-/// the earlier `ctx.text()` always read `None` and cleared the owner on every pick.
+/// owner `<select>`. A `<select>` change delivers its value as a `Text` payload (`ctx.text()`); the
+/// value was previously dropped because `Select` wraps its `<select>` in a div for the arrow.
 fn owner_command(active: Option<&str>, ctx: &EventContext) -> Option<Command> {
     let id = active?.to_owned();
     let owner = ctx
-        .field("owner")
+        .text()
         .map(str::to_owned)
         .filter(|value| !value.trim().is_empty());
     Some(Command::SetWorkspaceOwner { id, owner })
@@ -543,11 +543,6 @@ mod team_tests {
     use super::*;
     use serde_json::json;
 
-    /// A `<select>`/form change payload, as the client delivers it (`ctx.field(name)`).
-    fn form(fields: serde_json::Value) -> EventContext {
-        EventContext::new(json!({ "t": "form", "v": fields }).to_string().into_bytes())
-    }
-
     /// A click payload with `data-*` values (`ctx.data(key)`).
     fn data(fields: serde_json::Value) -> EventContext {
         EventContext::new(json!({ "t": "data", "v": fields }).to_string().into_bytes())
@@ -555,9 +550,9 @@ mod team_tests {
 
     #[test]
     fn owner_select_change_sets_the_picked_owner() {
-        // The bug this guards: a <select> change is a Form payload read via ctx.field. The old
-        // ctx.text() read None here and cleared the owner on every pick.
-        match owner_command(Some("ws-1"), &form(json!({ "owner": "ag-scout" }))) {
+        // The bug this guards: a <select> change delivers its value as a Text payload. The value
+        // was dropped (Select wraps its <select> in a div), so every pick cleared the owner.
+        match owner_command(Some("ws-1"), &EventContext::from_text("ag-scout")) {
             Some(Command::SetWorkspaceOwner { id, owner }) => {
                 assert_eq!(id, "ws-1");
                 assert_eq!(owner.as_deref(), Some("ag-scout"));
@@ -568,7 +563,7 @@ mod team_tests {
 
     #[test]
     fn owner_select_blank_option_clears_the_owner() {
-        match owner_command(Some("ws-1"), &form(json!({ "owner": "" }))) {
+        match owner_command(Some("ws-1"), &EventContext::from_text("")) {
             Some(Command::SetWorkspaceOwner { owner, .. }) => assert_eq!(owner, None),
             _ => panic!("expected SetWorkspaceOwner clearing the owner"),
         }
@@ -576,7 +571,7 @@ mod team_tests {
 
     #[test]
     fn owner_change_without_an_active_workspace_is_ignored() {
-        assert!(owner_command(None, &form(json!({ "owner": "ag-scout" }))).is_none());
+        assert!(owner_command(None, &EventContext::from_text("ag-scout")).is_none());
     }
 
     #[test]
