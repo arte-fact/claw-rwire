@@ -259,6 +259,15 @@ pub struct EndpointView {
     pub api_key_env: Option<String>,
 }
 
+/// An SSH deploy-key row for the System Map (P5b). Only the name + fingerprint are projected — the
+/// private key lives as a server-side `0600` file and is never read into the model, so the UI can
+/// identify a key without any path to echoing its material.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SshKeyView {
+    pub name: String,
+    pub fingerprint: String,
+}
+
 /// An agent row for the System Map, with its endpoint link and model.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentView {
@@ -781,6 +790,8 @@ pub enum Editing {
     Endpoint(Option<String>),
     Agent(AgentDraft),
     Channel,
+    /// An SSH deploy key (P5b): `None` = create, `Some(name)` = edit that key.
+    SshKey(Option<String>),
 }
 
 /// In-progress agent edit. `id == None` is a new agent; the rest mirror the form

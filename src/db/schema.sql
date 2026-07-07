@@ -420,3 +420,12 @@ CREATE TABLE IF NOT EXISTS request_repos (
   merge_commit TEXT,
   PRIMARY KEY (request_id, repo)
 );
+
+-- SSH deploy keys (P5b): metadata only. The private key lives as a 0600 file under
+-- <data_dir>/ssh/<name> (see src/ssh_store.rs) and is NEVER stored here — this table holds
+-- just the name and the SHA256 fingerprint so the UI can identify a key without echoing it.
+CREATE TABLE IF NOT EXISTS ssh_keys (
+  name        TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  created_at  TEXT NOT NULL
+);

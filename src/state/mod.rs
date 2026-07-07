@@ -47,6 +47,8 @@ pub struct App {
     pub toasts: Vec<ToastView>,
     /// System Map: registry read-models, projected by the bridge.
     pub endpoints: Vec<EndpointView>,
+    /// SSH deploy keys (P5b): name + fingerprint only — the private material never reaches the model.
+    pub ssh_keys: Vec<SshKeyView>,
     pub agents: Vec<AgentView>,
     /// The agent id the web channel currently routes to.
     pub web_agent: Option<String>,

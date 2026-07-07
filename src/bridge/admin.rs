@@ -6,8 +6,10 @@
 use rwire::{ChangeSet, SharedServerState};
 
 use crate::agent;
-use crate::db::{agent_prompts, agent_tools, agents, endpoints, resolution, workspaces};
-use crate::state::{AgentView, App, Editing, EndpointView, ToolCatalogEntry, WorkspaceView};
+use crate::db::{agent_prompts, agent_tools, agents, endpoints, resolution, ssh_keys, workspaces};
+use crate::state::{
+    AgentView, App, Editing, EndpointView, SshKeyView, ToolCatalogEntry, WorkspaceView,
+};
 use crate::workspace;
 
 /// Load the registry into the shared read-models. Called at boot and after each edit.
@@ -20,6 +22,14 @@ pub fn project_registry(conn: &rusqlite::Connection, shared: &SharedServerState)
             base_url: endpoint.base_url,
             has_key: endpoint.api_key.is_some(),
             api_key_env: endpoint.api_key_env,
+        })
+        .collect();
+    let ssh_key_views: Vec<SshKeyView> = ssh_keys::list(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|key| SshKeyView {
+            name: key.name,
+            fingerprint: key.fingerprint,
         })
         .collect();
     let agent_views: Vec<AgentView> = agents::list(conn)
@@ -52,12 +62,14 @@ pub fn project_registry(conn: &rusqlite::Connection, shared: &SharedServerState)
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[
             App::FIELD_ENDPOINTS,
+            App::FIELD_SSH_KEYS,
             App::FIELD_AGENTS,
             App::FIELD_WEB_AGENT,
             App::FIELD_WORKSPACES,
         ]),
         |app| {
             app.endpoints = endpoint_views;
+            app.ssh_keys = ssh_key_views;
             app.agents = agent_views;
             app.web_agent = web_agent;
             app.workspaces = workspace_views;
@@ -96,6 +108,49 @@ pub fn delete_endpoint(conn: &rusqlite::Connection, shared: &SharedServerState, 
             format!("delete endpoint '{name}': {err} (an agent may still use it)"),
         );
     }
+    project_registry(conn, shared);
+}
+
+/// Store an SSH deploy key (P5b): canonicalize the name, write the private key to its `0600` file
+/// (validated + fingerprinted by `ssh_store`), and record name + fingerprint. A blank key on edit
+/// keeps the stored file (the form never echoes it); a brand-new key needs material.
+pub fn upsert_ssh_key(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    name: &str,
+    private_key: Option<String>,
+) {
+    let Some(name) = crate::ssh_store::canonical_name(name) else {
+        return surface_error(
+            shared,
+            "SSH key name must be filename-safe (letters, digits, - _ .)".to_owned(),
+        );
+    };
+    match private_key.filter(|key| !key.trim().is_empty()) {
+        Some(key) => {
+            let fingerprint = match crate::ssh_store::store(&super::data_dir(), &name, &key) {
+                Ok(fingerprint) => fingerprint,
+                Err(err) => return surface_error(shared, format!("save SSH key '{name}': {err}")),
+            };
+            if let Err(err) = ssh_keys::upsert(conn, &name, &fingerprint) {
+                return surface_error(shared, format!("save SSH key '{name}': {err}"));
+            }
+        }
+        None if ssh_keys::get(conn, &name).ok().flatten().is_none() => {
+            return surface_error(shared, format!("SSH key '{name}': paste the private key"));
+        }
+        None => {}
+    }
+    project_registry(conn, shared);
+}
+
+/// Delete an SSH deploy key (P5b): drop the metadata row and its private file. A project still
+/// pointing at it falls back to no key (the push then fails loudly, not silently on a stale key).
+pub fn delete_ssh_key(conn: &rusqlite::Connection, shared: &SharedServerState, name: &str) {
+    if let Err(err) = ssh_keys::delete(conn, name) {
+        return surface_error(shared, format!("delete SSH key '{name}': {err}"));
+    }
+    let _ = crate::ssh_store::remove(&super::data_dir(), name);
     project_registry(conn, shared);
 }
 

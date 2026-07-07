@@ -16,6 +16,7 @@ mod mcp;
 mod pipeline;
 mod sandbox;
 mod schedule;
+mod ssh_store;
 mod state;
 mod text;
 mod tools;

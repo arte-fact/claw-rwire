@@ -8,6 +8,7 @@
 
 mod agents;
 mod endpoints;
+mod ssh_keys;
 
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, Ev, HandlerSpec, St, el, handler, renderer};
@@ -23,9 +24,11 @@ pub fn page() -> ElementBuilder {
         .md([St::PXl])
         .append([
             Text::heading1("System").build(),
-            Text::body("Infrastructure: the channel's concierge, agents, and endpoints.")
-                .muted()
-                .build(),
+            Text::body(
+                "Infrastructure: the channel's concierge, agents, endpoints, and SSH deploy keys.",
+            )
+            .muted()
+            .build(),
             error_banner(),
             board(),
             drawer(),
@@ -50,6 +53,7 @@ fn board() -> ElementBuilder {
             column("Channels", channels()),
             column("Agents", agents::column()),
             column("Endpoints", endpoints::column()),
+            column("Deploy keys", ssh_keys::column()),
             column("Memory", memory_overview()),
         ])
 }
@@ -166,6 +170,14 @@ fn drawer(app: &App) -> ElementBuilder {
             agents::form(app, draft),
         ),
         Some(Editing::Channel) => ("Web channel", channel_form(app)),
+        Some(Editing::SshKey(name)) => (
+            if name.is_some() {
+                "Edit SSH key"
+            } else {
+                "New SSH key"
+            },
+            ssh_keys::form(app, name.as_deref()),
+        ),
         None => ("", el(El::Div)),
     };
     Drawer::new()

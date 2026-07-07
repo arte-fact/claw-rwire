@@ -74,6 +74,15 @@ pub enum Command {
     DeleteEndpoint {
         name: String,
     },
+    /// Store (or replace, with a non-blank key) an SSH deploy key (P5b): the private material is
+    /// written to a `0600` file, the DB keeps only name + fingerprint.
+    UpsertSshKey {
+        name: String,
+        private_key: Option<String>,
+    },
+    DeleteSshKey {
+        name: String,
+    },
     UpsertAgent {
         id: Option<String>,
         name: String,
@@ -599,6 +608,10 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             api_key,
         } => admin::upsert_endpoint(conn, shared, &name, &base_url, api_key),
         Command::DeleteEndpoint { name } => admin::delete_endpoint(conn, shared, &name),
+        Command::UpsertSshKey { name, private_key } => {
+            admin::upsert_ssh_key(conn, shared, &name, private_key)
+        }
+        Command::DeleteSshKey { name } => admin::delete_ssh_key(conn, shared, &name),
         Command::UpsertAgent {
             id,
             name,

@@ -11,6 +11,7 @@ pub mod pipeline;
 pub mod requests;
 pub mod resolution;
 pub mod settings;
+pub mod ssh_keys;
 pub mod task_repos;
 pub mod task_runs;
 pub mod tasks;
