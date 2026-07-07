@@ -113,6 +113,7 @@ pub(crate) fn load_project_detail(
     let pipeline = branch_pipeline(conn, workspace, &format!("projects/{project}"), &selected);
     let preview_uri = staging_preview_uri(workspace, project, &selected);
     let (develop_ahead, releasable) = release_status(&dir);
+    let main_preview_uri = main_preview_uri(workspace, project);
     let detail = crate::state::ProjectDetail {
         workspace_id: workspace.to_owned(),
         name: project.to_owned(),
@@ -126,6 +127,7 @@ pub(crate) fn load_project_detail(
         preview_uri,
         develop_ahead,
         releasable,
+        main_preview_uri,
     };
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_PROJECT_DETAIL]),
@@ -224,6 +226,16 @@ fn staging_preview_uri(workspace: &str, project: &str, branch: &str) -> String {
         return String::new();
     }
     let key = crate::bridge::preview::staging_key(workspace, project);
+    match crate::bridge::preview::port_for(&key) {
+        Some(_) => format!("{}/", crate::bridge::preview::uri_for(&key)),
+        None => String::new(),
+    }
+}
+
+/// The main-staging preview URL (P5a) when the released line's server is live; empty otherwise. Not
+/// branch-gated — the Release panel links it regardless of which branch is being browsed.
+fn main_preview_uri(workspace: &str, project: &str) -> String {
+    let key = crate::bridge::preview::main_staging_key(workspace, project);
     match crate::bridge::preview::port_for(&key) {
         Some(_) => format!("{}/", crate::bridge::preview::uri_for(&key)),
         None => String::new(),

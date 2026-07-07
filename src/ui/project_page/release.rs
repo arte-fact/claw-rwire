@@ -2,8 +2,8 @@
 //! working-tree-less, CI-gated merge — and push `main` iff an origin exists. Project-level: the
 //! whole develop line is released, not one request.
 
-use rwire::{El, ElementBuilder, St, el, handler};
-use rwire_components::{Button, ButtonSize, Text};
+use rwire::{At, El, ElementBuilder, St, el, handler};
+use rwire_components::{Button, ButtonSize, StatusDot, StatusDotIntent, Text};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, ProjectDetail};
@@ -27,13 +27,16 @@ pub(super) fn release_panel(detail: &ProjectDetail) -> ElementBuilder {
     } else {
         button.disabled(true)
     };
-    let mut content = vec![
-        Text::body(status).muted().build(),
+    let mut content = vec![Text::body(status).muted().build()];
+    if let Some(link) = main_preview_link(detail) {
+        content.push(link);
+    }
+    content.push(
         button
             .on_click(release())
             .data("workspace", &detail.workspace_id)
             .data("project", &detail.name),
-    ];
+    );
     // Blocked while develop is ahead ⇒ the merge would conflict — say so plainly.
     if detail.develop_ahead > 0 && !detail.releasable {
         content.push(
@@ -47,6 +50,38 @@ pub(super) fn release_panel(detail: &ProjectDetail) -> ElementBuilder {
         el(El::Div)
             .st([St::DisplayFlex, St::FlexCol, St::GapSm])
             .append(content),
+    )
+}
+
+/// The main-staging preview as a pulsing external link (P5a) — the released line's live URL, same
+/// `target=_blank` same-origin shape as the develop-staging link. `None` until a Release has started
+/// a live server.
+fn main_preview_link(detail: &ProjectDetail) -> Option<ElementBuilder> {
+    if detail.main_preview_uri.is_empty() {
+        return None;
+    }
+    Some(
+        el(El::A)
+            .at_str(At::Href, &detail.main_preview_uri)
+            .at_str(At::Target, "_blank")
+            .at_str(At::Rel, "noopener")
+            .st([
+                St::TextXs,
+                St::TextAccent,
+                St::NoUnderline,
+                St::CursorPointer,
+                St::DisplayFlex,
+                St::ItemsCenter,
+                St::GapXs,
+            ])
+            .hover([St::Underline])
+            .append([
+                StatusDot::new()
+                    .intent(StatusDotIntent::Success)
+                    .pulse(true)
+                    .build(),
+                el(El::Span).text("Preview main-staging ↗"),
+            ]),
     )
 }
 

@@ -23,7 +23,8 @@ pub use requests::{
 pub use sweep::{commit_pass, ensure_meta_repo, ensure_project_repo, repos};
 pub use task_tree::{reset_task_tree, snapshot_task_bases};
 pub use worktrees::{
-    adopt_tree_repo, drop_branch, ensure_request_tree, remove_request_tree, tree_root,
+    adopt_tree_repo, drop_branch, ensure_request_tree, main_tree_root, remove_request_tree,
+    sync_main_worktree, tree_root,
 };
 
 use std::path::{Path, PathBuf};

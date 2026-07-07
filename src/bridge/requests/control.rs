@@ -479,8 +479,13 @@ pub(crate) fn release_project(
 
     // Live floor gate: develop's checks must be green right now (the canonical tree is on develop).
     let strategy = super::super::exec_strategy_for(&root);
-    let checks =
-        crate::ci::run_for_repos(conn, workspace, &root, &strategy, std::slice::from_ref(&repo));
+    let checks = crate::ci::run_for_repos(
+        conn,
+        workspace,
+        &root,
+        &strategy,
+        std::slice::from_ref(&repo),
+    );
     if !crate::ci::all_green(&checks) {
         let names = crate::ci::failed_names(&checks).join(", ");
         super::super::tasks::surface(
@@ -492,6 +497,15 @@ pub(crate) fn release_project(
 
     let note = match gitops::release_repo(&dir, &format!("Release {project}: develop → main")) {
         Ok(gitops::MergeOutcome::Merged(_)) => {
+            // Serve the released tree: refresh the detached `main` worktree + main-staging preview
+            // in the background (a cold server start can take the full health deadline).
+            crate::bridge::preview::refresh_main_staging(
+                workspace,
+                dir.clone(),
+                gitops::main_tree_root(&data_dir(), workspace),
+                project,
+                data_dir(),
+            );
             if !gitops::has_remote(&dir) {
                 format!(
                     "🚀 Released {project} — develop → main. No origin set, so main advanced \

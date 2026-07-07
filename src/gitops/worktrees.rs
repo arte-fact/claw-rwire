@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::merge::{MAIN, ensure_main};
 use super::requests::{DEVELOP, branch_exists, ensure_develop};
 use super::sweep::{ensure_workspace_repos, repos};
 use super::{GitError, commit_all, current_branch, git, is_dirty, is_repo, repo_dir};
@@ -27,6 +28,44 @@ pub fn tree_root(data_dir: &Path, workspace_id: &str, request_id: &str) -> PathB
 #[must_use]
 pub fn is_linked_worktree(dir: &Path) -> bool {
     dir.join(".git").is_file()
+}
+
+/// The persistent per-workspace root holding `main`-checked-out project worktrees (P5a) — a sibling
+/// of the request trees at `trees/<ws>/main`, so [`crate::sandbox::name_for`] gives it its own
+/// `claw-<ws>-main` sandbox (a request short8 is never `main`, and it never collides with the
+/// canonical `claw-<ws>`) and the preview machinery resolves per-project commands exactly as it does
+/// for the canonical `projects/<name>` layout. Absolute: `worktree add` resolves a relative dest
+/// against the *repo*, not the cwd.
+#[must_use]
+pub fn main_tree_root(data_dir: &Path, workspace_id: &str) -> PathBuf {
+    let root = data_dir.join("trees").join(workspace_id).join("main");
+    std::path::absolute(&root).unwrap_or(root)
+}
+
+/// Create or refresh the released-line worktree for one project (P5a): a **detached** worktree of the
+/// canonical project `repo` (`projects/<name>`) at `main`, checked out at `<main_root>/<repo>`.
+/// Detached so advancing `refs/heads/main` (the treeless Release) never strands it on a moved branch;
+/// created on the first Release, then hard-reset to `main`'s new tip on every later one so
+/// main-staging serves the released tree. `clean -fd` keeps gitignored build caches. Returns the
+/// worktree dir.
+pub fn sync_main_worktree(
+    canonical: &Path,
+    main_root: &Path,
+    repo: &str,
+) -> Result<PathBuf, GitError> {
+    ensure_main(canonical)?;
+    let dest = main_root.join(repo);
+    if is_linked_worktree(&dest) {
+        git(&dest, &["reset", "--hard", MAIN])?;
+        git(&dest, &["clean", "-fd"])?;
+        return Ok(dest);
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let dest_str = dest.to_string_lossy().into_owned();
+    git(canonical, &["worktree", "add", "--detach", &dest_str, MAIN])?;
+    Ok(dest)
 }
 
 /// Compose the request's tree: a linked worktree of every workspace repo — the meta-repo

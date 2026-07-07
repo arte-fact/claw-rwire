@@ -107,6 +107,61 @@ pub fn start_staging(
     )
 }
 
+/// Start (or restart) the long-lived main-staging preview for one web `project` from its detached
+/// `main` worktree root `main_root` (`trees/<ws>/main`), keyed `<ws>-main-<name>` so the released
+/// line gets its own stable URL (P5a). Resolves the same per-project command as develop-staging.
+pub fn start_main_staging(
+    conn: &Connection,
+    workspace_id: &str,
+    main_root: &Path,
+    strategy: &ExecStrategy,
+    project: &str,
+) -> Result<String, String> {
+    start(
+        conn,
+        workspace_id,
+        &main_staging_short(project),
+        main_root,
+        strategy,
+        Some(project),
+    )
+}
+
+/// Refresh main-staging for one just-released `project` in the **background** (a cold server start can
+/// take the full health deadline). Host-side: sync the project's detached `main` worktree to the
+/// freshly-advanced `main`, then (re)start the preview from it under the `claw-<ws>-main` strategy.
+/// A non-web project (no preview command) is silently skipped.
+pub fn refresh_main_staging(
+    workspace_id: &str,
+    canonical: PathBuf,
+    main_root: PathBuf,
+    project: &str,
+    data_dir: PathBuf,
+) {
+    let workspace_id = workspace_id.to_owned();
+    let project = project.to_owned();
+    std::thread::spawn(move || {
+        let repo = format!("projects/{project}");
+        if let Err(err) = crate::gitops::sync_main_worktree(&canonical, &main_root, &repo) {
+            crate::bridge::log_line(format!(
+                "preview: main worktree {workspace_id}/{project}: {err}"
+            ));
+            return;
+        }
+        let Ok(conn) = crate::db::open(&data_dir.join("central.db")) else {
+            return;
+        };
+        let strategy = crate::bridge::exec_strategy_for(&main_root);
+        if let Ok(detail) =
+            start_main_staging(&conn, &workspace_id, &main_root, &strategy, &project)
+        {
+            crate::bridge::log_line(format!(
+                "preview: main-staging {workspace_id}/{project}: {detail}"
+            ));
+        }
+    });
+}
+
 /// Refresh develop-staging for every repo a delivery touched, in the **background** — a cold
 /// `cargo run` must never block the delivery worker (the health-probe waits up to 90s). Opens its own
 /// registry connection and resolves the canonical exec strategy off the workspace root; each repo
@@ -388,21 +443,30 @@ fn short_of_request(request_id: &str) -> String {
     request_id.chars().take(8).collect()
 }
 
-/// The staging short for a project: `staging-<bare-name>` (the last path segment, so `projects/site`
-/// and `site` agree). Kept `/`-free so it stays a single `/preview/<key>` path segment; the meta
-/// repo (`.`/empty) folds to `staging-root`.
-fn staging_short(project: &str) -> String {
+/// A project's bare name — the last path segment (so `projects/site` and `site` agree), `/`-free so
+/// each preview short stays a single `/preview/<key>` segment; the meta repo (`.`/empty) folds to
+/// `root`.
+fn bare_project(project: &str) -> &str {
     let bare = project
         .trim_end_matches('/')
         .rsplit('/')
         .next()
         .unwrap_or(project);
-    let bare = if bare.is_empty() || bare == "." {
+    if bare.is_empty() || bare == "." {
         "root"
     } else {
         bare
-    };
-    format!("staging-{bare}")
+    }
+}
+
+/// The develop-staging short for a project: `staging-<bare-name>`.
+fn staging_short(project: &str) -> String {
+    format!("staging-{}", bare_project(project))
+}
+
+/// The main-staging short for a project: `main-<bare-name>` — the released line's preview (P5a).
+fn main_staging_short(project: &str) -> String {
+    format!("main-{}", bare_project(project))
 }
 
 /// The branch preview key for a request id (`<ws>-<short8>`), for the view layer, which has the
@@ -417,6 +481,13 @@ pub fn request_key(workspace_id: &str, request_id: &str) -> String {
 #[must_use]
 pub fn staging_key(workspace_id: &str, project: &str) -> String {
     key_for(workspace_id, staging_short(project))
+}
+
+/// The main-staging preview key for a project (`<ws>-main-<name>`) — the released line's preview the
+/// project page (P5a) links to once a Release has advanced `main`.
+#[must_use]
+pub fn main_staging_key(workspace_id: &str, project: &str) -> String {
+    key_for(workspace_id, main_staging_short(project))
 }
 
 /// The supervisor / proxy key for a (workspace, short): globally unique, URL-safe.
@@ -632,6 +703,19 @@ mod tests {
         assert!(!key_for("ws", staging_short("projects/site")).contains('/'));
         // The public staging_key composes ws + the staging short (P5c project-page preview).
         assert_eq!(staging_key("ws", "projects/site"), "ws-staging-site");
+    }
+
+    #[test]
+    fn main_staging_takes_the_bare_project_name() {
+        assert_eq!(main_staging_short("projects/site"), "main-site");
+        assert_eq!(main_staging_short("site"), "main-site");
+        // Distinct from develop-staging so both previews coexist, slash-free, per project (P5a).
+        assert_eq!(main_staging_key("ws", "projects/site"), "ws-main-site");
+        assert!(!main_staging_key("ws", "projects/site").contains('/'));
+        assert_ne!(
+            main_staging_key("ws", "projects/site"),
+            staging_key("ws", "projects/site")
+        );
     }
 
     #[test]

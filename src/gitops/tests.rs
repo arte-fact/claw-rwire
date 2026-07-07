@@ -803,3 +803,41 @@ fn release_repo_advances_main_to_develop_then_is_idempotent() {
         MergeOutcome::UpToDate
     );
 }
+
+#[test]
+fn sync_main_worktree_checks_out_detached_main_and_refreshes_to_its_tip() {
+    // Repos are born on `main` (a seed commit) with `develop` forked from it, so `main` only carries
+    // real work once a Release advances it — sync always runs after a release, exactly as here.
+    let canonical = merge_repo("main-worktree");
+    commit_on(&canonical, "index.html", "<h1>v1</h1>\n", "v1 on develop");
+    release_repo(&canonical, "Release: develop → main v1").expect("release v1");
+    let main_root = scratch("main-worktree-root");
+
+    // First sync (post-release): a detached worktree lands at the released main.
+    let dest = sync_main_worktree(&canonical, &main_root, "projects/site").expect("sync");
+    assert!(dest.join(".git").is_file(), "a linked worktree was created");
+    assert_eq!(
+        current_branch(&dest).expect("branch"),
+        "HEAD",
+        "detached — never on the main branch itself"
+    );
+    assert_eq!(
+        head(&dest).expect("head"),
+        git(&canonical, &["rev-parse", MAIN]).expect("main")
+    );
+    assert_eq!(
+        std::fs::read_to_string(dest.join("index.html")).expect("read"),
+        "<h1>v1</h1>\n"
+    );
+
+    // A second release advances main; re-syncing hard-resets the worktree to the new tip.
+    commit_on(&canonical, "index.html", "<h1>v2</h1>\n", "v2 on develop");
+    release_repo(&canonical, "Release: develop → main v2").expect("release v2");
+    let advanced = sync_main_worktree(&canonical, &main_root, "projects/site").expect("resync");
+    assert_eq!(advanced, dest, "the same worktree dir is reused");
+    assert_eq!(
+        std::fs::read_to_string(dest.join("index.html")).expect("read"),
+        "<h1>v2</h1>\n",
+        "the worktree reset --hard to the freshly-released main"
+    );
+}

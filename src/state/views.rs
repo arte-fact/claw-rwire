@@ -851,6 +851,9 @@ pub struct ProjectDetail {
     /// Whether a Release can run right now (P5a): `develop` leads `main` and the merge is
     /// conflict-free. `false` disables/annotates the Release control.
     pub releasable: bool,
+    /// The main-staging preview URL (P5a) when the released line's server is live; empty otherwise
+    /// (no Release yet, or a non-web project). Shown in the Release panel regardless of browsed branch.
+    pub main_preview_uri: String,
 }
 
 /// One producer run's checks on the selected branch (P5c) — carries the `task_runs.id` so each
