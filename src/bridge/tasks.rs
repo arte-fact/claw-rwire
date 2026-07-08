@@ -8,6 +8,8 @@ use crate::db::tasks::{self, NewTask, TaskStatus};
 use crate::db::{agents, workspaces};
 use crate::state::{App, LaneSummary, TaskView};
 
+use super::{Resolver, resolve_err, resolve_ok};
+
 /// A workspace's lane as view-models (assignee ids resolved to names), for projection.
 pub fn lane_views(conn: &rusqlite::Connection, workspace: &str) -> Vec<TaskView> {
     let names = agent_names(conn);
@@ -542,46 +544,69 @@ pub fn update(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str,
 }
 
 /// Cancel a task and re-project its workspace's lane.
-pub fn cancel(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+pub fn cancel(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    id: &str,
+    resolver: Option<Resolver>,
+) {
     let Ok(Some(task)) = tasks::get(conn, id) else {
-        return;
+        return resolve_ok(resolver);
     };
     if let Err(err) = tasks::cancel(conn, id) {
-        return surface(shared, format!("cancel task: {err}"));
+        return resolve_err(resolver, format!("could not cancel the task: {err}"));
     }
     reproject(conn, shared, id, &task.workspace_id);
+    resolve_ok(resolver);
 }
 
 /// Stop (pause) a task: park it `stopped`, abandon any in-flight run, and clear its live feed.
-pub fn stop(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+pub fn stop(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    id: &str,
+    resolver: Option<Resolver>,
+) {
     let Ok(Some(task)) = tasks::get(conn, id) else {
-        return;
+        return resolve_ok(resolver);
     };
     if let Err(err) = tasks::stop(conn, id) {
-        return surface(shared, format!("stop task: {err}"));
+        return resolve_err(resolver, format!("could not stop the task: {err}"));
     }
     super::clear_live_turn(shared, id);
     reproject(conn, shared, id, &task.workspace_id);
+    resolve_ok(resolver);
 }
 
 /// Resume a stopped task — re-queue it to continue from its current step.
-pub fn resume(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+pub fn resume(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    id: &str,
+    resolver: Option<Resolver>,
+) {
     let Ok(Some(task)) = tasks::get(conn, id) else {
-        return;
+        return resolve_ok(resolver);
     };
     if let Err(err) = tasks::resume(conn, id) {
-        return surface(shared, format!("start task: {err}"));
+        return resolve_err(resolver, format!("could not start the task: {err}"));
     }
     reproject(conn, shared, id, &task.workspace_id);
+    resolve_ok(resolver);
 }
 
 /// Restart a task from a clean slate (step 0, fresh attempt) — from a stopped or terminal task.
 /// Fresh attempt = fresh files (G0 of docs/requests.md): every repo the task recorded a
 /// pre-task base for is reset to it first, so the new attempt no longer inherits the
 /// abandoned attempt's dirty tree. A partial reset is surfaced but doesn't block the restart.
-pub fn restart(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+pub fn restart(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    id: &str,
+    resolver: Option<Resolver>,
+) {
     let Ok(Some(task)) = tasks::get(conn, id) else {
-        return;
+        return resolve_ok(resolver);
     };
     // Reset where the task ran (G4): its request's tree while the request is open, the
     // canonical workspace for free tasks.
@@ -597,31 +622,44 @@ pub fn restart(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str
         );
     }
     if let Err(err) = tasks::restart(conn, id) {
-        return surface(shared, format!("restart task: {err}"));
+        return resolve_err(resolver, format!("could not restart the task: {err}"));
     }
     reproject(conn, shared, id, &task.workspace_id);
+    resolve_ok(resolver);
 }
 
 /// Archive a terminal task — drop it from the board (the run chain is preserved, restorable).
-pub fn archive(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+pub fn archive(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    id: &str,
+    resolver: Option<Resolver>,
+) {
     let Ok(Some(task)) = tasks::get(conn, id) else {
-        return;
+        return resolve_ok(resolver);
     };
     if let Err(err) = tasks::archive(conn, id) {
-        return surface(shared, format!("archive task: {err}"));
+        return resolve_err(resolver, format!("could not archive the task: {err}"));
     }
     reproject(conn, shared, id, &task.workspace_id);
+    resolve_ok(resolver);
 }
 
 /// Restore an archived task to the board.
-pub fn unarchive(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str) {
+pub fn unarchive(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    id: &str,
+    resolver: Option<Resolver>,
+) {
     let Ok(Some(task)) = tasks::get(conn, id) else {
-        return;
+        return resolve_ok(resolver);
     };
     if let Err(err) = tasks::unarchive(conn, id) {
-        return surface(shared, format!("unarchive task: {err}"));
+        return resolve_err(resolver, format!("could not unarchive the task: {err}"));
     }
     reproject(conn, shared, id, &task.workspace_id);
+    resolve_ok(resolver);
 }
 
 /// Re-project after a run-control change: the active lane, the open detail (if it's this task),

@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 
-use rwire::{At, Av, El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{At, Av, El, ElementBuilder, Ev, EventContext, St, el, handler, renderer};
 use rwire_components::{
     Avatar, AvatarSize, Breadcrumb, Button, ButtonSize, ChatAuthor, ChatEntry, ChatItem,
     ChatItemCtx, ChatScroll, ChatTag, ChatTranscript, Input, StatusDot, StatusDotIntent, Text,
@@ -551,11 +551,14 @@ fn send_task_steer(app: &mut App, ctx: &EventContext) {
     let Some(agent) = agent else {
         return;
     };
-    bridge::send(Command::SteerAgent {
-        agent,
-        workspace: detail.workspace_id.clone(),
-        body,
-    });
+    bridge::send_action(
+        Command::SteerAgent {
+            agent,
+            workspace: detail.workspace_id.clone(),
+            body,
+        },
+        ctx.defer(),
+    );
 }
 
 /// The inline review composer for a parked task: Approve / Reject, then a "what to change…" field
@@ -602,91 +605,95 @@ fn action_button(
         Button::secondary(label.to_owned())
     };
     btn.size(ButtonSize::Sm)
-        .on_click(on_click)
-        .data("task", task)
+        .on_click(on_click.with_param_bytes(task.as_bytes().to_vec()))
+}
+
+/// The task id a run-control button carries in its `param_bytes` (see [`action_button`]) — it also
+/// keys the async-action reflection, so only the acted-on task's button spins.
+fn task_param(ctx: &EventContext) -> Option<String> {
+    let id = String::from_utf8_lossy(ctx.param_bytes());
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.into_owned())
+    }
 }
 
 #[handler]
 fn stop(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(task) = ctx.data("task") {
-        bridge::send(Command::StopTask {
-            id: task.to_owned(),
-        });
+    if let Some(id) = task_param(ctx) {
+        bridge::send_action(Command::StopTask { id }, ctx.defer());
     }
 }
 
 #[handler]
 fn start(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(task) = ctx.data("task") {
-        bridge::send(Command::StartTask {
-            id: task.to_owned(),
-        });
+    if let Some(id) = task_param(ctx) {
+        bridge::send_action(Command::StartTask { id }, ctx.defer());
     }
 }
 
 #[handler]
 fn restart(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(task) = ctx.data("task") {
-        bridge::send(Command::RestartTask {
-            id: task.to_owned(),
-        });
+    if let Some(id) = task_param(ctx) {
+        bridge::send_action(Command::RestartTask { id }, ctx.defer());
     }
 }
 
 #[handler]
 fn archive(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(task) = ctx.data("task") {
-        bridge::send(Command::ArchiveTask {
-            id: task.to_owned(),
-        });
+    if let Some(id) = task_param(ctx) {
+        bridge::send_action(Command::ArchiveTask { id }, ctx.defer());
     }
 }
 
 #[handler]
 fn unarchive(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(task) = ctx.data("task") {
-        bridge::send(Command::UnarchiveTask {
-            id: task.to_owned(),
-        });
+    if let Some(id) = task_param(ctx) {
+        bridge::send_action(Command::UnarchiveTask { id }, ctx.defer());
     }
 }
 
 #[handler]
 fn cancel(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(task) = ctx.data("task") {
-        bridge::send(Command::CancelTask {
-            id: task.to_owned(),
-        });
+    if let Some(id) = task_param(ctx) {
+        bridge::send_action(Command::CancelTask { id }, ctx.defer());
     }
 }
 
 #[handler]
 fn approve(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(task) = ctx.data("task") {
-        bridge::send(Command::ReviewVerdict {
-            task_id: task.to_owned(),
-            decision: "pass".to_owned(),
-            feedback: String::new(),
-        });
+    if let Some(task_id) = task_param(ctx) {
+        bridge::send_action(
+            Command::ReviewVerdict {
+                task_id,
+                decision: "pass".to_owned(),
+                feedback: String::new(),
+            },
+            ctx.defer(),
+        );
     }
 }
 
 #[handler]
 fn reject(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(task) = ctx.data("task") {
-        bridge::send(Command::ReviewVerdict {
-            task_id: task.to_owned(),
-            decision: "reject".to_owned(),
-            feedback: String::new(),
-        });
+    if let Some(task_id) = task_param(ctx) {
+        bridge::send_action(
+            Command::ReviewVerdict {
+                task_id,
+                decision: "reject".to_owned(),
+                feedback: String::new(),
+            },
+            ctx.defer(),
+        );
     }
 }
 

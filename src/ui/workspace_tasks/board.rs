@@ -121,12 +121,13 @@ fn column_header(
     }
     match step_id.filter(|_| !locked) {
         // A configured, editable step → open its editor drawer in place.
-        Some(id) => crate::ui::widgets::bare_button(crate::ui::workspace_workflow::toggle_edit())
-            .data("step", id)
-            .st(header_st)
-            .st([St::TextLeft, St::P0])
-            .hover([St::TextAccent])
-            .append([el(El::Span).text(&label)]),
+        Some(id) => crate::ui::widgets::bare_button(
+            crate::ui::workspace_workflow::toggle_edit().with_param_bytes(id.as_bytes().to_vec()),
+        )
+        .st(header_st)
+        .st([St::TextLeft, St::P0])
+        .hover([St::TextAccent])
+        .append([el(El::Span).text(&label)]),
         // The implicit default (no row) or a locked board → jump to the Workflow tab.
         None => Link::route(&format!("/w/{wid}/workflow"))
             .st(header_st)
@@ -301,8 +302,7 @@ fn card_actions(task: &TaskView) -> ElementBuilder {
         actions.push(
             Button::primary("Approve")
                 .size(ButtonSize::Sm)
-                .on_click(kanban_approve())
-                .data("task", &task.id),
+                .on_click(kanban_approve().with_param_bytes(task.id.as_bytes().to_vec())),
         );
     }
     actions.extend(control_buttons(task));
@@ -320,11 +320,14 @@ fn card_actions(task: &TaskView) -> ElementBuilder {
 #[handler]
 fn kanban_approve(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(id) = ctx.data("task") {
-        bridge::send(Command::ReviewVerdict {
-            task_id: id.to_owned(),
-            decision: "pass".to_owned(),
-            feedback: String::new(),
-        });
+    if let Some(task_id) = super::task_param(ctx) {
+        bridge::send_action(
+            Command::ReviewVerdict {
+                task_id,
+                decision: "pass".to_owned(),
+                feedback: String::new(),
+            },
+            ctx.defer(),
+        );
     }
 }

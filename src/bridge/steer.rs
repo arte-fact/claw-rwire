@@ -11,38 +11,32 @@ use rwire::SharedServerState;
 
 use crate::db::{agent_messages, tasks};
 
-use super::log_line;
+use super::{Resolver, log_line, resolve_err, resolve_ok};
 
 /// Queue (or materialise) a steer message for `(agent, workspace)` — the conn-only core, so
-/// the decision is unit-testable. Returns whether the message became a task.
+/// the decision is unit-testable. `Ok(true)` when the message became a task, `Ok(false)` when it
+/// queued for the agent's next pass (or the body was blank); `Err` on a persistence failure.
 pub(super) fn deliver_or_queue(
     conn: &rusqlite::Connection,
     agent_id: &str,
     workspace_id: &str,
     body: &str,
-) -> bool {
+) -> Result<bool, String> {
     let body = body.trim();
     if body.is_empty() {
-        return false;
+        return Ok(false);
     }
-    let Ok(id) = crate::id::new_id() else {
-        log_line("steer: could not mint a message id");
-        return false;
-    };
-    if let Err(err) = agent_messages::queue(conn, &id, agent_id, workspace_id, body) {
-        log_line(format!("steer: queue failed: {err}"));
-        return false;
-    }
+    let id = crate::id::new_id().map_err(|_| "could not mint a message id".to_owned())?;
+    agent_messages::queue(conn, &id, agent_id, workspace_id, body)
+        .map_err(|err| format!("could not queue the message: {err}"))?;
     let busy = tasks::has_open_for_agent(conn, agent_id, workspace_id).unwrap_or(false);
     if busy {
-        return false; // rides the next pass of the open work
+        return Ok(false); // rides the next pass of the open work
     }
     // Idle: the message becomes a task assigned to the agent — its own turn, starting now.
-    let Ok(task_id) = crate::id::new_id() else {
-        return false;
-    };
+    let task_id = crate::id::new_id().map_err(|_| "could not mint a task id".to_owned())?;
     let title = first_line_title(body);
-    match tasks::create(
+    tasks::create(
         conn,
         &tasks::NewTask {
             id: &task_id,
@@ -54,30 +48,34 @@ pub(super) fn deliver_or_queue(
             origin_chat: None,
             max_retries: None,
         },
-    ) {
-        Ok(()) => {
-            let _ = agent_messages::mark_delivered(conn, &id);
-            true
-        }
-        Err(err) => {
-            log_line(format!("steer: create task failed: {err}"));
-            false
-        }
-    }
+    )
+    .map_err(|err| format!("could not start the task: {err}"))?;
+    let _ = agent_messages::mark_delivered(conn, &id);
+    Ok(true)
 }
 
-/// The bridge handler: persist + decide, then reflect on the open thread and the board.
+/// The bridge handler: persist + decide, then reflect on the open thread and the board, resolving
+/// the composer's deferred action either way.
 pub fn send_message(
     conn: &rusqlite::Connection,
     shared: &SharedServerState,
     agent_id: &str,
     workspace_id: &str,
     body: &str,
+    resolver: Option<Resolver>,
 ) {
-    let became_task = deliver_or_queue(conn, agent_id, workspace_id, body);
-    super::agent_thread::refresh_if_open(conn, shared);
-    if became_task {
-        super::tasks::project_if_active(conn, shared, workspace_id);
+    match deliver_or_queue(conn, agent_id, workspace_id, body) {
+        Ok(became_task) => {
+            super::agent_thread::refresh_if_open(conn, shared);
+            if became_task {
+                super::tasks::project_if_active(conn, shared, workspace_id);
+            }
+            resolve_ok(resolver);
+        }
+        Err(message) => {
+            log_line(format!("steer: {message}"));
+            resolve_err(resolver, message);
+        }
     }
 }
 
@@ -106,12 +104,10 @@ mod tests {
     #[test]
     fn a_message_to_an_idle_agent_becomes_its_task_and_is_delivered() {
         let conn = seeded();
-        assert!(deliver_or_queue(
-            &conn,
-            "ag-1",
-            "ws",
-            "polish the README\nwith examples"
-        ));
+        assert!(
+            deliver_or_queue(&conn, "ag-1", "ws", "polish the README\nwith examples")
+                .expect("delivered")
+        );
         let lane = tasks::list_for_workspace(&conn, "ws").expect("lane");
         assert_eq!(lane.len(), 1);
         assert_eq!(lane[0].title, "polish the README");
@@ -141,7 +137,7 @@ mod tests {
             },
         )
         .expect("task");
-        assert!(!deliver_or_queue(&conn, "ag-1", "ws", "also add tests"));
+        assert!(!deliver_or_queue(&conn, "ag-1", "ws", "also add tests").expect("queued"));
         assert_eq!(
             tasks::list_for_workspace(&conn, "ws").expect("lane").len(),
             1,
@@ -155,7 +151,7 @@ mod tests {
     #[test]
     fn blank_messages_are_ignored() {
         let conn = seeded();
-        assert!(!deliver_or_queue(&conn, "ag-1", "ws", "   \n "));
+        assert!(!deliver_or_queue(&conn, "ag-1", "ws", "   \n ").expect("blank is not an error"));
         assert!(
             agent_messages::recent(&conn, "ag-1", "ws", 10)
                 .expect("recent")

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::mpsc::{self, Sender};
 
-use rwire::{ChangeSet, SharedServerState};
+use rwire::{ChangeSet, Resolver, SharedServerState};
 
 mod admin;
 mod agent_nav;
@@ -435,12 +435,40 @@ pub enum Command {
     },
 }
 
-static TX: OnceLock<Sender<Command>> = OnceLock::new();
+/// The pipeline carries an optional [`Resolver`] alongside each command: when a UI handler defers
+/// (`ctx.defer()`), the resolver rides with the command to the bridge thread and the command's
+/// completion site resolves it (`ok`/`err`), driving the triggering control's async-action
+/// reflection. Commands with no deferred control carry `None`.
+static TX: OnceLock<Sender<(Command, Option<Resolver>)>> = OnceLock::new();
 
 /// Post a command to the pipeline. Dropped if the bridge failed to start.
 pub fn send(command: Command) {
     if let Some(tx) = TX.get() {
-        let _ = tx.send(command);
+        let _ = tx.send((command, None));
+    }
+}
+
+/// Post a command whose triggering control reflects the async-action lifecycle: the `resolver`
+/// travels to the bridge thread, where the command's completion resolves it. Dropped (→ the
+/// action's timeout backstop clears it) if the bridge failed to start.
+pub fn send_action(command: Command, resolver: Resolver) {
+    if let Some(tx) = TX.get() {
+        let _ = tx.send((command, Some(resolver)));
+    }
+}
+
+/// Resolve a deferred action as succeeded (returns the triggering control to idle). No-op when the
+/// command carried no resolver (was posted via [`send`], not [`send_action`]).
+pub(crate) fn resolve_ok(resolver: Option<Resolver>) {
+    if let Some(r) = resolver {
+        r.ok();
+    }
+}
+
+/// Resolve a deferred action as failed: the message surfaces on the control and in `ActionToasts`.
+pub(crate) fn resolve_err(resolver: Option<Resolver>, message: impl Into<String>) {
+    if let Some(r) = resolver {
+        r.err(message);
     }
 }
 
@@ -569,14 +597,19 @@ pub fn spawn(shared: Arc<SharedServerState>, central_db: PathBuf) {
     connect_web_mcp();
     admin::project_tool_catalog(&shared);
     std::thread::spawn(move || {
-        while let Ok(command) = rx.recv() {
-            handle(&conn, &shared, command);
+        while let Ok((command, resolver)) = rx.recv() {
+            handle(&conn, &shared, command, resolver);
         }
     });
     scheduler::spawn_ticker();
 }
 
-fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Command) {
+fn handle(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    command: Command,
+    resolver: Option<Resolver>,
+) {
     match command {
         Command::DeleteChat(id) => delete_chat(conn, shared, &id),
         Command::ListArchived => list_archived(conn, shared),
@@ -645,7 +678,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             branch.as_deref(),
         ),
         Command::ReleaseProject { workspace, project } => {
-            requests::control::release_project(conn, shared, &workspace, &project)
+            requests::control::release_project(conn, shared, &workspace, &project, resolver)
         }
         Command::SetProjectRemote {
             workspace,
@@ -665,20 +698,22 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             decision,
             note,
         } => requests::control::on_validated(conn, shared, &request_id, &decision, &note),
-        Command::RequestDeliver { id } => requests::control::deliver_now(conn, shared, &id),
-        Command::RequestAbandon { id } => requests::control::abandon(conn, shared, &id),
+        Command::RequestDeliver { id } => {
+            requests::control::deliver_now(conn, shared, &id, resolver)
+        }
+        Command::RequestAbandon { id } => requests::control::abandon(conn, shared, &id, resolver),
         Command::RequestChanges { id, feedback } => {
             requests::control::request_changes(conn, shared, &id, &feedback)
         }
-        Command::RequestRollback { id } => requests::control::rollback(conn, shared, &id),
-        Command::RequestPush { id } => requests::control::push(conn, shared, &id),
+        Command::RequestRollback { id } => requests::control::rollback(conn, shared, &id, resolver),
+        Command::RequestPush { id } => requests::control::push(conn, shared, &id, resolver),
         Command::RestoreFile {
             workspace,
             task,
             repo,
             sha,
             path,
-        } => requests::control::restore_file(conn, shared, &workspace, &task, &repo, &sha, &path),
+        } => requests::control::restore_file(conn, &workspace, &task, &repo, &sha, &path, resolver),
         Command::OpenAgentThread { agent, workspace } => {
             agent_thread::load(conn, shared, &agent, &workspace)
         }
@@ -686,15 +721,19 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
         Command::ExpandChat => chat_turn::expand(conn, shared),
         Command::CloseAgentThread => agent_thread::close(shared),
         Command::LoadWorkflow { workspace } => workflow::load(conn, shared, &workspace),
-        Command::AddStep { workspace, kind } => workflow::add(conn, shared, &workspace, &kind),
+        Command::AddStep { workspace, kind } => {
+            workflow::add(conn, shared, &workspace, &kind, resolver)
+        }
         Command::UpdateStep {
             workspace,
             id,
             form,
         } => workflow::update(conn, shared, &workspace, &id, &form),
-        Command::DeleteStep { workspace, id } => workflow::remove(conn, shared, &workspace, &id),
+        Command::DeleteStep { workspace, id } => {
+            workflow::remove(conn, shared, &workspace, &id, resolver)
+        }
         Command::MoveStep { workspace, id, up } => {
-            workflow::move_step(conn, shared, &workspace, &id, up)
+            workflow::move_step(conn, shared, &workspace, &id, up, resolver)
         }
         Command::ReviewVerdict {
             task_id,
@@ -704,6 +743,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             scheduler::human_verdict(conn, shared, &task_id, &decision, &feedback);
             review::project_awaiting(conn, shared);
             tasks::load_detail(conn, shared, &task_id);
+            resolve_ok(resolver);
         }
         Command::LoadPrompt { agent, run } => prompts::load(conn, shared, agent, run),
         Command::LoadSettings => prompts::load_settings(conn, shared),
@@ -748,12 +788,12 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
                 blockers,
             },
         ),
-        Command::CancelTask { id } => tasks::cancel(conn, shared, &id),
-        Command::StopTask { id } => tasks::stop(conn, shared, &id),
-        Command::StartTask { id } => tasks::resume(conn, shared, &id),
-        Command::RestartTask { id } => tasks::restart(conn, shared, &id),
-        Command::ArchiveTask { id } => tasks::archive(conn, shared, &id),
-        Command::UnarchiveTask { id } => tasks::unarchive(conn, shared, &id),
+        Command::CancelTask { id } => tasks::cancel(conn, shared, &id, resolver),
+        Command::StopTask { id } => tasks::stop(conn, shared, &id, resolver),
+        Command::StartTask { id } => tasks::resume(conn, shared, &id, resolver),
+        Command::RestartTask { id } => tasks::restart(conn, shared, &id, resolver),
+        Command::ArchiveTask { id } => tasks::archive(conn, shared, &id, resolver),
+        Command::UnarchiveTask { id } => tasks::unarchive(conn, shared, &id, resolver),
         Command::SchedulerTick => scheduler::tick(conn, shared),
         Command::AgentProgress { ctx, event } => live_progress(shared, ctx, event),
         Command::TaskFinished {
@@ -814,7 +854,7 @@ fn handle(conn: &rusqlite::Connection, shared: &SharedServerState, command: Comm
             agent,
             workspace,
             body,
-        } => steer::send_message(conn, shared, &agent, &workspace, &body),
+        } => steer::send_message(conn, shared, &agent, &workspace, &body, resolver),
         Command::SaveChecks { workspace, command } => {
             files::save_checks(conn, shared, &workspace, &command)
         }

@@ -130,9 +130,12 @@ fn main_preview_link(detail: &ProjectDetail) -> Option<ElementBuilder> {
 fn release(app: &mut App, ctx: &EventContext) {
     let _ = app;
     if let (Some(workspace), Some(project)) = (ctx.data("workspace"), ctx.data("project")) {
-        bridge::send(Command::ReleaseProject {
-            workspace: workspace.to_owned(),
-            project: project.to_owned(),
-        });
+        bridge::send_action(
+            Command::ReleaseProject {
+                workspace: workspace.to_owned(),
+                project: project.to_owned(),
+            },
+            ctx.defer(),
+        );
     }
 }

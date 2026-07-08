@@ -474,7 +474,7 @@ fn request_changes_form(id: &str) -> ElementBuilder {
 fn deliver(app: &mut App, ctx: &EventContext) {
     let _ = app;
     if let Some(id) = ctx.data("request") {
-        bridge::send(Command::RequestDeliver { id: id.to_owned() });
+        bridge::send_action(Command::RequestDeliver { id: id.to_owned() }, ctx.defer());
     }
 }
 
@@ -496,7 +496,7 @@ fn request_changes(app: &mut App, ctx: &EventContext) {
 fn abandon(app: &mut App, ctx: &EventContext) {
     let _ = app;
     if let Some(id) = ctx.data("request") {
-        bridge::send(Command::RequestAbandon { id: id.to_owned() });
+        bridge::send_action(Command::RequestAbandon { id: id.to_owned() }, ctx.defer());
     }
 }
 
@@ -504,7 +504,7 @@ fn abandon(app: &mut App, ctx: &EventContext) {
 fn rollback(app: &mut App, ctx: &EventContext) {
     let _ = app;
     if let Some(id) = ctx.data("request") {
-        bridge::send(Command::RequestRollback { id: id.to_owned() });
+        bridge::send_action(Command::RequestRollback { id: id.to_owned() }, ctx.defer());
     }
 }
 
@@ -512,7 +512,7 @@ fn rollback(app: &mut App, ctx: &EventContext) {
 fn push(app: &mut App, ctx: &EventContext) {
     let _ = app;
     if let Some(id) = ctx.data("request") {
-        bridge::send(Command::RequestPush { id: id.to_owned() });
+        bridge::send_action(Command::RequestPush { id: id.to_owned() }, ctx.defer());
     }
 }
 

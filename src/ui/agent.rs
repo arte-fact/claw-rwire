@@ -98,11 +98,14 @@ fn send_steer(app: &mut App, ctx: &EventContext) {
     if body.is_empty() {
         return;
     }
-    bridge::send(Command::SteerAgent {
-        agent: thread.agent_id.clone(),
-        workspace: thread.workspace_id.clone(),
-        body,
-    });
+    bridge::send_action(
+        Command::SteerAgent {
+            agent: thread.agent_id.clone(),
+            workspace: thread.workspace_id.clone(),
+            body,
+        },
+        ctx.defer(),
+    );
 }
 
 /// The pinned page header: the agent's name + its workspace, centered on the reading measure.

@@ -496,8 +496,12 @@ fn retries_input(value: Option<i64>) -> ElementBuilder {
 /// The run-control buttons for a task card, by status: Stop while live, Start/Restart when
 /// stopped, Restart when terminal, Edit only when not running (editing a live run is a no-op).
 fn control_buttons(task: &TaskView) -> Vec<ElementBuilder> {
-    let icon = |glyph, on_click| {
-        crate::ui::widgets::icon_button(glyph, on_click, false).data("task", &task.id)
+    let icon = |glyph, on_click: rwire::HandlerSpec| {
+        crate::ui::widgets::icon_button(
+            glyph,
+            on_click.with_param_bytes(task.id.as_bytes().to_vec()),
+            false,
+        )
     };
     match task.status.as_str() {
         "running" => vec![
@@ -534,39 +538,49 @@ fn restart_button(task_id: &str) -> ElementBuilder {
     use rwire_components::{Button, ButtonSize};
     Button::secondary("Restart")
         .size(ButtonSize::Sm)
-        .on_click(restart_task())
-        .data("task", task_id)
+        .on_click(restart_task().with_param_bytes(task_id.as_bytes().to_vec()))
+}
+
+/// The task id a run-control button carries in its `param_bytes` (see [`control_buttons`]) — it
+/// also keys the async-action reflection, so only the acted-on card's button spins.
+fn task_param(ctx: &rwire::EventContext) -> Option<String> {
+    let id = String::from_utf8_lossy(ctx.param_bytes());
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.into_owned())
+    }
 }
 
 #[handler]
 fn stop_task(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(id) = ctx.data("task") {
-        bridge::send(Command::StopTask { id: id.to_owned() });
+    if let Some(id) = task_param(ctx) {
+        bridge::send_action(Command::StopTask { id }, ctx.defer());
     }
 }
 
 #[handler]
 fn start_task(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(id) = ctx.data("task") {
-        bridge::send(Command::StartTask { id: id.to_owned() });
+    if let Some(id) = task_param(ctx) {
+        bridge::send_action(Command::StartTask { id }, ctx.defer());
     }
 }
 
 #[handler]
 fn restart_task(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(id) = ctx.data("task") {
-        bridge::send(Command::RestartTask { id: id.to_owned() });
+    if let Some(id) = task_param(ctx) {
+        bridge::send_action(Command::RestartTask { id }, ctx.defer());
     }
 }
 
 #[handler]
 fn archive_task(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(id) = ctx.data("task") {
-        bridge::send(Command::ArchiveTask { id: id.to_owned() });
+    if let Some(id) = task_param(ctx) {
+        bridge::send_action(Command::ArchiveTask { id }, ctx.defer());
     }
 }
 
@@ -631,15 +645,15 @@ fn parse_max_retries(ctx: &rwire::EventContext) -> Option<i64> {
 #[handler]
 fn cancel_task(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    if let Some(id) = ctx.data("task") {
-        bridge::send(Command::CancelTask { id: id.to_owned() });
+    if let Some(id) = task_param(ctx) {
+        bridge::send_action(Command::CancelTask { id }, ctx.defer());
     }
 }
 
 /// Open a task's inline edit drawer (pure UI state — no bridge round-trip).
 #[handler]
 fn edit_task(app: &mut App, ctx: &EventContext) {
-    app.editing_task = ctx.data("task").map(str::to_owned);
+    app.editing_task = task_param(ctx);
 }
 
 /// Close the edit drawer without saving.

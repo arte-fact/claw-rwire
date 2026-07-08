@@ -4,7 +4,7 @@
 //! in-flight tasks**, so a running task never sees its pipeline change. Renders from
 //! `App.workflow_steps` / `workflow_locked` / `editing_step`.
 
-use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
+use rwire::{El, ElementBuilder, Ev, EventContext, St, el, handler, renderer};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, StepForm, StepView, WorkspaceView};
@@ -225,11 +225,12 @@ fn controls(step: &StepView, index: usize, count: usize, locked: bool) -> Elemen
         .append(buttons)
 }
 
+/// A per-step action button. The step id rides in the handler's `param_bytes` (not a `data-*`
+/// attribute), so it doubles as the async-action identity — only the clicked row's button reflects.
 fn icon_btn(label: &str, on_click: rwire::HandlerSpec, step: &str) -> ElementBuilder {
     Button::secondary(label.to_owned())
         .size(ButtonSize::Sm)
-        .on_click(on_click)
-        .data("step", step)
+        .on_click(on_click.with_param_bytes(step.as_bytes().to_vec()))
 }
 
 /// The inline edit form for a step. Validator fields apply to loops (ignored for stages on save).
@@ -376,32 +377,45 @@ fn agent_label(agent: &Option<String>, members: &[(String, String)]) -> String {
 
 // ── handlers ────────────────────────────────────────────────────────────────────
 
+/// The step id a per-step button carries in its `param_bytes` (see [`icon_btn`]).
+fn step_param(ctx: &EventContext) -> Option<String> {
+    let id = String::from_utf8_lossy(ctx.param_bytes());
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.into_owned())
+    }
+}
+
 #[handler]
 fn add_stage(app: &mut App, ctx: &EventContext) {
-    let _ = ctx;
     if let Some(workspace) = app.active_workspace.clone() {
-        bridge::send(Command::AddStep {
-            workspace,
-            kind: "stage".to_owned(),
-        });
+        bridge::send_action(
+            Command::AddStep {
+                workspace,
+                kind: "stage".to_owned(),
+            },
+            ctx.defer(),
+        );
     }
 }
 
 #[handler]
 fn add_loop(app: &mut App, ctx: &EventContext) {
-    let _ = ctx;
     if let Some(workspace) = app.active_workspace.clone() {
-        bridge::send(Command::AddStep {
-            workspace,
-            kind: "loop".to_owned(),
-        });
+        bridge::send_action(
+            Command::AddStep {
+                workspace,
+                kind: "loop".to_owned(),
+            },
+            ctx.defer(),
+        );
     }
 }
 
 #[handler]
 pub(crate) fn toggle_edit(app: &mut App, ctx: &EventContext) {
-    if let Some(step) = ctx.data("step") {
-        let step = step.to_owned();
+    if let Some(step) = step_param(ctx) {
         app.editing_step = if app.editing_step.as_deref() == Some(step.as_str()) {
             None
         } else {
@@ -412,34 +426,37 @@ pub(crate) fn toggle_edit(app: &mut App, ctx: &EventContext) {
 
 #[handler]
 fn delete_step(app: &mut App, ctx: &EventContext) {
-    if let (Some(workspace), Some(id)) = (app.active_workspace.clone(), ctx.data("step")) {
+    if let (Some(workspace), Some(id)) = (app.active_workspace.clone(), step_param(ctx)) {
         app.editing_step = None;
-        bridge::send(Command::DeleteStep {
-            workspace,
-            id: id.to_owned(),
-        });
+        bridge::send_action(Command::DeleteStep { workspace, id }, ctx.defer());
     }
 }
 
 #[handler]
 fn move_up(app: &mut App, ctx: &EventContext) {
-    if let (Some(workspace), Some(id)) = (app.active_workspace.clone(), ctx.data("step")) {
-        bridge::send(Command::MoveStep {
-            workspace,
-            id: id.to_owned(),
-            up: true,
-        });
+    if let (Some(workspace), Some(id)) = (app.active_workspace.clone(), step_param(ctx)) {
+        bridge::send_action(
+            Command::MoveStep {
+                workspace,
+                id,
+                up: true,
+            },
+            ctx.defer(),
+        );
     }
 }
 
 #[handler]
 fn move_down(app: &mut App, ctx: &EventContext) {
-    if let (Some(workspace), Some(id)) = (app.active_workspace.clone(), ctx.data("step")) {
-        bridge::send(Command::MoveStep {
-            workspace,
-            id: id.to_owned(),
-            up: false,
-        });
+    if let (Some(workspace), Some(id)) = (app.active_workspace.clone(), step_param(ctx)) {
+        bridge::send_action(
+            Command::MoveStep {
+                workspace,
+                id,
+                up: false,
+            },
+            ctx.defer(),
+        );
     }
 }
 

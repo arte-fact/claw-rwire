@@ -99,7 +99,10 @@ pub(crate) fn diff_row(
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm, St::TextXs])
                 .append([
                     el(El::Span).st([St::TextMuted]).text(&file.path),
-                    crate::ui::widgets::ghost("restore", restore_file()).data("restore", &payload),
+                    crate::ui::widgets::ghost(
+                        "restore",
+                        restore_file().with_param_bytes(payload.into_bytes()),
+                    ),
                 ]),
         );
     }
@@ -478,10 +481,10 @@ fn status_chip(tool: &ToolCardView) -> ElementBuilder {
 #[handler]
 fn restore_file(app: &mut App, ctx: &EventContext) {
     let _ = app;
-    let Some(payload) = ctx.data("restore") else {
+    if ctx.param_bytes().is_empty() {
         return;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(ctx.param_bytes()) else {
         return;
     };
     let field = |key: &str| {
@@ -491,13 +494,16 @@ fn restore_file(app: &mut App, ctx: &EventContext) {
             .unwrap_or("")
             .to_owned()
     };
-    crate::bridge::send(crate::bridge::Command::RestoreFile {
-        workspace: field("workspace"),
-        task: field("task"),
-        repo: field("repo"),
-        sha: field("sha"),
-        path: field("path"),
-    });
+    crate::bridge::send_action(
+        crate::bridge::Command::RestoreFile {
+            workspace: field("workspace"),
+            task: field("task"),
+            repo: field("repo"),
+            sha: field("sha"),
+            path: field("path"),
+        },
+        ctx.defer(),
+    );
 }
 
 /// Open a check's full log (P4c): the badge carries `{run, repo, check}` as one JSON `data`

@@ -10,6 +10,12 @@ use crate::db::pipeline::{self, StepFields};
 use crate::db::tasks;
 use crate::state::{App, StepForm, StepView};
 
+use super::{Resolver, resolve_err, resolve_ok};
+
+/// Surfaced when an edit is attempted while the workspace has in-flight tasks (previously the edit
+/// silently reverted, which read as a no-op bug).
+const LOCKED: &str = "the pipeline is locked while tasks are in flight";
+
 /// Project the active workspace's configured steps + the edit lock.
 pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
     let steps: Vec<StepView> = pipeline::configured_steps(conn, workspace)
@@ -28,9 +34,16 @@ pub fn load(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: 
 }
 
 /// Append a step of `kind` (`stage`/`loop`) with sensible defaults.
-pub fn add(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str, kind: &str) {
+pub fn add(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    kind: &str,
+    resolver: Option<Resolver>,
+) {
     if locked(conn, workspace) {
-        return load(conn, shared, workspace);
+        load(conn, shared, workspace);
+        return resolve_err(resolver, LOCKED);
     }
     let configured = pipeline::configured_steps(conn, workspace).unwrap_or_default();
     let position = configured
@@ -64,8 +77,12 @@ pub fn add(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &
             on_exhaust: "human",
         }
     };
-    let _ = pipeline::insert(conn, &id, workspace, position, &fields);
+    let result = pipeline::insert(conn, &id, workspace, position, &fields);
     finish(conn, shared, workspace);
+    match result {
+        Ok(()) => resolve_ok(resolver),
+        Err(err) => resolve_err(resolver, format!("could not add the step: {err}")),
+    }
 }
 
 /// Persist edited fields for a step (normalized by kind).
@@ -121,12 +138,23 @@ pub fn update(
 }
 
 /// Delete a step.
-pub fn remove(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str, id: &str) {
+pub fn remove(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    id: &str,
+    resolver: Option<Resolver>,
+) {
     if locked(conn, workspace) {
-        return load(conn, shared, workspace);
+        load(conn, shared, workspace);
+        return resolve_err(resolver, LOCKED);
     }
-    let _ = pipeline::delete(conn, id);
+    let result = pipeline::delete(conn, id);
     finish(conn, shared, workspace);
+    match result {
+        Ok(()) => resolve_ok(resolver),
+        Err(err) => resolve_err(resolver, format!("could not delete the step: {err}")),
+    }
 }
 
 /// Move a step up or down by swapping positions with its neighbor.
@@ -136,9 +164,11 @@ pub fn move_step(
     workspace: &str,
     id: &str,
     up: bool,
+    resolver: Option<Resolver>,
 ) {
     if locked(conn, workspace) {
-        return load(conn, shared, workspace);
+        load(conn, shared, workspace);
+        return resolve_err(resolver, LOCKED);
     }
     let steps = pipeline::configured_steps(conn, workspace).unwrap_or_default();
     if let Some(index) = steps.iter().position(|step| step.id == id) {
@@ -153,6 +183,7 @@ pub fn move_step(
         }
     }
     finish(conn, shared, workspace);
+    resolve_ok(resolver);
 }
 
 fn locked(conn: &rusqlite::Connection, workspace: &str) -> bool {

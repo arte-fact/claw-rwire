@@ -33,7 +33,7 @@ use rwire::style::Style;
 use rwire::{
     At, CurrentRoute, El, ElementBuilder, Ev, Router, St, el, handler, icons, outlet, renderer,
 };
-use rwire_components::{Button, ButtonIntent, ButtonSize};
+use rwire_components::{ActionToasts, Button, ButtonIntent, ButtonSize};
 
 use crate::bridge::{self, Command};
 use crate::state::{App, Tab};
@@ -175,7 +175,14 @@ pub fn app() -> ElementBuilder {
             St::DisplayFlex,
             St::OverflowHidden,
         ])
-        .append([nav_drawer(), backdrop(), main_area()])
+        // A failed deferred action (steer, task run-control, deliver, release, …) slides in a toast
+        // here — fixed, bottom-right — carrying the resolver's message; it clears on retry.
+        .append([
+            nav_drawer(),
+            backdrop(),
+            main_area(),
+            ActionToasts::new().build(),
+        ])
 }
 
 // ── Drawer ───────────────────────────────────────────────────────────────────

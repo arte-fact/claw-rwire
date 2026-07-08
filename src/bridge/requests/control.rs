@@ -16,7 +16,9 @@ use crate::gitops;
 use crate::tools::{CompositeToolbox, RepoToolbox, Toolbox, ValidatorToolbox, VisitToolbox};
 use crate::workspace;
 
-use super::super::{Command, build_toolbox, data_dir, log_line, send};
+use super::super::{
+    Command, Resolver, build_toolbox, data_dir, log_line, resolve_err, resolve_ok, send,
+};
 use super::{ping, repo_name};
 
 /// Cap on the branch diff injected into the validation prompt.
@@ -291,31 +293,42 @@ pub(crate) fn on_validated(
 }
 
 /// The page's Deliver button — the human resolving the gate (or overriding a held verdict).
-pub(crate) fn deliver_now(conn: &Connection, shared: &SharedServerState, request_id: &str) {
+pub(crate) fn deliver_now(
+    conn: &Connection,
+    shared: &SharedServerState,
+    request_id: &str,
+    resolver: Option<Resolver>,
+) {
     let Ok(Some(request)) = db::requests::get(conn, request_id) else {
-        return;
+        return resolve_ok(resolver);
     };
     if request.status != RequestStatus::Validating {
-        return;
+        return resolve_ok(resolver);
     }
     if request.validation.is_none() {
         let _ = db::requests::set_validation(conn, request_id, "pass — delivered by you");
     }
     super::deliver(conn, shared, &request);
     refresh(conn, shared, &request);
+    resolve_ok(resolver);
 }
 
 /// Abandon an open request: cancel its open tasks, drop its branch in every touched repo
 /// (develop never saw the work), and close it.
-pub(crate) fn abandon(conn: &Connection, shared: &SharedServerState, request_id: &str) {
+pub(crate) fn abandon(
+    conn: &Connection,
+    shared: &SharedServerState,
+    request_id: &str,
+    resolver: Option<Resolver>,
+) {
     let Ok(Some(request)) = db::requests::get(conn, request_id) else {
-        return;
+        return resolve_ok(resolver);
     };
     if !matches!(
         request.status,
         RequestStatus::Planning | RequestStatus::Executing | RequestStatus::Validating
     ) {
-        return;
+        return resolve_ok(resolver);
     }
     for task in db::tasks::list_for_request(conn, request_id).unwrap_or_default() {
         if !matches!(
@@ -369,6 +382,7 @@ pub(crate) fn abandon(conn: &Connection, shared: &SharedServerState, request_id:
     };
     ping(conn, &request, &note);
     refresh(conn, shared, &request);
+    resolve_ok(resolver);
 }
 
 /// Send a `validating` request back to the agents to revise (G3): re-open the work as one fresh
@@ -473,12 +487,17 @@ pub(crate) fn request_changes(
 }
 
 /// Post-delivery rollback: `git revert -m1 <merge>` on develop per repo — honest history.
-pub(crate) fn rollback(conn: &Connection, shared: &SharedServerState, request_id: &str) {
+pub(crate) fn rollback(
+    conn: &Connection,
+    shared: &SharedServerState,
+    request_id: &str,
+    resolver: Option<Resolver>,
+) {
     let Ok(Some(request)) = db::requests::get(conn, request_id) else {
-        return;
+        return resolve_ok(resolver);
     };
     if request.status != RequestStatus::Delivered {
-        return;
+        return resolve_ok(resolver);
     }
     let root = workspace::dir_for(&data_dir(), &request.workspace_id);
     let mut errors: Vec<String> = Vec::new();
@@ -495,7 +514,7 @@ pub(crate) fn rollback(conn: &Connection, shared: &SharedServerState, request_id
             Err(err) => errors.push(format!("{}: {err}", repo_name(&repo.repo))),
         }
     }
-    if errors.is_empty() {
+    let outcome = if errors.is_empty() {
         let _ = db::requests::set_status(conn, request_id, RequestStatus::RolledBack);
         ping(
             conn,
@@ -506,6 +525,7 @@ pub(crate) fn rollback(conn: &Connection, shared: &SharedServerState, request_id
                 request.title
             ),
         );
+        Ok(())
     } else {
         ping(
             conn,
@@ -516,9 +536,13 @@ pub(crate) fn rollback(conn: &Connection, shared: &SharedServerState, request_id
                 errors.join("; ")
             ),
         );
-        super::super::tasks::surface(shared, format!("Rollback failed: {}", errors.join("; ")));
-    }
+        Err(format!("rollback failed: {}", errors.join("; ")))
+    };
     refresh(conn, shared, &request);
+    match outcome {
+        Ok(()) => resolve_ok(resolver),
+        Err(message) => resolve_err(resolver, message),
+    }
 }
 
 /// The filesystem path of a project's configured SSH deploy key (P5b), or `None` when unset — the
@@ -530,9 +554,14 @@ fn project_deploy_key(conn: &Connection, workspace: &str, project: &str) -> Opti
 
 /// The explicit, user-gated push: the request branch + develop to `origin` in every
 /// remote-bearing repo the request touched, each under its project's chosen deploy key (P5b).
-pub(crate) fn push(conn: &Connection, shared: &SharedServerState, request_id: &str) {
+pub(crate) fn push(
+    conn: &Connection,
+    shared: &SharedServerState,
+    request_id: &str,
+    resolver: Option<Resolver>,
+) {
     let Ok(Some(request)) = db::requests::get(conn, request_id) else {
-        return;
+        return resolve_ok(resolver);
     };
     let root = workspace::dir_for(&data_dir(), &request.workspace_id);
     let mut pushed = 0;
@@ -558,26 +587,34 @@ pub(crate) fn push(conn: &Connection, shared: &SharedServerState, request_id: &s
             Err(err) => errors.push(format!("{}: {err}", repo_name(&repo.repo))),
         }
     }
-    let note = if !errors.is_empty() {
-        super::super::tasks::surface(shared, format!("Push failed: {}", errors.join("; ")));
-        format!(
-            "⚠️ Push of **{}** hit trouble: {}",
-            request.title,
-            errors.join("; ")
-        )
-    } else if pushed == 0 {
-        format!(
-            "**{}**: no repo it touched has a remote — nothing to push.",
-            request.title
-        )
+    let outcome = if !errors.is_empty() {
+        let joined = errors.join("; ");
+        ping(
+            conn,
+            &request,
+            &format!("⚠️ Push of **{}** hit trouble: {joined}", request.title),
+        );
+        Err(format!("push failed: {joined}"))
     } else {
-        format!(
-            "⬆️ Pushed **{}** — develop + its branch to origin in {pushed} repo(s).",
-            request.title
-        )
+        let note = if pushed == 0 {
+            format!(
+                "**{}**: no repo it touched has a remote — nothing to push.",
+                request.title
+            )
+        } else {
+            format!(
+                "⬆️ Pushed **{}** — develop + its branch to origin in {pushed} repo(s).",
+                request.title
+            )
+        };
+        ping(conn, &request, &note);
+        Ok(())
     };
-    ping(conn, &request, &note);
     refresh(conn, shared, &request);
+    match outcome {
+        Ok(()) => resolve_ok(resolver),
+        Err(message) => resolve_err(resolver, message),
+    }
 }
 
 /// Release a project (P5a): CI-gate `develop` live, merge it into `main` **working-tree-less** (the
@@ -589,11 +626,15 @@ pub(crate) fn release_project(
     shared: &SharedServerState,
     workspace: &str,
     project: &str,
+    resolver: Option<Resolver>,
 ) {
     let root = workspace::dir_for(&data_dir(), workspace);
     let repo = format!("projects/{project}");
     let Ok(dir) = gitops::repo_dir(&root, &repo) else {
-        return;
+        return resolve_err(
+            resolver,
+            format!("{project}: its repository could not be opened"),
+        );
     };
 
     // Live floor gate: develop's checks must be green right now (the canonical tree is on develop).
@@ -607,14 +648,14 @@ pub(crate) fn release_project(
     );
     if !crate::ci::all_green(&checks) {
         let names = crate::ci::failed_names(&checks).join(", ");
-        super::super::tasks::surface(
-            shared,
+        return resolve_err(
+            resolver,
             format!("Release held for {project} — develop checks red: {names}"),
         );
-        return;
     }
 
-    let note = match gitops::release_repo(&dir, &format!("Release {project}: develop → main")) {
+    let outcome = match gitops::release_repo(&dir, &format!("Release {project}: develop → main"))
+    {
         Ok(gitops::MergeOutcome::Merged(_)) => {
             // Serve the released tree: refresh the detached `main` worktree + main-staging preview
             // in the background (a cold server start can take the full health deadline).
@@ -625,32 +666,30 @@ pub(crate) fn release_project(
                 project,
                 data_dir(),
             );
-            if !gitops::has_remote(&dir) {
-                format!(
-                    "🚀 Released {project} — develop → main. No origin set, so main advanced \
-                     locally only."
-                )
-            } else {
+            if gitops::has_remote(&dir) {
                 let key = project_deploy_key(conn, workspace, project);
-                match gitops::push_signed(&dir, "origin", &[gitops::MAIN], key.as_deref()) {
-                    Ok(_) => format!("🚀 Released {project} — develop → main, pushed to origin."),
-                    Err(err) => format!(
-                        "🚀 Released {project} — develop → main. ⚠️ Push to origin failed: {err}"
-                    ),
+                if let Err(err) =
+                    gitops::push_signed(&dir, "origin", &[gitops::MAIN], key.as_deref())
+                {
+                    log_line(format!(
+                        "release {project}: pushed main locally; origin push failed: {err}"
+                    ));
                 }
             }
+            Ok(())
         }
-        Ok(gitops::MergeOutcome::UpToDate) => {
-            format!("{project} is already released — main is up to date with develop.")
-        }
-        Ok(gitops::MergeOutcome::Conflict(paths)) => format!(
+        Ok(gitops::MergeOutcome::UpToDate) => Ok(()),
+        Ok(gitops::MergeOutcome::Conflict(paths)) => Err(format!(
             "Release of {project} conflicts on {} — resolve on develop first.",
             paths.join(", ")
-        ),
-        Err(err) => format!("Release of {project} failed: {err}"),
+        )),
+        Err(err) => Err(format!("Release of {project} failed: {err}")),
     };
-    super::super::tasks::surface(shared, note);
     super::view::load_project_detail(conn, shared, workspace, project, None);
+    match outcome {
+        Ok(()) => resolve_ok(resolver),
+        Err(message) => resolve_err(resolver, message),
+    }
 }
 
 /// Per-file restore from a run's diff (G3): put one path back to its pre-pass state. The
@@ -658,12 +697,12 @@ pub(crate) fn release_project(
 /// request takes the restore on its branch and the next pass commit records it.
 pub(crate) fn restore_file(
     conn: &Connection,
-    shared: &SharedServerState,
     workspace_id: &str,
     task_id: &str,
     repo: &str,
     sha: &str,
     path: &str,
+    resolver: Option<Resolver>,
 ) {
     let root = db::tasks::get(conn, task_id).ok().flatten().map_or_else(
         || workspace::dir_for(&data_dir(), workspace_id),
@@ -673,10 +712,11 @@ pub(crate) fn restore_file(
         .map_err(|err| err.to_string())
         .and_then(|dir| gitops::restore_file(&dir, sha, path).map_err(|err| err.to_string()));
     match outcome {
-        Ok(()) => log_line(format!("requests: restored {path} to before {sha:.12}")),
-        Err(err) => {
-            super::super::tasks::surface(shared, format!("Restore of {path} failed: {err}"));
+        Ok(()) => {
+            log_line(format!("requests: restored {path} to before {sha:.12}"));
+            resolve_ok(resolver);
         }
+        Err(err) => resolve_err(resolver, format!("could not restore {path}: {err}")),
     }
 }
 
