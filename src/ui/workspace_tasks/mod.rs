@@ -539,32 +539,28 @@ fn restart_button(task_id: &str) -> ElementBuilder {
 }
 
 #[handler]
-fn stop_task(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn stop_task(ctx: &EventContext) {
     if let Some(id) = ctx.data("task") {
         bridge::send(Command::StopTask { id: id.to_owned() });
     }
 }
 
 #[handler]
-fn start_task(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn start_task(ctx: &EventContext) {
     if let Some(id) = ctx.data("task") {
         bridge::send(Command::StartTask { id: id.to_owned() });
     }
 }
 
 #[handler]
-fn restart_task(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn restart_task(ctx: &EventContext) {
     if let Some(id) = ctx.data("task") {
         bridge::send(Command::RestartTask { id: id.to_owned() });
     }
 }
 
 #[handler]
-fn archive_task(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn archive_task(ctx: &EventContext) {
     if let Some(id) = ctx.data("task") {
         bridge::send(Command::ArchiveTask { id: id.to_owned() });
     }
@@ -629,8 +625,7 @@ fn parse_max_retries(ctx: &rwire::EventContext) -> Option<i64> {
 }
 
 #[handler]
-fn cancel_task(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn cancel_task(ctx: &EventContext) {
     if let Some(id) = ctx.data("task") {
         bridge::send(Command::CancelTask { id: id.to_owned() });
     }

@@ -49,8 +49,7 @@ fn create_form() -> ElementBuilder {
 }
 
 #[handler]
-fn create(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn create(ctx: &EventContext) {
     let name = ctx.field("name").unwrap_or_default().trim().to_owned();
     let template = WorkspaceTemplate::from_slug(ctx.field("template").unwrap_or_default());
     if !name.is_empty() {

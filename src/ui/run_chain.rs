@@ -11,7 +11,7 @@ use rwire_components::{Badge, BadgeFill, BadgeIntent, BadgeShape, Text};
 use serde_json::Value;
 
 use crate::diff::{DiffKind, line_diff};
-use crate::state::{App, RunView, ToolCardView};
+use crate::state::{RunView, ToolCardView};
 
 /// A run's **phase tag** for a thread entry: the role as a verb (`producer→Produce`,
 /// `validator→Review`, else `Stage`), plus the loop iteration when past the first.
@@ -476,8 +476,7 @@ fn status_chip(tool: &ToolCardView) -> ElementBuilder {
 
 /// Restore one file to its state before the pass that changed it (G3).
 #[handler]
-fn restore_file(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn restore_file(ctx: &EventContext) {
     let Some(payload) = ctx.data("restore") else {
         return;
     };
@@ -503,8 +502,7 @@ fn restore_file(app: &mut App, ctx: &EventContext) {
 /// Open a check's full log (P4c): the badge carries `{run, repo, check}` as one JSON `data`
 /// payload; forward it to the bridge, which fetches from `ci_logs` and fills the logs drawer.
 #[handler]
-fn open_check_log(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn open_check_log(ctx: &EventContext) {
     let Some(payload) = ctx.data("log") else {
         return;
     };

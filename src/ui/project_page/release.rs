@@ -8,7 +8,7 @@ use rwire_components::{
 };
 
 use crate::bridge::{self, Command};
-use crate::state::{App, ProjectDetail};
+use crate::state::ProjectDetail;
 
 /// How far develop leads main + a Release button, enabled only when a Release can run (develop
 /// leads main and the merge is conflict-free).
@@ -127,8 +127,7 @@ fn main_preview_link(detail: &ProjectDetail) -> Option<ElementBuilder> {
 }
 
 #[handler]
-fn release(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn release(ctx: &EventContext) {
     if let (Some(workspace), Some(project)) = (ctx.data("workspace"), ctx.data("project")) {
         bridge::send(Command::ReleaseProject {
             workspace: workspace.to_owned(),

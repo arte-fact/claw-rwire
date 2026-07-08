@@ -607,8 +607,7 @@ fn action_button(
 }
 
 #[handler]
-fn stop(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn stop(ctx: &EventContext) {
     if let Some(task) = ctx.data("task") {
         bridge::send(Command::StopTask {
             id: task.to_owned(),
@@ -617,8 +616,7 @@ fn stop(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn start(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn start(ctx: &EventContext) {
     if let Some(task) = ctx.data("task") {
         bridge::send(Command::StartTask {
             id: task.to_owned(),
@@ -627,8 +625,7 @@ fn start(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn restart(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn restart(ctx: &EventContext) {
     if let Some(task) = ctx.data("task") {
         bridge::send(Command::RestartTask {
             id: task.to_owned(),
@@ -637,8 +634,7 @@ fn restart(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn archive(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn archive(ctx: &EventContext) {
     if let Some(task) = ctx.data("task") {
         bridge::send(Command::ArchiveTask {
             id: task.to_owned(),
@@ -647,8 +643,7 @@ fn archive(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn unarchive(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn unarchive(ctx: &EventContext) {
     if let Some(task) = ctx.data("task") {
         bridge::send(Command::UnarchiveTask {
             id: task.to_owned(),
@@ -657,8 +652,7 @@ fn unarchive(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn cancel(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn cancel(ctx: &EventContext) {
     if let Some(task) = ctx.data("task") {
         bridge::send(Command::CancelTask {
             id: task.to_owned(),
@@ -667,8 +661,7 @@ fn cancel(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn approve(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn approve(ctx: &EventContext) {
     if let Some(task) = ctx.data("task") {
         bridge::send(Command::ReviewVerdict {
             task_id: task.to_owned(),
@@ -679,8 +672,7 @@ fn approve(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn reject(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn reject(ctx: &EventContext) {
     if let Some(task) = ctx.data("task") {
         bridge::send(Command::ReviewVerdict {
             task_id: task.to_owned(),
@@ -691,8 +683,7 @@ fn reject(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn request_changes(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn request_changes(ctx: &EventContext) {
     let Some(task) = ctx
         .field("task")
         .map(str::to_owned)

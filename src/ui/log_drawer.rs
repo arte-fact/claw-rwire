@@ -41,7 +41,6 @@ pub(crate) fn drawer(app: &App) -> ElementBuilder {
 
 /// Close the logs drawer — clears `App.log_drawer` via the bridge.
 #[handler]
-fn dismiss(app: &mut App) {
-    let _ = app;
+fn dismiss(_ctx: &rwire::EventContext) {
     bridge::send(Command::CloseLogDrawer);
 }

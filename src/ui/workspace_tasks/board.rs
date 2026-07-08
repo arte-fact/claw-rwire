@@ -318,8 +318,7 @@ fn card_actions(task: &TaskView) -> ElementBuilder {
 }
 
 #[handler]
-fn kanban_approve(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn kanban_approve(ctx: &EventContext) {
     if let Some(id) = ctx.data("task") {
         bridge::send(Command::ReviewVerdict {
             task_id: id.to_owned(),

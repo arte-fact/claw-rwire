@@ -471,16 +471,14 @@ fn request_changes_form(id: &str) -> ElementBuilder {
 }
 
 #[handler]
-fn deliver(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn deliver(ctx: &EventContext) {
     if let Some(id) = ctx.data("request") {
         bridge::send(Command::RequestDeliver { id: id.to_owned() });
     }
 }
 
 #[handler]
-fn request_changes(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn request_changes(ctx: &EventContext) {
     let Some(id) = ctx
         .field("request")
         .map(str::to_owned)
@@ -493,24 +491,21 @@ fn request_changes(app: &mut App, ctx: &EventContext) {
 }
 
 #[handler]
-fn abandon(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn abandon(ctx: &EventContext) {
     if let Some(id) = ctx.data("request") {
         bridge::send(Command::RequestAbandon { id: id.to_owned() });
     }
 }
 
 #[handler]
-fn rollback(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn rollback(ctx: &EventContext) {
     if let Some(id) = ctx.data("request") {
         bridge::send(Command::RequestRollback { id: id.to_owned() });
     }
 }
 
 #[handler]
-fn push(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn push(ctx: &EventContext) {
     if let Some(id) = ctx.data("request") {
         bridge::send(Command::RequestPush { id: id.to_owned() });
     }

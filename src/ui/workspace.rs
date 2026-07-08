@@ -238,8 +238,7 @@ fn auto_approve_toggle(workspace: &WorkspaceView) -> ElementBuilder {
 }
 
 #[handler]
-fn toggle_auto_approve(app: &mut App, ctx: &EventContext) {
-    let _ = app;
+fn toggle_auto_approve(ctx: &EventContext) {
     if let Some(id) = ctx.data("workspace") {
         let currently_on = ctx.data("on") == Some("1");
         bridge::send(Command::SetWorkspaceAutoApprove {
