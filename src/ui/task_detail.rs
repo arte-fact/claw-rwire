@@ -41,7 +41,7 @@ fn body(app: &App) -> ElementBuilder {
         .append([
             header(app, detail),
             page_thread(app, detail),
-            crate::ui::log_drawer::drawer(app),
+            crate::ui::log_drawer::drawer(),
         ])
 }
 

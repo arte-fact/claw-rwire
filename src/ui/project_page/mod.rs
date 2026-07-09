@@ -32,7 +32,7 @@ fn body(app: &App) -> ElementBuilder {
         remote::remote_panel(app, detail),
         tree::files_panel(detail),
         requests_panel(detail),
-        crate::ui::log_drawer::drawer(app),
+        crate::ui::log_drawer::drawer(),
     ];
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapLg, St::MaxW80rem])

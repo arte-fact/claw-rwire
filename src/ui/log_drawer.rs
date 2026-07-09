@@ -3,13 +3,19 @@
 //! pipeline — both render this one element. `App.log_drawer` is shared state and only one route
 //! mounts at a time, so a single shared drawer serves both surfaces.
 
-use rwire::{El, ElementBuilder, St, el, handler};
+use rwire::{El, ElementBuilder, St, el, handler, renderer};
 use rwire_components::{Drawer, DrawerPosition};
 
 use crate::bridge::{self, Command};
 use crate::state::App;
 
 /// The logs drawer element — open on `App.log_drawer`'s content, else closed.
+///
+/// Its own `#[renderer]` region, NOT a helper the page renderers call with `app`: a page
+/// renderer's derived deps can't see a field read inside a called helper, so `log_drawer`
+/// changes would re-render nothing — the drawer neither opened on a badge click nor closed
+/// on dismiss (a stale-open drawer then blocks the whole page behind its backdrop).
+#[renderer]
 pub(crate) fn drawer(app: &App) -> ElementBuilder {
     let body = match &app.log_drawer {
         Some(view) => el(El::Div)
