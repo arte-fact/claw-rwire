@@ -153,7 +153,7 @@ fn edit_form(task: &TaskView, members: &[(String, String)]) -> ElementBuilder {
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
                     assignee.build().st([St::Flex1]),
-                    accent_submit(icons::Icon::Check, "Save"),
+                    accent_submit(icons::Icon::Check, "Save", &save_edit()),
                     crate::ui::widgets::icon_button(icons::Icon::Close, close_edit(), false),
                 ]),
         ])

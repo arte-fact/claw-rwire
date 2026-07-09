@@ -6,14 +6,19 @@ use rwire::style::Style;
 use rwire::{El, ElementBuilder, St, el, handler, renderer};
 use rwire_components::Textarea;
 
-use super::{action, badge, card, drawer_form, field, labeled, row_head, submit};
+use super::{action_data, badge, card, drawer_form, field, labeled, row_head, submit};
 use crate::bridge::{self, Command};
 use crate::state::{App, Editing};
 
 #[renderer]
 pub fn column(app: &App) -> ElementBuilder {
     let mut items: Vec<ElementBuilder> = app.ssh_keys.iter().map(row).collect();
-    items.push(action("+ Add SSH key", open_new()).data("act", "add-ssh-key"));
+    items.push(action_data(
+        "+ Add SSH key",
+        open_new(),
+        "act",
+        "add-ssh-key",
+    ));
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append(items)
@@ -25,7 +30,7 @@ fn row(key: &crate::state::SshKeyView) -> ElementBuilder {
             .st([St::DisplayFlex, St::ItemsCenter, St::JustifyBetween])
             .append([
                 row_head(&key.name, badge("deploy key")),
-                action("Edit", open_edit()).data("name", &key.name),
+                action_data("Edit", open_edit(), "name", &key.name),
             ]),
         el(El::Div)
             .st([St::TextXs, St::TextMuted, St::Truncate])
@@ -44,8 +49,8 @@ pub fn form(app: &App, key: Option<&str>) -> ElementBuilder {
                 key_field("paste an OpenSSH private key"),
             ],
             [
-                submit("Add"),
-                action("Cancel", super::close()).data("act", "cancel"),
+                submit("Add", &save()),
+                action_data("Cancel", super::close(), "act", "cancel"),
             ],
         ),
         Some(name) => match app.ssh_keys.iter().find(|k| k.name == name) {
@@ -62,9 +67,9 @@ pub fn form(app: &App, key: Option<&str>) -> ElementBuilder {
                     key_field("leave blank to keep the stored key"),
                 ],
                 [
-                    submit("Save"),
-                    action("Delete", delete()).data("act", "delete"),
-                    action("Cancel", super::close()).data("act", "cancel"),
+                    submit("Save", &save()),
+                    action_data("Delete", delete(), "act", "delete"),
+                    action_data("Cancel", super::close(), "act", "cancel"),
                 ],
             ),
         },

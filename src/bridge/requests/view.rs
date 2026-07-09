@@ -301,13 +301,20 @@ pub(crate) fn set_project_remote(
     project: &str,
     origin: &str,
     deploy_key: &str,
+    resolver: Option<super::super::Resolver>,
 ) {
-    let _ = crate::project_settings::set(conn, workspace, project, origin, deploy_key);
+    let stored = crate::project_settings::set(conn, workspace, project, origin, deploy_key)
+        .map_err(|err| format!("could not store the remote: {err}"));
     let dir = crate::workspace::dir_for(&data_dir(), workspace)
         .join("projects")
         .join(project);
-    let _ = gitops::set_origin(&dir, origin);
+    let pointed = gitops::set_origin(&dir, origin)
+        .map_err(|err| format!("could not point origin at the URL: {err}"));
     load_project_detail(conn, shared, workspace, project, None);
+    match stored.and(pointed) {
+        Ok(()) => super::super::resolve_ok(resolver),
+        Err(message) => super::super::resolve_err(resolver, message),
+    }
 }
 
 /// Project the request page (`Command::LoadRequestDetail`).

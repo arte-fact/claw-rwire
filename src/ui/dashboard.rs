@@ -44,7 +44,7 @@ fn create_form() -> ElementBuilder {
                 .option(WorkspaceTemplate::RwireApp.slug(), "rwire app")
                 .value(WorkspaceTemplate::Blank.slug())
                 .build(),
-            submit("Create"),
+            submit("Create", &create()),
         ])
 }
 
@@ -54,7 +54,7 @@ fn create(app: &mut App, ctx: &EventContext) {
     let name = ctx.field("name").unwrap_or_default().trim().to_owned();
     let template = WorkspaceTemplate::from_slug(ctx.field("template").unwrap_or_default());
     if !name.is_empty() {
-        bridge::send(Command::CreateWorkspace { name, template });
+        bridge::send_action(Command::CreateWorkspace { name, template }, ctx.defer());
     }
 }
 

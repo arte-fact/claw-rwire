@@ -294,8 +294,15 @@ fn edit_form(step: &StepView, members: &[(String, String)], wid: &str) -> Elemen
                 "On exhaust",
                 select("on_exhaust", &exhaust_opts, &step.on_exhaust),
             ),
-            crate::ui::widgets::accent_submit(rwire::icons::Icon::Check, "Save step")
-                .st([St::SelfStart]),
+            // A plain flex row (not `SelfStart` on the button): the reflection wrapper is
+            // `display:contents`, so the button itself is the flex item and would stretch.
+            el(El::Div)
+                .st([St::DisplayFlex])
+                .append([crate::ui::widgets::accent_submit(
+                    rwire::icons::Icon::Check,
+                    "Save step",
+                    &save_step(),
+                )]),
         ])
 }
 
@@ -482,10 +489,14 @@ fn save_step(app: &mut App, ctx: &EventContext) {
             .unwrap_or(2),
         on_exhaust: ctx.field("on_exhaust").unwrap_or("human").to_owned(),
     };
-    app.editing_step = None;
-    bridge::send(Command::UpdateStep {
-        workspace,
-        id,
-        form,
-    });
+    // The editor stays open while the save runs — its button spins — and the bridge closes it
+    // on success (a failed save keeps the form up, errored, so the fields aren't lost).
+    bridge::send_action(
+        Command::UpdateStep {
+            workspace,
+            id,
+            form,
+        },
+        ctx.defer(),
+    );
 }

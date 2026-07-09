@@ -129,7 +129,7 @@ fn channels(app: &App) -> ElementBuilder {
             .st([St::DisplayFlex, St::ItemsCenter, St::JustifyBetween])
             .append([
                 row_head("Web", badge("built-in")),
-                action("Edit", open_channel()).data("act", "edit-channel"),
+                action_data("Edit", open_channel(), "act", "edit-channel"),
             ]),
         el(El::Div)
             .st([St::TextXs, St::TextMuted])
@@ -200,8 +200,8 @@ fn channel_form(app: &App) -> ElementBuilder {
         route_web(),
         [labeled("Concierge", picker.build())],
         [
-            submit("Save"),
-            action("Cancel", close()).data("act", "cancel"),
+            submit("Save", &route_web()),
+            action_data("Cancel", close(), "act", "cancel"),
         ],
     )
 }
@@ -250,7 +250,7 @@ pub(super) fn row_head(name: &str, badge: ElementBuilder) -> ElementBuilder {
 // Edit/Delete/Cancel/Add-row buttons and the drawer-form Save/Add submit use the shared
 // button family, so the System Map matches every other surface. Re-exported so existing
 // `super::{action, submit}` imports in this module keep resolving.
-pub(super) use crate::ui::widgets::{action, submit};
+pub(super) use crate::ui::widgets::{action_data, submit};
 
 /// A controlled text input that reports its value on `change` (blur). The agent form
 /// re-renders when discovered models arrive, so its inputs can't be uncontrolled.

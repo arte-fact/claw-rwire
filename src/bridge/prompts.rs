@@ -28,6 +28,7 @@ pub fn set_role(
     shared: &SharedServerState,
     run: RunKind,
     value: &str,
+    resolver: Option<super::Resolver>,
 ) {
     let key = match run {
         RunKind::Chat => super::ROLE_CONCIERGE_KEY,
@@ -35,10 +36,12 @@ pub fn set_role(
         RunKind::Planning => super::ROLE_PLANNER_KEY,
         RunKind::Validator => super::ROLE_VALIDATOR_KEY,
     };
-    if let Err(err) = db::settings::set(conn, key, value) {
-        super::log_line(format!("bridge: set role prompt failed: {err}"));
-    }
+    let result = db::settings::set(conn, key, value);
     load_settings(conn, shared);
+    match result {
+        Ok(()) => super::resolve_ok(resolver),
+        Err(err) => super::resolve_err(resolver, format!("could not save the role prompt: {err}")),
+    }
 }
 
 /// Compose and project the preview for `agent` (defaulting to the concierge) running as `run`,

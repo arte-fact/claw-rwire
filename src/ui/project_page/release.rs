@@ -38,9 +38,9 @@ pub(super) fn release_panel(detail: &ProjectDetail) -> ElementBuilder {
     }
     content.push(
         button
-            .on_click(release())
             .data("workspace", &detail.workspace_id)
-            .data("project", &detail.name),
+            .data("project", &detail.name)
+            .on_click(release()),
     );
     // A definite conflict blocks the Release — say so plainly (distinct from "nothing to release").
     if detail.release_conflict {

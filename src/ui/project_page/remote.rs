@@ -36,7 +36,7 @@ pub(super) fn remote_panel(app: &App, detail: &ProjectDetail) -> ElementBuilder 
             labeled("Deploy key", key_select.build()),
             el(El::Div)
                 .st([St::DisplayFlex, St::GapSm, St::ItemsCenter])
-                .append([submit("Save remote")]),
+                .append([submit("Save remote", &save())]),
         ]);
     super::panel("Remote", form)
 }
@@ -72,10 +72,13 @@ fn save(app: &mut App, ctx: &EventContext) {
         .unwrap_or_default()
         .trim()
         .to_owned();
-    bridge::send(Command::SetProjectRemote {
-        workspace,
-        project,
-        origin,
-        deploy_key,
-    });
+    bridge::send_action(
+        Command::SetProjectRemote {
+            workspace,
+            project,
+            origin,
+            deploy_key,
+        },
+        ctx.defer(),
+    );
 }

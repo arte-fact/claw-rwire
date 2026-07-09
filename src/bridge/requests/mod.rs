@@ -73,7 +73,7 @@ pub(crate) fn maybe_deliver(conn: &Connection, shared: &rwire::SharedServerState
 /// (a conflict with a parallel request, a dirty canonical tree) leaves the request open with
 /// the trouble surfaced — nothing half-delivers silently, and `develop` is never left
 /// mid-merge (the merge aborts).
-pub(super) fn deliver(conn: &Connection, shared: &rwire::SharedServerState, request: &Request) {
+pub(super) fn deliver(conn: &Connection, request: &Request) -> Result<(), String> {
     let root = workspace::dir_for(&data_dir(), &request.workspace_id);
     let tree = gitops::tree_root(&data_dir(), &request.workspace_id, &request.id);
     let repos = db::requests::repos_for(conn, &request.id).unwrap_or_default();
@@ -132,9 +132,9 @@ pub(super) fn deliver(conn: &Connection, shared: &rwire::SharedServerState, requ
             ),
         );
         // The operator is on the request page, not the chat — the error must reach the
-        // screen they clicked on (the audit's headline gap).
-        super::tasks::surface(shared, format!("Delivery failed: {}", errors.join("; ")));
-        return;
+        // screen they clicked on (the audit's headline gap): the Deliver button errors +
+        // the failure toasts, and pressing it again retries.
+        return Err(format!("delivery failed: {}", errors.join("; ")));
     }
     // Everything merged — the tree has served its purpose (G4). Tear it down and drop the
     // branch in repos the request composed but never touched (`-d`: trivially merged);
@@ -166,7 +166,7 @@ pub(super) fn deliver(conn: &Connection, shared: &rwire::SharedServerState, requ
         }
     }
     if let Err(err) = db::requests::set_status(conn, &request.id, RequestStatus::Delivered) {
-        return log_line(format!("requests: mark delivered {}: {err}", request.id));
+        return Err(format!("could not mark the request delivered: {err}"));
     }
     // Develop advanced — refresh each touched web project's staging preview so
     // `/preview/<ws>-staging-<project>` tracks `develop` (P2c). Background: a cold build must not
@@ -217,6 +217,7 @@ pub(super) fn deliver(conn: &Connection, shared: &rwire::SharedServerState, requ
         );
     }
     ping(conn, request, &receipt);
+    Ok(())
 }
 
 /// Parse a run's stored pass commits (`[{"repo","sha"}]`) into (repo, sha) pairs.

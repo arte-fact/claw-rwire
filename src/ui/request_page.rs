@@ -2,7 +2,7 @@
 //! status + branch, the ask verbatim, the task timeline with per-task diff activity, the
 //! repos it touched (branch point → merge), and the global diff against the branch point.
 
-use rwire::{At, Av, El, ElementBuilder, Ev, Link, St, el, handler, renderer};
+use rwire::{At, El, ElementBuilder, Ev, Link, St, el, handler, renderer};
 use rwire_components::{
     Badge, BadgeFill, BadgeIntent, BadgeShape, Breadcrumb, Button, ButtonSize, Input, StatusDot,
     StatusDotIntent, Text,
@@ -441,10 +441,12 @@ fn controls(detail: &RequestDetail) -> ElementBuilder {
 }
 
 fn control(button: Button, on_click: rwire::HandlerSpec, id: &str) -> ElementBuilder {
+    // The request id rides the Button builder — a `.data` chained after `on_click` would land
+    // on the reflection wrapper, which the click payload never reads.
     button
         .size(ButtonSize::Sm)
-        .on_click(on_click)
         .data("request", id)
+        .on_click(on_click)
 }
 
 /// The revise affordance for a `validating` request: a feedback field + submit that re-delegates the
@@ -465,8 +467,7 @@ fn request_changes_form(id: &str) -> ElementBuilder {
                 .st([St::Flex1, St::MinW0]),
             Button::outline("Request changes".to_owned())
                 .size(ButtonSize::Sm)
-                .build()
-                .at(At::Type, Av::Submit),
+                .submit(&request_changes()),
         ])
 }
 
@@ -489,7 +490,7 @@ fn request_changes(app: &mut App, ctx: &EventContext) {
         return;
     };
     let feedback = ctx.field("feedback").unwrap_or_default().trim().to_owned();
-    bridge::send(Command::RequestChanges { id, feedback });
+    bridge::send_action(Command::RequestChanges { id, feedback }, ctx.defer());
 }
 
 #[handler]

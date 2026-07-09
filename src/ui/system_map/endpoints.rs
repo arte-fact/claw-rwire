@@ -4,14 +4,19 @@
 use rwire::style::Style;
 use rwire::{El, ElementBuilder, St, el, handler, renderer};
 
-use super::{action, badge, card, drawer_form, field, row_head, submit};
+use super::{action_data, badge, card, drawer_form, field, row_head, submit};
 use crate::bridge::{self, Command};
 use crate::state::{App, Editing};
 
 #[renderer]
 pub fn column(app: &App) -> ElementBuilder {
     let mut items: Vec<ElementBuilder> = app.endpoints.iter().map(row).collect();
-    items.push(action("+ Add endpoint", open_new()).data("act", "add-endpoint"));
+    items.push(action_data(
+        "+ Add endpoint",
+        open_new(),
+        "act",
+        "add-endpoint",
+    ));
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append(items)
@@ -28,7 +33,7 @@ fn row(endpoint: &crate::state::EndpointView) -> ElementBuilder {
             .st([St::DisplayFlex, St::ItemsCenter, St::JustifyBetween])
             .append([
                 row_head(&endpoint.name, key),
-                action("Edit", open_edit()).data("name", &endpoint.name),
+                action_data("Edit", open_edit(), "name", &endpoint.name),
             ]),
         el(El::Div)
             .st([St::TextXs, St::TextMuted, St::Truncate])
@@ -48,8 +53,8 @@ pub fn form(app: &App, key: Option<&str>) -> ElementBuilder {
                 field("API key", "api_key", "", "optional", true),
             ],
             [
-                submit("Add"),
-                action("Cancel", super::close()).data("act", "cancel"),
+                submit("Add", &save()),
+                action_data("Cancel", super::close(), "act", "cancel"),
             ],
         ),
         Some(name) => match app.endpoints.iter().find(|e| e.name == name) {
@@ -67,9 +72,9 @@ pub fn form(app: &App, key: Option<&str>) -> ElementBuilder {
                     field("API key", "api_key", "", "leave blank to keep", true),
                 ],
                 [
-                    submit("Save"),
-                    action("Delete", delete()).data("act", "delete"),
-                    action("Cancel", super::close()).data("act", "cancel"),
+                    submit("Save", &save()),
+                    action_data("Delete", delete(), "act", "delete"),
+                    action_data("Cancel", super::close(), "act", "cancel"),
                 ],
             ),
         },

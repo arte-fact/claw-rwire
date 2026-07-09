@@ -313,10 +313,13 @@ fn save_checks(app: &mut App, ctx: &EventContext) {
         return;
     };
     let command = ctx.field("checks").unwrap_or_default().to_owned();
-    bridge::send(Command::SaveChecks {
-        workspace: id,
-        command,
-    });
+    bridge::send_action(
+        Command::SaveChecks {
+            workspace: id,
+            command,
+        },
+        ctx.defer(),
+    );
 }
 
 #[handler]
@@ -325,10 +328,13 @@ fn save_standards(app: &mut App, ctx: &EventContext) {
         return;
     };
     let content = ctx.field("standards").unwrap_or_default().to_owned();
-    bridge::send(Command::SaveStandards {
-        workspace: id,
-        content,
-    });
+    bridge::send_action(
+        Command::SaveStandards {
+            workspace: id,
+            content,
+        },
+        ctx.defer(),
+    );
 }
 
 #[handler]
@@ -337,10 +343,13 @@ fn save_brief(app: &mut App, ctx: &EventContext) {
         return;
     };
     let content = ctx.field("brief").unwrap_or_default().to_owned();
-    bridge::send(Command::SaveBrief {
-        workspace: id,
-        content,
-    });
+    bridge::send_action(
+        Command::SaveBrief {
+            workspace: id,
+            content,
+        },
+        ctx.defer(),
+    );
 }
 
 /// The Tasks section — the workspace's lane: a create form + the queued/running/finished
@@ -431,6 +440,7 @@ fn delete_block(armed: bool) -> ElementBuilder {
                     "Delete",
                     confirm_delete(),
                     true,
+                    None,
                 ),
                 crate::ui::widgets::action("Cancel", cancel_delete()),
             ])
@@ -440,6 +450,7 @@ fn delete_block(armed: bool) -> ElementBuilder {
             "Delete workspace",
             arm_delete(),
             true,
+            None,
         )
     }
 }

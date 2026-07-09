@@ -474,7 +474,7 @@ fn create_form(app: &App, workspace: &WorkspaceView) -> ElementBuilder {
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
                     assignee.build().st([St::Flex1]),
-                    accent_submit(icons::Icon::Plus, "Queue task"),
+                    accent_submit(icons::Icon::Plus, "Queue task", &submit_task()),
                 ]),
         ])
 }
@@ -621,15 +621,19 @@ fn submit_task(app: &mut App, ctx: &EventContext) {
         .field("schedule")
         .map(str::to_owned)
         .filter(|v| !v.trim().is_empty());
-    bridge::send(Command::CreateTask {
-        workspace,
-        title,
-        spec,
-        agent,
-        schedule,
-        max_retries: parse_max_retries(ctx),
-    });
-    app.new_task_panel_open = false; // close the drawer once the task is queued
+    // The drawer stays open while the create runs — its button spins — and the bridge closes it
+    // on success (a rejected create keeps the drawer up, errored, so the fields aren't lost).
+    bridge::send_action(
+        Command::CreateTask {
+            workspace,
+            title,
+            spec,
+            agent,
+            schedule,
+            max_retries: parse_max_retries(ctx),
+        },
+        ctx.defer(),
+    );
 }
 
 /// Parse the optional `max_retries` form field: a non-negative integer, or `None` (blank /
@@ -663,9 +667,10 @@ fn close_edit(app: &mut App, ctx: &EventContext) {
     app.editing_task = None;
 }
 
-/// Save the edit drawer: post the changes and close it.
+/// Save the edit drawer: post the changes; the bridge closes the drawer on success.
 #[handler]
 fn save_edit(app: &mut App, ctx: &EventContext) {
+    let _ = app;
     let Some(id) = ctx.field("id").map(str::to_owned).filter(|v| !v.is_empty()) else {
         return;
     };
@@ -690,14 +695,18 @@ fn save_edit(app: &mut App, ctx: &EventContext) {
         .field("schedule")
         .map(str::to_owned)
         .filter(|v| !v.trim().is_empty());
-    bridge::send(Command::UpdateTask {
-        id,
-        title,
-        spec,
-        agent,
-        schedule,
-        max_retries: parse_max_retries(ctx),
-        blockers,
-    });
-    app.editing_task = None;
+    // The edit drawer stays open while the update runs — its button spins — and the bridge
+    // closes it on success (a rejected edit keeps the form up, errored, with the fields intact).
+    bridge::send_action(
+        Command::UpdateTask {
+            id,
+            title,
+            spec,
+            agent,
+            schedule,
+            max_retries: parse_max_retries(ctx),
+            blockers,
+        },
+        ctx.defer(),
+    );
 }

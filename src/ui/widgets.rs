@@ -58,58 +58,72 @@ pub fn action(label: &str, on_click: HandlerSpec) -> ElementBuilder {
     Button::secondary(label.to_string()).on_click(on_click)
 }
 
+/// [`action`], carrying one `data-*` payload for its click handler (`ctx.data(key)`). The
+/// attribute rides the `Button` builder — a `.data(...)` chained after `on_click` lands on the
+/// action-reflection wrapper, which the client's click payload never reads.
+pub fn action_data(label: &str, on_click: HandlerSpec, key: &str, value: &str) -> ElementBuilder {
+    Button::secondary(label.to_string())
+        .data(key, value)
+        .on_click(on_click)
+}
+
 /// A small secondary button (Clear, …) — the same look as [`action`].
 pub fn clear_button(label: &str, on_click: HandlerSpec) -> ElementBuilder {
     action(label, on_click)
 }
 
-/// A bordered form-submit button (`type=submit`) — the design-system outline intent.
-pub fn submit(label: &str) -> ElementBuilder {
+/// A bordered form-submit button (`type=submit`) — the design-system outline intent. Pass the
+/// form's submit `HandlerSpec` (the same one bound via `.on(Ev::Submit, …)`): the button reflects
+/// that action's lifecycle — spinner while the bridge works, destructive + tooltip on failure.
+pub fn submit(label: &str, action: &HandlerSpec) -> ElementBuilder {
     Button::outline(label.to_owned())
         .size(ButtonSize::Sm)
-        .build()
-        .at(At::Type, Av::Submit)
+        .submit(action)
 }
 
-/// A bordered icon+label action (`type=button`). `danger` colours it as destructive.
+/// A bordered icon+label action (`type=button`). `danger` colours it as destructive; `data`
+/// optionally carries one `data-*` payload for the handler (on the button, like [`action_data`]).
 pub fn action_icon(
     icon: icons::Icon,
     label: &str,
     on_click: HandlerSpec,
     danger: bool,
+    data: Option<(&str, &str)>,
 ) -> ElementBuilder {
-    if danger {
-        return Button::destructive(label.to_string())
-            .icon(icon)
-            .on_click(on_click);
-    }
-    Button::secondary(label.to_string())
-        .icon(icon)
-        .on_click(on_click)
+    let button = if danger {
+        Button::destructive(label.to_string())
+    } else {
+        Button::secondary(label.to_string())
+    };
+    let button = match data {
+        Some((key, value)) => button.data(key, value),
+        None => button,
+    };
+    button.icon(icon).on_click(on_click)
 }
 
 /// The primary filled-accent submit button (`type=submit`) — the composer-Send style, for
-/// the one main action on a surface.
-pub fn accent_submit(icon: icons::Icon, label: &str) -> ElementBuilder {
-    Button::default()
+/// the one main action on a surface. Like [`submit`], it reflects the form's submit action.
+pub fn accent_submit(icon: icons::Icon, label: &str, action: &HandlerSpec) -> ElementBuilder {
+    Button::primary(label.to_owned())
         .size(ButtonSize::Sm)
-        .build()
-        .at(At::Type, Av::Submit)
-        .append([icons::icon_sized(icon, 14), el(El::Span).text(label)])
+        .icon(icon)
+        .submit(action)
 }
 
 /// A bare, subtle icon-only button (`type=button`) for inline row actions. `danger`
-/// colours it as destructive.
+/// colours it as destructive. Icon and hover ride the `Button` builder — anything chained
+/// after `on_click` would land on the action-reflection wrapper, not the button.
 pub fn icon_button(icon: icons::Icon, on_click: HandlerSpec, danger: bool) -> ElementBuilder {
     Button::ghost("")
         .size(ButtonSize::Sm)
-        .on_click(on_click)
+        .icon(icon)
         .hover(if danger {
             [St::TextError]
         } else {
             [St::TextHigh]
         })
-        .append([icons::icon_sized(icon, 14)])
+        .on_click(on_click)
 }
 
 /// An inline markdown-file editor — a monospace textarea + accent save, the shape both
@@ -124,6 +138,7 @@ pub fn md_editor(
     save: HandlerSpec,
     save_label: &str,
 ) -> ElementBuilder {
+    let save_button = accent_submit(icons::Icon::Check, save_label, &save);
     el(El::Form)
         .on(rwire::Ev::Submit, save)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
@@ -146,9 +161,7 @@ pub fn md_editor(
                 ])
                 .focus([St::BorderAccent])
                 .text(content),
-            el(El::Div)
-                .st([St::DisplayFlex])
-                .append([accent_submit(icons::Icon::Check, save_label)]),
+            el(El::Div).st([St::DisplayFlex]).append([save_button]),
         ])
 }
 

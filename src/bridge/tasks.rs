@@ -412,11 +412,16 @@ pub struct Create {
 
 /// Create a task in its workspace, assigned to `agent` (a member; `None` = the owner), then
 /// re-project the lane.
-pub fn create(conn: &rusqlite::Connection, shared: &SharedServerState, new: Create) {
+pub fn create(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    new: Create,
+    resolver: Option<Resolver>,
+) {
     let title = new.title.trim();
     let spec = new.spec.trim();
     if title.is_empty() || spec.is_empty() {
-        return surface(shared, "a task needs a title and a spec".to_owned());
+        return resolve_err(resolver, "a task needs a title and a spec");
     }
     // A negative retry budget is meaningless — treat it as "use the global default".
     let max_retries = new.max_retries.filter(|n| *n >= 0);
@@ -428,10 +433,10 @@ pub fn create(conn: &rusqlite::Connection, shared: &SharedServerState, new: Crea
     if let Some(cron) = &schedule
         && crate::schedule::Cron::parse(cron).is_none()
     {
-        return surface(shared, format!("not a valid cron schedule: {cron:?}"));
+        return resolve_err(resolver, format!("not a valid cron schedule: {cron:?}"));
     }
     let Ok(id) = crate::id::new_id() else {
-        return surface(shared, "could not mint a task id".to_owned());
+        return resolve_err(resolver, "could not mint a task id");
     };
     // A named assignee must be a member of the workspace; `None` stores NULL and defaults to
     // the owner at run time.
@@ -439,10 +444,7 @@ pub fn create(conn: &rusqlite::Connection, shared: &SharedServerState, new: Crea
     if let Some(a) = &agent {
         let members = workspaces::members_of(conn, &new.workspace).unwrap_or_default();
         if !members.iter().any(|m| m == a) {
-            return surface(
-                shared,
-                "the assignee must be a member of the workspace".into(),
-            );
+            return resolve_err(resolver, "the assignee must be a member of the workspace");
         }
     }
     if let Err(err) = tasks::create(
@@ -458,9 +460,16 @@ pub fn create(conn: &rusqlite::Connection, shared: &SharedServerState, new: Crea
             max_retries,
         },
     ) {
-        return surface(shared, format!("create task: {err}"));
+        return resolve_err(resolver, format!("create task: {err}"));
     }
     load(conn, shared, &new.workspace);
+    // Close the create drawer — the UI keeps it open (spinning) while the create runs, so a
+    // rejected create leaves the form up with the user's fields intact.
+    shared.update_shared_changed::<App>(
+        ChangeSet::from_fields(&[App::FIELD_NEW_TASK_PANEL_OPEN]),
+        |app| app.new_task_panel_open = false,
+    );
+    resolve_ok(resolver);
 }
 
 /// An edit-drawer change to a task — the fields the user can rewrite from the board.
@@ -476,19 +485,25 @@ pub struct Edit {
 
 /// Apply an [`Edit`] to a task, validating the assignee is a member, the schedule is valid
 /// cron, and each blocker is a distinct task in the same workspace. Re-projects on success.
-pub fn update(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str, edit: Edit) {
+pub fn update(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    id: &str,
+    edit: Edit,
+    resolver: Option<Resolver>,
+) {
     let title = edit.title.trim();
     let spec = edit.spec.trim();
     if title.is_empty() || spec.is_empty() {
-        return surface(shared, "a task needs a title and a spec".to_owned());
+        return resolve_err(resolver, "a task needs a title and a spec");
     }
     let Ok(Some(task)) = tasks::get(conn, id) else {
-        return;
+        return resolve_ok(resolver);
     };
     // Editing a running task is a no-op on the live run (its messages were built at dispatch) —
     // refuse, so the user stops it first rather than silently editing nothing.
     if task.status == TaskStatus::Running {
-        return surface(shared, "stop the task before editing it".to_owned());
+        return resolve_err(resolver, "stop the task before editing it");
     }
     let schedule = edit
         .schedule
@@ -497,17 +512,14 @@ pub fn update(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str,
     if let Some(cron) = &schedule
         && crate::schedule::Cron::parse(cron).is_none()
     {
-        return surface(shared, format!("not a valid cron schedule: {cron:?}"));
+        return resolve_err(resolver, format!("not a valid cron schedule: {cron:?}"));
     }
     let agent = edit.agent.filter(|value| !value.trim().is_empty());
     let members = workspaces::members_of(conn, &task.workspace_id).unwrap_or_default();
     if let Some(a) = &agent
         && !members.iter().any(|m| m == a)
     {
-        return surface(
-            shared,
-            "the assignee must be a member of the workspace".into(),
-        );
+        return resolve_err(resolver, "the assignee must be a member of the workspace");
     }
     // Blockers: distinct from self, and tasks in the same workspace.
     let mut valid = Vec::new();
@@ -518,8 +530,8 @@ pub fn update(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str,
         match tasks::get(conn, &blocker).ok().flatten() {
             Some(b) if b.workspace_id == task.workspace_id => valid.push(blocker),
             _ => {
-                return surface(
-                    shared,
+                return resolve_err(
+                    resolver,
                     format!("blocker {blocker:?} is not in this workspace"),
                 );
             }
@@ -535,12 +547,19 @@ pub fn update(conn: &rusqlite::Connection, shared: &SharedServerState, id: &str,
         schedule.as_deref(),
         max_retries,
     ) {
-        return surface(shared, format!("update task: {err}"));
+        return resolve_err(resolver, format!("update task: {err}"));
     }
     if let Err(err) = tasks::set_blockers(conn, id, &valid) {
-        return surface(shared, format!("set blockers: {err}"));
+        return resolve_err(resolver, format!("set blockers: {err}"));
     }
     load(conn, shared, &task.workspace_id);
+    // Close the edit drawer — the UI keeps it open (spinning) while the update runs, so a
+    // rejected edit leaves the form up with the user's fields intact.
+    shared
+        .update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_EDITING_TASK]), |app| {
+            app.editing_task = None
+        });
+    resolve_ok(resolver);
 }
 
 /// Cancel a task and re-project its workspace's lane.
@@ -613,7 +632,9 @@ pub fn restart(
     let root = super::requests::task_root(conn, &super::data_dir(), &task);
     let reset_errors = crate::gitops::reset_task_tree(conn, &root, id);
     if !reset_errors.is_empty() {
-        surface(
+        // The restart still proceeds — a partial reset is a warning (the new attempt may
+        // inherit dirty files), not a failure of the restart action itself.
+        super::surface_error(
             shared,
             format!(
                 "restart: tree reset incomplete: {}",
@@ -790,20 +811,6 @@ pub(super) fn agent_names(conn: &rusqlite::Connection) -> Vec<(String, String)> 
         .into_iter()
         .map(|a| (a.id, a.name))
         .collect()
-}
-
-/// Queue a failure toast (L6): capped, newest last — the shell renders the stack on every
-/// page, each dismissable. (`App.error` stays the admin forms' inline channel.)
-pub(crate) fn surface(shared: &SharedServerState, error: String) {
-    super::log_line(format!("bridge tasks: {error}"));
-    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_TOASTS]), move |app| {
-        let id = app.toasts.iter().map(|t| t.id).max().unwrap_or(0) + 1;
-        app.toasts
-            .push(crate::state::ToastView { id, message: error });
-        if app.toasts.len() > 5 {
-            app.toasts.remove(0);
-        }
-    });
 }
 
 #[cfg(test)]

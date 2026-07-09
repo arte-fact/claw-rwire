@@ -277,7 +277,9 @@ pub(crate) fn on_validated(
             refresh(conn, shared, &request);
             return;
         }
-        super::deliver(conn, shared, &request);
+        // Auto-delivery after a passed review: a failure already pings the origin chat and
+        // logs (there's no control mid-flight to error).
+        let _ = super::deliver(conn, &request);
     } else {
         ping(
             conn,
@@ -308,9 +310,12 @@ pub(crate) fn deliver_now(
     if request.validation.is_none() {
         let _ = db::requests::set_validation(conn, request_id, "pass — delivered by you");
     }
-    super::deliver(conn, shared, &request);
+    let outcome = super::deliver(conn, &request);
     refresh(conn, shared, &request);
-    resolve_ok(resolver);
+    match outcome {
+        Ok(()) => resolve_ok(resolver),
+        Err(message) => resolve_err(resolver, message),
+    }
 }
 
 /// Abandon an open request: cancel its open tasks, drop its branch in every touched repo
@@ -370,7 +375,7 @@ pub(crate) fn abandon(
             request.title
         )
     } else {
-        super::super::tasks::surface(
+        super::super::surface_error(
             shared,
             format!("Abandon hit trouble: {}", errors.join("; ")),
         );
@@ -396,12 +401,14 @@ pub(crate) fn request_changes(
     shared: &SharedServerState,
     request_id: &str,
     feedback: &str,
+    resolver: Option<Resolver>,
 ) {
     let Ok(Some(request)) = db::requests::get(conn, request_id) else {
-        return;
+        return resolve_ok(resolver);
     };
     if request.status != RequestStatus::Validating {
-        return; // resolved (delivered/abandoned) since the page loaded — ignore a stale click
+        // Resolved (delivered/abandoned) since the page loaded — ignore a stale click.
+        return resolve_ok(resolver);
     }
     let feedback = feedback.trim();
     // Reuse the producer that built the work: the most recent non-plan task's agent (its build
@@ -427,9 +434,7 @@ pub(crate) fn request_changes(
         request.ask
     );
     let Ok(task_id) = crate::id::new_id() else {
-        return log_line(format!(
-            "requests: request_changes id for {request_id} failed"
-        ));
+        return resolve_err(resolver, "could not mint the revision task's id");
     };
     if let Err(err) = db::tasks::create(
         conn,
@@ -444,14 +449,16 @@ pub(crate) fn request_changes(
             max_retries: None,
         },
     ) {
-        return log_line(format!(
-            "requests: request_changes create {request_id}: {err}"
-        ));
+        return resolve_err(
+            resolver,
+            format!("could not create the revision task: {err}"),
+        );
     }
     if let Err(err) = db::tasks::set_request(conn, &task_id, request_id) {
-        return log_line(format!(
-            "requests: request_changes attach {request_id}: {err}"
-        ));
+        return resolve_err(
+            resolver,
+            format!("could not attach the revision task to the request: {err}"),
+        );
     }
     // Record the trail on the page, then re-arm: `Executing` restores the request's lane and
     // re-enables `maybe_deliver`'s re-validation when the new pass lands.
@@ -465,9 +472,10 @@ pub(crate) fn request_changes(
     };
     let _ = db::requests::set_validation(conn, request_id, &trail);
     if let Err(err) = db::requests::set_status(conn, request_id, RequestStatus::Executing) {
-        return log_line(format!(
-            "requests: request_changes activate {request_id}: {err}"
-        ));
+        return resolve_err(
+            resolver,
+            format!("could not re-open the request for revision: {err}"),
+        );
     }
     let note = if feedback.is_empty() {
         format!(
@@ -484,6 +492,7 @@ pub(crate) fn request_changes(
     };
     ping(conn, &request, &note);
     refresh(conn, shared, &request);
+    resolve_ok(resolver);
 }
 
 /// Post-delivery rollback: `git revert -m1 <merge>` on develop per repo — honest history.

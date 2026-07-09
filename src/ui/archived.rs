@@ -101,11 +101,8 @@ fn button(
     chat_id: Option<&str>,
     danger: bool,
 ) -> ElementBuilder {
-    let button = crate::ui::widgets::action_icon(icon, label, on_click, danger);
-    match chat_id {
-        Some(id) => button.data("chat", id),
-        None => button,
-    }
+    let data = chat_id.map(|id| ("chat", id));
+    crate::ui::widgets::action_icon(icon, label, on_click, danger, data)
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────

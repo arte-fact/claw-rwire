@@ -21,6 +21,8 @@ use crate::state::App;
 use crate::workspace::ops;
 use crate::workspace::{self, WorkspaceError};
 
+use super::{Resolver, resolve_err, resolve_ok};
+
 /// How deep the Files tree scans, and the build-output dirs it never walks (matching
 /// `workspace::ops::list_files`; the dot-prefixed noise — `.git`, `.cache`, `.venv`, `.isola` — is
 /// already skipped by `FsSnapshot`).
@@ -60,12 +62,12 @@ fn resolve(conn: &rusqlite::Connection, workspace_id: &str) -> Option<(PathBuf, 
 /// the dir exists before `scan`'s `canonicalize`.
 pub fn open_files(conn: &rusqlite::Connection, shared: &SharedServerState, workspace: &str) {
     let Some((dir, _)) = resolve(conn, workspace) else {
-        return super::tasks::surface(shared, "Unknown workspace.".to_owned());
+        return super::surface_error(shared, "Unknown workspace.".to_owned());
     };
     let snap = match FsSnapshot::scan_ignoring(&dir, FILES_SCAN_DEPTH, FILES_IGNORE) {
         Ok(snap) => snap,
         Err(err) => {
-            return super::tasks::surface(shared, format!("Couldn't open the files: {err}"));
+            return super::surface_error(shared, format!("Couldn't open the files: {err}"));
         }
     };
     if let Ok(mut map) = snapshot_lock().lock() {
@@ -121,13 +123,17 @@ pub fn save_checks(
     shared: &SharedServerState,
     workspace: &str,
     command: &str,
+    resolver: Option<Resolver>,
 ) {
-    let _ = crate::db::settings::set(conn, &checks_key(workspace), command.trim());
+    if let Err(err) = crate::db::settings::set(conn, &checks_key(workspace), command.trim()) {
+        return resolve_err(resolver, format!("could not save the check command: {err}"));
+    }
     let command = command.trim().to_owned();
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_WORKSPACE_CHECKS]),
         move |app| app.workspace_checks = command,
     );
+    resolve_ok(resolver);
 }
 
 /// Save a workspace's `STANDARDS.md` — the validator standards memo (R5) — then re-project it.
@@ -136,18 +142,20 @@ pub fn save_standards(
     shared: &SharedServerState,
     workspace: &str,
     content: &str,
+    resolver: Option<Resolver>,
 ) {
     let Some((dir, _)) = resolve(conn, workspace) else {
-        return;
+        return resolve_err(resolver, "unknown workspace");
     };
     if let Err(err) = ops::write_text(&dir, "STANDARDS.md", content) {
-        return super::tasks::surface(shared, message(&err));
+        return resolve_err(resolver, message(&err));
     }
     let content = content.to_owned();
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_WORKSPACE_STANDARDS]),
         move |app| app.workspace_standards = content,
     );
+    resolve_ok(resolver);
 }
 
 /// Save a workspace's `AGENT.md` brief from the Overview editor (a normal file write at the
@@ -157,18 +165,20 @@ pub fn save_brief(
     shared: &SharedServerState,
     workspace: &str,
     content: &str,
+    resolver: Option<Resolver>,
 ) {
     let Some((dir, _)) = resolve(conn, workspace) else {
-        return;
+        return resolve_err(resolver, "unknown workspace");
     };
     if let Err(err) = ops::write_text(&dir, "AGENT.md", content) {
-        return super::tasks::surface(shared, message(&err));
+        return resolve_err(resolver, message(&err));
     }
     let content = content.to_owned();
     shared.update_shared_changed::<App>(
         ChangeSet::from_fields(&[App::FIELD_WORKSPACE_BRIEF]),
         move |app| app.workspace_brief = content,
     );
+    resolve_ok(resolver);
 }
 
 /// A user-facing message for a workspace error.

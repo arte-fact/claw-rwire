@@ -12,6 +12,8 @@ use crate::state::{
 };
 use crate::workspace;
 
+use super::surface_error;
+
 /// Load the registry into the shared read-models. Called at boot and after each edit.
 pub fn project_registry(conn: &rusqlite::Connection, shared: &SharedServerState) {
     let endpoint_views: Vec<EndpointView> = endpoints::list(conn)
@@ -222,22 +224,24 @@ pub fn create_workspace(
     shared: &SharedServerState,
     name: &str,
     template: super::WorkspaceTemplate,
+    resolver: Option<super::Resolver>,
 ) {
     let name = name.trim();
     if name.is_empty() {
-        return surface_error(shared, "workspace name can't be empty".to_owned());
+        return super::resolve_err(resolver, "workspace name can't be empty");
     }
     let id = match crate::id::new_id() {
         Ok(id) => id,
-        Err(err) => return surface_error(shared, format!("create workspace: {err}")),
+        Err(err) => return super::resolve_err(resolver, format!("create workspace: {err}")),
     };
     if let Err(err) = workspaces::create(conn, &id, name) {
-        return surface_error(shared, format!("create workspace: {err}"));
+        return super::resolve_err(resolver, format!("create workspace: {err}"));
     }
     if template == super::WorkspaceTemplate::RwireApp {
         super::template::scaffold_rwire_app(&super::data_dir(), &id, name);
     }
     project_registry(conn, shared);
+    super::resolve_ok(resolver);
 }
 
 /// Rename a workspace (its Team tab).
@@ -441,11 +445,4 @@ pub fn discover_models(conn: &rusqlite::Connection, shared: &SharedServerState, 
         ChangeSet::from_fields(&[App::FIELD_ENDPOINT_MODELS]),
         |app| app.endpoint_models = models,
     );
-}
-
-fn surface_error(shared: &SharedServerState, message: String) {
-    crate::bridge::log_line(format!("bridge admin: {message}"));
-    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_ERROR]), |app| {
-        app.error = Some(message);
-    });
 }

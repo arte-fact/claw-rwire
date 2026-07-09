@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 
-use rwire::{At, Av, El, ElementBuilder, Ev, EventContext, St, el, handler, renderer};
+use rwire::{El, ElementBuilder, Ev, EventContext, St, el, handler, renderer};
 use rwire_components::{
     Avatar, AvatarSize, Breadcrumb, Button, ButtonSize, ChatAuthor, ChatEntry, ChatItem,
     ChatItemCtx, ChatScroll, ChatTag, ChatTranscript, Input, StatusDot, StatusDotIntent, Text,
@@ -587,8 +587,7 @@ pub(crate) fn review_gate(task_id: &str) -> ElementBuilder {
                         .st([St::Flex1]),
                     Button::outline("Request changes".to_owned())
                         .size(ButtonSize::Xs)
-                        .build()
-                        .at(At::Type, Av::Submit),
+                        .submit(&request_changes()),
                 ]),
         ])
 }
@@ -708,9 +707,12 @@ fn request_changes(app: &mut App, ctx: &EventContext) {
         return;
     };
     let feedback = ctx.field("feedback").unwrap_or_default().trim().to_owned();
-    bridge::send(Command::ReviewVerdict {
-        task_id: task,
-        decision: "revise".to_owned(),
-        feedback,
-    });
+    bridge::send_action(
+        Command::ReviewVerdict {
+            task_id: task,
+            decision: "revise".to_owned(),
+            feedback,
+        },
+        ctx.defer(),
+    );
 }

@@ -457,6 +457,17 @@ pub fn send_action(command: Command, resolver: Resolver) {
     }
 }
 
+/// Surface an operational error on the global banner (`App.error` — rendered on every page,
+/// dismissable, single-slot). For failures with no in-flight control to error: admin CRUD, and
+/// actions that *completed* with trouble (an abandon whose branch drop partially failed). A
+/// failure of the action itself goes through its [`Resolver`] instead.
+pub(crate) fn surface_error(shared: &SharedServerState, message: String) {
+    log_line(format!("bridge: {message}"));
+    shared.update_shared_changed::<App>(ChangeSet::from_fields(&[App::FIELD_ERROR]), |app| {
+        app.error = Some(message);
+    });
+}
+
 /// Resolve a deferred action as succeeded (returns the triggering control to idle). No-op when the
 /// command carried no resolver (was posted via [`send`], not [`send_action`]).
 pub(crate) fn resolve_ok(resolver: Option<Resolver>) {
@@ -638,7 +649,7 @@ fn handle(
         Command::LoadAgentTools { id } => admin::load_agent_tools(conn, shared, &id),
         Command::SetWebAgent { id } => admin::set_web_agent(conn, shared, &id),
         Command::CreateWorkspace { name, template } => {
-            admin::create_workspace(conn, shared, &name, template)
+            admin::create_workspace(conn, shared, &name, template, resolver)
         }
         Command::RenameWorkspace { id, name } => admin::rename_workspace(conn, shared, &id, &name),
         Command::SetWorkspaceOwner { id, owner } => {
@@ -692,6 +703,7 @@ fn handle(
             &project,
             &origin,
             &deploy_key,
+            resolver,
         ),
         Command::RequestValidated {
             request_id,
@@ -703,7 +715,7 @@ fn handle(
         }
         Command::RequestAbandon { id } => requests::control::abandon(conn, shared, &id, resolver),
         Command::RequestChanges { id, feedback } => {
-            requests::control::request_changes(conn, shared, &id, &feedback)
+            requests::control::request_changes(conn, shared, &id, &feedback, resolver)
         }
         Command::RequestRollback { id } => requests::control::rollback(conn, shared, &id, resolver),
         Command::RequestPush { id } => requests::control::push(conn, shared, &id, resolver),
@@ -728,7 +740,7 @@ fn handle(
             workspace,
             id,
             form,
-        } => workflow::update(conn, shared, &workspace, &id, &form),
+        } => workflow::update(conn, shared, &workspace, &id, &form, resolver),
         Command::DeleteStep { workspace, id } => {
             workflow::remove(conn, shared, &workspace, &id, resolver)
         }
@@ -747,7 +759,9 @@ fn handle(
         }
         Command::LoadPrompt { agent, run } => prompts::load(conn, shared, agent, run),
         Command::LoadSettings => prompts::load_settings(conn, shared),
-        Command::SetRolePrompt { run, value } => prompts::set_role(conn, shared, run, &value),
+        Command::SetRolePrompt { run, value } => {
+            prompts::set_role(conn, shared, run, &value, resolver)
+        }
         Command::CreateTask {
             workspace,
             title,
@@ -766,6 +780,7 @@ fn handle(
                 schedule,
                 max_retries,
             },
+            resolver,
         ),
         Command::UpdateTask {
             id,
@@ -787,6 +802,7 @@ fn handle(
                 max_retries,
                 blockers,
             },
+            resolver,
         ),
         Command::CancelTask { id } => tasks::cancel(conn, shared, &id, resolver),
         Command::StopTask { id } => tasks::stop(conn, shared, &id, resolver),
@@ -856,13 +872,13 @@ fn handle(
             body,
         } => steer::send_message(conn, shared, &agent, &workspace, &body, resolver),
         Command::SaveChecks { workspace, command } => {
-            files::save_checks(conn, shared, &workspace, &command)
+            files::save_checks(conn, shared, &workspace, &command, resolver)
         }
         Command::SaveStandards { workspace, content } => {
-            files::save_standards(conn, shared, &workspace, &content)
+            files::save_standards(conn, shared, &workspace, &content, resolver)
         }
         Command::SaveBrief { workspace, content } => {
-            files::save_brief(conn, shared, &workspace, &content)
+            files::save_brief(conn, shared, &workspace, &content, resolver)
         }
         Command::OpenFiles { workspace } => files::open_files(conn, shared, &workspace),
     }

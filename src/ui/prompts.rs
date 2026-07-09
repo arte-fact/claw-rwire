@@ -108,7 +108,7 @@ fn role_default_card(label: &str, run: RunKind, value: &str) -> ElementBuilder {
             el(El::Div)
                 .st([St::DisplayFlex, St::ItemsCenter, St::GapSm])
                 .append([
-                    accent_submit(icons::Icon::Check, "Save"),
+                    accent_submit(icons::Icon::Check, "Save", &save_role()),
                     plain_button(
                         "Reset to default",
                         reset_role(),
@@ -167,13 +167,14 @@ fn plain_button(
     on_click: rwire::HandlerSpec,
     data: Option<(&str, &str)>,
 ) -> ElementBuilder {
-    let button = Button::secondary(label.to_owned())
-        .size(ButtonSize::Sm)
-        .on_click(on_click);
-    match data {
+    // The payload rides the Button builder — chained after `on_click` it would land on the
+    // reflection wrapper, which the click payload never reads.
+    let button = Button::secondary(label.to_owned()).size(ButtonSize::Sm);
+    let button = match data {
         Some((key, value)) => button.data(key, value),
         None => button,
-    }
+    };
+    button.on_click(on_click)
 }
 
 /// Re-compose the preview after a role edit, so the assembled layer reflects it.
@@ -232,7 +233,7 @@ fn pick_run(app: &mut App, ctx: &EventContext) {
 fn save_role(app: &mut App, ctx: &EventContext) {
     let run = RunKind::from_str(ctx.field("run").unwrap_or_default());
     let value = ctx.field("prompt").unwrap_or_default().to_owned();
-    bridge::send(Command::SetRolePrompt { run, value });
+    bridge::send_action(Command::SetRolePrompt { run, value }, ctx.defer());
     refresh(app); // the assembled preview's role layer may have changed
 }
 

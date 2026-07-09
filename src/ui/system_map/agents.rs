@@ -5,7 +5,7 @@
 
 use rwire::{El, ElementBuilder, Ev, St, el, handler, renderer};
 
-use super::{action, badge, card, drawer_form, labeled, row_head, submit, text_input};
+use super::{action_data, badge, card, drawer_form, labeled, row_head, submit, text_input};
 use crate::bridge::{self, Command};
 use crate::state::{AgentDraft, AgentView, App, Editing};
 use rwire_components::{Select, Textarea};
@@ -13,7 +13,7 @@ use rwire_components::{Select, Textarea};
 #[renderer]
 pub fn column(app: &App) -> ElementBuilder {
     let mut items: Vec<ElementBuilder> = app.agents.iter().map(row).collect();
-    items.push(action("+ Add agent", open_new()).data("act", "add-agent"));
+    items.push(action_data("+ Add agent", open_new(), "act", "add-agent"));
     el(El::Div)
         .st([St::DisplayFlex, St::FlexCol, St::GapSm])
         .append(items)
@@ -27,7 +27,7 @@ fn row(agent: &AgentView) -> ElementBuilder {
             .st([St::DisplayFlex, St::ItemsCenter, St::JustifyBetween])
             .append([
                 row_head(&agent.name, link),
-                action("Edit", open_edit()).data("id", &agent.id),
+                action_data("Edit", open_edit(), "id", &agent.id),
             ]),
         el(El::Div).st([St::TextXs, St::TextMuted]).text(model),
     ])
@@ -53,11 +53,14 @@ pub fn form(app: &App, draft: &AgentDraft) -> ElementBuilder {
     );
     let prompt = prompt_field(draft);
 
-    let mut actions = vec![submit(if draft.id.is_some() { "Save" } else { "Add" })];
+    let mut actions = vec![submit(
+        if draft.id.is_some() { "Save" } else { "Add" },
+        &save(),
+    )];
     if draft.id.is_some() {
-        actions.push(action("Delete", delete()).data("act", "delete"));
+        actions.push(action_data("Delete", delete(), "act", "delete"));
     }
-    actions.push(action("Cancel", super::close()).data("act", "cancel"));
+    actions.push(action_data("Cancel", super::close(), "act", "cancel"));
 
     drawer_form(
         save(),

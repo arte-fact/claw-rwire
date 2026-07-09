@@ -92,9 +92,11 @@ pub fn update(
     workspace: &str,
     id: &str,
     form: &StepForm,
+    resolver: Option<Resolver>,
 ) {
     if locked(conn, workspace) {
-        return load(conn, shared, workspace);
+        load(conn, shared, workspace);
+        return resolve_err(resolver, LOCKED);
     }
     let is_loop = form.kind == "loop";
     let name = if form.name.trim().is_empty() {
@@ -133,8 +135,20 @@ pub fn update(
             "human"
         },
     };
-    let _ = pipeline::update(conn, id, &fields);
+    let result = pipeline::update(conn, id, &fields);
     finish(conn, shared, workspace);
+    match result {
+        Ok(()) => {
+            // Close the step's inline editor — the UI keeps it open (spinning) while the save
+            // runs, so a failure leaves the form up with the user's fields intact.
+            shared.update_shared_changed::<App>(
+                ChangeSet::from_fields(&[App::FIELD_EDITING_STEP]),
+                |app| app.editing_step = None,
+            );
+            resolve_ok(resolver);
+        }
+        Err(err) => resolve_err(resolver, format!("could not save the step: {err}")),
+    }
 }
 
 /// Delete a step.

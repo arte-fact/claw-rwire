@@ -43,9 +43,6 @@ pub struct App {
     /// A transient error from the last turn (e.g. the endpoint failed). Shown as a
     /// banner; never persisted, cleared on the next send.
     pub error: Option<String>,
-    /// The failure-toast queue (L6): `surface()`d errors, newest last, capped — rendered
-    /// as a dismissable stack by the shell on every page.
-    pub toasts: Vec<ToastView>,
     /// System Map: registry read-models, projected by the bridge.
     pub endpoints: Vec<EndpointView>,
     /// SSH deploy keys (P5b): name + fingerprint only — the private material never reaches the model.
