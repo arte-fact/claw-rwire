@@ -212,6 +212,15 @@ pub enum Command {
         decision: String,
         note: String,
     },
+    /// A post-merge develop CI pass finished (worker → bridge): persist it as a free-lane
+    /// producer run and surface a red develop (see `requests::develop_ci`).
+    DevelopChecked {
+        workspace: String,
+        request_id: String,
+        /// The trigger, phrased for titles/notifications (`delivering "…"` / `rolling back "…"`).
+        label: String,
+        outcomes: Vec<crate::ci::CheckOutcome>,
+    },
     /// The request page's explicit acts (G3).
     RequestDeliver {
         id: String,
@@ -710,6 +719,19 @@ fn handle(
             decision,
             note,
         } => requests::control::on_validated(conn, shared, &request_id, &decision, &note),
+        Command::DevelopChecked {
+            workspace,
+            request_id,
+            label,
+            outcomes,
+        } => requests::develop_ci::on_checked(
+            conn,
+            shared,
+            &workspace,
+            &request_id,
+            &label,
+            &outcomes,
+        ),
         Command::RequestDeliver { id } => {
             requests::control::deliver_now(conn, shared, &id, resolver)
         }

@@ -510,7 +510,7 @@ pub(crate) fn rollback(
     }
     let root = workspace::dir_for(&data_dir(), &request.workspace_id);
     let mut errors: Vec<String> = Vec::new();
-    let mut reverted = 0;
+    let mut reverted: Vec<String> = Vec::new();
     for repo in db::requests::repos_for(conn, request_id).unwrap_or_default() {
         let Some(merge) = &repo.merge_commit else {
             continue;
@@ -519,7 +519,7 @@ pub(crate) fn rollback(
             continue;
         };
         match gitops::revert_merge(&dir, merge) {
-            Ok(_) => reverted += 1,
+            Ok(_) => reverted.push(repo.repo.clone()),
             Err(err) => errors.push(format!("{}: {err}", repo_name(&repo.repo))),
         }
     }
@@ -530,9 +530,18 @@ pub(crate) fn rollback(
             &request,
             &format!(
                 "↩️ Rolled back **{}** — the delivery merge was reverted on develop in \
-                 {reverted} repo(s); the branch and its history stay browsable.",
-                request.title
+                 {} repo(s); the branch and its history stay browsable.",
+                request.title,
+                reverted.len()
             ),
+        );
+        // The revert mutated develop — re-check it in the background (the CD beat), same as a
+        // delivery merge.
+        super::develop_ci::launch(
+            request.workspace_id.clone(),
+            request.id.clone(),
+            format!("rolling back \"{}\"", request.title),
+            reverted,
         );
         Ok(())
     } else {

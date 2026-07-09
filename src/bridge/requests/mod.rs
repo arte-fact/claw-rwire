@@ -4,6 +4,7 @@
 //! (the macro review against the ask verbatim is G3).
 
 pub(crate) mod control;
+pub(crate) mod develop_ci;
 pub(crate) mod view;
 pub(crate) use view::{load_detail, pass_diff, rail_views};
 
@@ -177,6 +178,15 @@ pub(super) fn deliver(conn: &Connection, request: &Request) -> Result<(), String
         &root,
         &touched_repos,
         data_dir(),
+    );
+    // Develop CI after the merge (the CD beat): re-check the touched repos on the canonical tree
+    // in the background, so the develop pipeline reflects the post-merge state and a red develop
+    // surfaces now — not at the next release gate.
+    develop_ci::launch(
+        request.workspace_id.clone(),
+        request.id.clone(),
+        format!("delivering \"{}\"", request.title),
+        touched_repos.clone(),
     );
     let tasks_done = db::tasks::count_for_request(conn, &request.id).unwrap_or(0);
     let receipt = if repos.is_empty() {
