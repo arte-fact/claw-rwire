@@ -25,6 +25,32 @@ pub fn ask(
     request: &str,
     origin_chat: &str,
 ) {
+    // A workspace that can't plan must refuse the ask up front — loudly, in the chat the ask
+    // came from — rather than minting a request + plan no owner will ever run. (They'd strand:
+    // request `planning`, plan `awaiting`, no proposal to review and no thread to watch.)
+    match workspaces::get(conn, workspace).ok().flatten() {
+        None => {
+            return refuse_ask(
+                conn,
+                shared,
+                origin_chat,
+                &format!("the workspace {workspace:?} doesn't exist."),
+            );
+        }
+        Some(ws) if ws.owner.is_none() => {
+            return refuse_ask(
+                conn,
+                shared,
+                origin_chat,
+                &format!(
+                    "the **{}** workspace has no owner agent to plan it. Set an owner on its \
+                     Team tab, then ask again.",
+                    ws.name
+                ),
+            );
+        }
+        Some(_) => {}
+    }
     let Ok(plan_id) = crate::id::new_id() else {
         return log_line("orchestrate: could not mint a plan id".to_owned());
     };
@@ -101,24 +127,57 @@ fn launch_planning(
     origin_chat: &str,
 ) {
     let Some(ws) = workspaces::get(conn, workspace).ok().flatten() else {
-        return log_line(format!("orchestrate: unknown workspace {workspace:?}"));
+        return abort_plan(
+            conn,
+            shared,
+            workspace,
+            plan_id,
+            origin_chat,
+            format!("the workspace {workspace:?} no longer exists."),
+        );
     };
     let workspace_name = ws.name.clone();
     let Some(owner) = ws.owner else {
-        return log_line(format!(
-            "orchestrate: workspace {workspace:?} has no owner to plan"
-        ));
+        return abort_plan(
+            conn,
+            shared,
+            workspace,
+            plan_id,
+            origin_chat,
+            format!(
+                "the **{workspace_name}** workspace has no owner agent to plan it. Set an \
+                 owner on its Team tab, then ask again."
+            ),
+        );
     };
     let inference =
         match resolution::resolve_for_agent(conn, &owner, workspace, |key| std::env::var(key).ok())
         {
             Ok(inference) => inference,
-            Err(err) => return log_line(format!("orchestrate: resolve owner failed: {err}")),
+            Err(err) => {
+                return abort_plan(
+                    conn,
+                    shared,
+                    workspace,
+                    plan_id,
+                    origin_chat,
+                    format!("the owner agent can't run: {err}"),
+                );
+            }
         };
     // The planning turn writes cards through its own connection (the bridge owns `conn`).
     let planning_conn = match db::open(&data_dir().join("central.db")) {
         Ok(planning_conn) => planning_conn,
-        Err(err) => return log_line(format!("orchestrate: open planning db failed: {err}")),
+        Err(err) => {
+            return abort_plan(
+                conn,
+                shared,
+                workspace,
+                plan_id,
+                origin_chat,
+                format!("the planning turn couldn't open the database: {err}"),
+            );
+        }
     };
     let workspace_dir = workspace::dir_for(&data_dir(), workspace);
     let role = super::role_prompt(conn, crate::state::RunKind::Planning);
@@ -404,9 +463,99 @@ fn plan_title(request: &str) -> String {
     format!("Plan: {capped}")
 }
 
+/// Refuse an ask before anything is created: the reason lands in the chat the ask came from —
+/// the surface the operator is looking at — and nothing strands.
+fn refuse_ask(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    origin_chat: &str,
+    reason: &str,
+) {
+    log_line(format!("orchestrate: refused an ask — {reason}"));
+    super::chat_turn::notified(
+        conn,
+        shared,
+        origin_chat,
+        &format!("⚠️ Can't start this: {reason}"),
+    );
+}
+
+/// A planning turn that can't even launch: fail the plan **visibly** — the plan task goes
+/// `failed` carrying the reason as its result, its request closes `rejected`, the origin chat
+/// hears why, and the review/board projections drop it — instead of stranding forever
+/// (`planning` request + `awaiting` plan with no run, no proposal, and nothing to watch).
+fn abort_plan(
+    conn: &rusqlite::Connection,
+    shared: &SharedServerState,
+    workspace: &str,
+    plan_id: &str,
+    origin_chat: &str,
+    reason: String,
+) {
+    log_line(format!(
+        "orchestrate: planning aborted for {plan_id}: {reason}"
+    ));
+    fail_plan_rows(conn, plan_id, &reason);
+    if !origin_chat.is_empty() {
+        super::chat_turn::notified(
+            conn,
+            shared,
+            origin_chat,
+            &format!("⚠️ Planning couldn't start: {reason}"),
+        );
+    }
+    super::review::project_awaiting(conn, shared);
+    super::tasks::project_if_active(conn, shared, workspace);
+}
+
+/// The conn-only core of [`abort_plan`]: mark the plan task failed (reason as its result) and
+/// reject its request, so neither surface ever shows an eternally-pending gate.
+fn fail_plan_rows(conn: &rusqlite::Connection, plan_id: &str, reason: &str) {
+    if let Err(err) = db::tasks::finish(conn, plan_id, db::tasks::TaskStatus::Failed, Some(reason))
+    {
+        log_line(format!("orchestrate: fail plan {plan_id}: {err}"));
+    }
+    if let Ok(Some(plan)) = db::tasks::get(conn, plan_id)
+        && let Some(request_id) = plan.request_id
+        && let Err(err) =
+            db::requests::set_status(conn, &request_id, db::requests::RequestStatus::Rejected)
+    {
+        log_line(format!("orchestrate: reject request {request_id}: {err}"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::record_planning_run;
+    use super::{fail_plan_rows, record_planning_run};
+
+    #[test]
+    fn an_unlaunchable_plan_fails_visibly_and_rejects_its_request() {
+        let conn = crate::db::open_in_memory().expect("db");
+        crate::db::workspaces::create(&conn, "ws", "Studio").unwrap();
+        crate::db::tasks::create_plan(&conn, "plan-9", "ws", "Plan: clone X", "clone X", None)
+            .unwrap();
+        crate::db::requests::create(&conn, "req-9", "ws", None, "clone X", "clone X").unwrap();
+        crate::db::tasks::set_request(&conn, "plan-9", "req-9").unwrap();
+
+        fail_plan_rows(
+            &conn,
+            "plan-9",
+            "the Studio workspace has no owner agent to plan it.",
+        );
+
+        let plan = crate::db::tasks::get(&conn, "plan-9").unwrap().unwrap();
+        assert_eq!(plan.status, crate::db::tasks::TaskStatus::Failed);
+        assert!(
+            plan.result.as_deref().unwrap_or("").contains("no owner"),
+            "the reason is the plan's visible result"
+        );
+        let request = crate::db::requests::get(&conn, "req-9").unwrap().unwrap();
+        assert_eq!(
+            request.status,
+            crate::db::requests::RequestStatus::Rejected,
+            "the stranded request closes instead of staying `planning` forever"
+        );
+    }
 
     #[test]
     fn a_planning_turn_persists_a_run_against_the_plan_task() {
