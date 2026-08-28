@@ -293,7 +293,9 @@ pub(crate) fn on_validated(
         let _ = db::requests::set_validation(
             conn,
             request_id,
-            &format!("(nudged — {})", crate::text::first_line_capped(note, 200)),
+            // The whole note, not a 200-char first-line cap: it carries the reviewer's reply
+            // tail — the forensic evidence for WHY it wouldn't render a verdict.
+            &format!("(nudged — {note})"),
         );
         launch_validation(conn, &request, true);
         return;

@@ -222,6 +222,26 @@ pub fn recover_staging(data_dir: PathBuf) {
                     }
                 }
             }
+            // Request-lane previews die with the server too — and the macro reviewer depends on
+            // them (its toolbox can `visit` a running preview but cannot start one; observed
+            // live: a validator stalling verdict-less because "the endpoint is served by the
+            // claw harness which I cannot start from here"). Relaunch each open request's lane
+            // preview while its tree still exists.
+            for request in
+                crate::db::requests::open_for_workspace(&conn, &ws.id).unwrap_or_default()
+            {
+                let lane = crate::gitops::tree_root(&data_dir, &ws.id, &request.id);
+                if !lane.is_dir() {
+                    continue;
+                }
+                let lane_strategy = crate::bridge::exec_strategy_for(&lane);
+                if let Ok(detail) = start_for_lane(&conn, &ws.id, &lane, &lane_strategy, None) {
+                    crate::bridge::log_line(format!(
+                        "preview: recovered lane preview {}/{}: {detail}",
+                        ws.id, request.id
+                    ));
+                }
+            }
         }
     });
 }
