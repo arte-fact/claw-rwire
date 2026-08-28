@@ -166,9 +166,16 @@ fn launch_validation(conn: &Connection, request: &Request, nudge: bool) {
                 });
                 match verdict {
                     Some((decision, feedback)) => (decision, feedback),
+                    // Keep the reply's tail: a verdict-less turn used to discard what the
+                    // reviewer actually said, leaving nothing to diagnose (was it prose, or
+                    // tool markup the recovery didn't know?). The "returned no verdict"
+                    // substring is load-bearing — `on_validated`'s nudge matches on it.
                     None => (
                         "revise".to_owned(),
-                        "(the reviewer returned no verdict)".to_owned(),
+                        format!(
+                            "(the reviewer returned no verdict) reply tail: {}",
+                            reply_tail(turn.reply.as_deref().unwrap_or(""), 300)
+                        ),
                     ),
                 }
             }
@@ -224,6 +231,21 @@ fn branch_diff(conn: &Connection, request: &Request, root: &std::path::Path) -> 
     }
 }
 
+/// The last `max_chars` of a reviewer reply (char-safe) — the tail is where a truncation
+/// artifact or an unparsed tool-call emission shows.
+fn reply_tail(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return "(empty reply)".to_owned();
+    }
+    let count = trimmed.chars().count();
+    if count <= max_chars {
+        return trimmed.to_owned();
+    }
+    let tail: String = trimmed.chars().skip(count - max_chars).collect();
+    format!("…{tail}")
+}
+
 /// The reviewer's verdict came back: record it; pass delivers, anything else parks the
 /// request (still `validating`) with the reasons pinged — the user decides from the page.
 pub(crate) fn on_validated(
@@ -239,14 +261,22 @@ pub(crate) fn on_validated(
     if request.status != RequestStatus::Validating {
         return; // resolved by the user (or superseded) while the review ran
     }
-    // The reviewer's indecision gets one nudged retry (the macro analogue of the task-level
-    // L1 rule) before the request holds for the user.
+    // The reviewer's indecision gets ONE nudged retry (the macro analogue of the task-level
+    // L1 rule) before the request holds for the user. The nudge stamps `validation` with a
+    // marker — previously nothing recorded that a nudge happened, so a persistently
+    // verdict-less reviewer looped nudge → no verdict → nudge forever (observed live: 4+
+    // attempts on one request), and the request never parked for the user.
     if decision == "revise" && note.contains("returned no verdict") && request.validation.is_none()
     {
         log_line(format!(
             "requests: macro review of {} ended without a verdict — retrying with a nudge",
             request.id
         ));
+        let _ = db::requests::set_validation(
+            conn,
+            request_id,
+            &format!("(nudged — {})", crate::text::first_line_capped(note, 200)),
+        );
         launch_validation(conn, &request, true);
         return;
     }
