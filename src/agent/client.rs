@@ -272,6 +272,8 @@ fn parse_stream(
     let mut pending = String::new();
     let mut last_flush = Instant::now();
     let mut saw_stream = false;
+    let mut saw_done = false;
+    let mut finish: Option<String> = None;
     let mut line = String::new();
     loop {
         line.clear();
@@ -287,6 +289,7 @@ fn parse_stream(
         saw_stream = true;
         let data = data.trim();
         if data == "[DONE]" {
+            saw_done = true;
             break;
         }
         let Ok(chunk) = serde_json::from_str::<StreamChunk>(data) else {
@@ -296,6 +299,9 @@ fn parse_stream(
             prompt_tokens = usage.prompt_tokens.or(prompt_tokens);
         }
         for choice in chunk.choices {
+            if let Some(reason) = choice.finish_reason {
+                finish = Some(reason);
+            }
             if let Some(text) = choice.delta.content {
                 content.push_str(&text);
                 pending.push_str(&text);
@@ -322,6 +328,22 @@ fn parse_stream(
     }
     if !pending.is_empty() {
         sink(AgentEvent::Text(pending));
+    }
+    if saw_stream {
+        // The round is complete only when the server closed it deliberately — a `[DONE]`
+        // sentinel or a finish_reason. A bare EOF is a dropped connection mid-reply, and a
+        // `length` finish is an output-limit cut: either way the partial text must not pass
+        // as a final answer (the run fails and retries instead).
+        if finish.as_deref() == Some("length") {
+            return Err(AgentError::Truncated(
+                "the model hit its output limit (finish_reason: length)".to_owned(),
+            ));
+        }
+        if !saw_done && finish.is_none() {
+            return Err(AgentError::Truncated(
+                "the stream ended mid-reply (no [DONE], no finish_reason)".to_owned(),
+            ));
+        }
     }
     let content = {
         let trimmed = content.trim();
@@ -358,6 +380,12 @@ fn parse_stream(
                 },
                 saw_stream,
             ));
+        }
+        if saw_stream && truncated_markup(text) {
+            return Err(AgentError::Truncated(format!(
+                "the reply is a cut-off tool call ({})",
+                truncate(text, 40)
+            )));
         }
     }
     Ok((
@@ -427,12 +455,15 @@ fn tool_wire(def: &ToolDef) -> Value {
 fn parse_completion(body: &str) -> Result<Completion, AgentError> {
     let parsed: ChatResponse =
         serde_json::from_str(body).map_err(|err| AgentError::Malformed(err.to_string()))?;
-    let message = parsed
-        .choices
-        .into_iter()
-        .next()
-        .map(|choice| choice.message)
-        .ok_or(AgentError::Empty)?;
+    let choice = parsed.choices.into_iter().next().ok_or(AgentError::Empty)?;
+    // An output-limit cut leaves the round incomplete — a half reply, or a tool call with
+    // truncated arguments. Fail the turn (the run retries) rather than pass the fragment on.
+    if choice.finish_reason.as_deref() == Some("length") {
+        return Err(AgentError::Truncated(
+            "the model hit its output limit (finish_reason: length)".to_owned(),
+        ));
+    }
+    let message = choice.message;
     let content = message
         .content
         .map(|content| content.trim().to_owned())
@@ -454,12 +485,26 @@ fn parse_completion(body: &str) -> Result<Completion, AgentError> {
                 prompt_tokens,
             });
         }
+        if truncated_markup(text) {
+            return Err(AgentError::Truncated(format!(
+                "the reply is a cut-off tool call ({})",
+                truncate(text, 40)
+            )));
+        }
     }
     Ok(Completion {
         content,
         tool_calls,
         prompt_tokens,
     })
+}
+
+/// A reply that *starts* with tool-call markup the recovery couldn't parse is a cut-off tool
+/// call, not prose — the observed artifact was a final answer of literally `<DSML`. `<｜` is
+/// deepseek's special-token fence (`<｜｜DSML｜｜…`, `<｜tool▁call…`).
+fn truncated_markup(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with("<DSML") || text.starts_with("<｜")
 }
 
 /// The model's context window (max tokens) from `GET /models`, if the server advertises it —
@@ -635,6 +680,8 @@ struct ChatResponse {
 #[derive(Deserialize)]
 struct Choice {
     message: ResponseMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -665,6 +712,8 @@ struct StreamChunk {
 struct StreamChoice {
     #[serde(default)]
     delta: Delta,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -734,6 +783,59 @@ struct TopProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_length_cut_or_dsml_fragment_never_passes_as_a_reply() {
+        // finish_reason "length": the output limit truncated the round — fail, don't accept.
+        let cut = r#"{"choices":[{"message":{"content":"half an ans"},"finish_reason":"length"}]}"#;
+        assert!(matches!(
+            parse_completion(cut),
+            Err(AgentError::Truncated(_))
+        ));
+
+        // The observed artifact: a "reply" that is just the start of a cut-off DSML tool call
+        // (finish_reason absent or lying). It must not become the run's final output.
+        let dsml = r#"{"choices":[{"message":{"content":"<DSML"}}]}"#;
+        assert!(matches!(
+            parse_completion(dsml),
+            Err(AgentError::Truncated(_))
+        ));
+
+        // A normal stop with prose still parses.
+        let ok = r#"{"choices":[{"message":{"content":"done"},"finish_reason":"stop"}]}"#;
+        assert_eq!(
+            parse_completion(ok).unwrap().content.as_deref(),
+            Some("done")
+        );
+    }
+
+    #[test]
+    fn a_stream_that_dies_mid_reply_is_truncated_not_accepted() {
+        let mut sink = |_event: AgentEvent| {};
+
+        // EOF with no [DONE] and no finish_reason = a dropped connection mid-reply.
+        let cut = "data: {\"choices\":[{\"delta\":{\"content\":\"par\"}}]}\n\n\
+                   data: {\"choices\":[{\"delta\":{\"content\":\"tial\"}}]}\n\n";
+        assert!(matches!(
+            parse_stream(cut.as_bytes(), &mut sink),
+            Err(AgentError::Truncated(_))
+        ));
+
+        // A finish_reason without [DONE] is a deliberate close — complete.
+        let finished =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n";
+        let (completion, saw) = parse_stream(finished.as_bytes(), &mut sink).unwrap();
+        assert!(saw);
+        assert_eq!(completion.content.as_deref(), Some("hi"));
+
+        // A length finish fails even when [DONE] arrives.
+        let length = "data: {\"choices\":[{\"delta\":{\"content\":\"hal\"},\"finish_reason\":\"length\"}]}\n\n\
+                      data: [DONE]\n\n";
+        assert!(matches!(
+            parse_stream(length.as_bytes(), &mut sink),
+            Err(AgentError::Truncated(_))
+        ));
+    }
 
     #[test]
     fn parse_extracts_content_and_rejects_empty() {

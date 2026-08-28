@@ -165,6 +165,12 @@ pub enum AgentError {
     Malformed(String),
     #[error("the model returned an empty reply")]
     Empty,
+    /// The round ended before the model finished — an output-limit cut
+    /// (`finish_reason: length`) or a stream that died mid-reply. The partial text must never
+    /// pass as a final answer (the observed artifact: a reply that is just `<DSML`, the first
+    /// characters of a cut-off tool call).
+    #[error("the reply was cut off: {0}")]
+    Truncated(String),
 }
 
 /// One tool the agent ran this turn — persisted as a card and (flattened) replayed to
