@@ -184,6 +184,48 @@ pub fn refresh_staging(workspace_id: &str, root: &Path, repos: &[String], data_d
     });
 }
 
+/// Boot recovery: relaunch the long-lived staging previews. The supervisor is in-memory —
+/// previews die with the server — and without this the develop / released preview links on the
+/// project pages stay dead until the next delivery that *touches* the project (a no-op delivery,
+/// or none at all, leaves them down indefinitely). Background — a cold `cargo run` per project
+/// must not block boot; one thread walks every workspace × project, starting develop-staging
+/// from the canonical root and main-staging where the detached `main` worktree carries the repo.
+/// A repo without a preview command errs inside `start` and is skipped, like `refresh_staging`.
+pub fn recover_staging(data_dir: PathBuf) {
+    std::thread::spawn(move || {
+        let Ok(conn) = crate::db::open(&data_dir.join("central.db")) else {
+            return crate::bridge::log_line("preview: recover: cannot open the db".to_owned());
+        };
+        for ws in crate::db::workspaces::list(&conn).unwrap_or_default() {
+            let root = crate::workspace::dir_for(&data_dir, &ws.id);
+            let strategy = crate::bridge::exec_strategy_for(&root);
+            let main_root = crate::gitops::main_tree_root(&data_dir, &ws.id);
+            for repo in crate::gitops::repos(&root) {
+                let Some(project) = repo.strip_prefix("projects/") else {
+                    continue;
+                };
+                if let Ok(detail) = start_staging(&conn, &ws.id, &root, &strategy, &repo) {
+                    crate::bridge::log_line(format!(
+                        "preview: recovered develop-staging {}/{project}: {detail}",
+                        ws.id
+                    ));
+                }
+                if main_root.join(&repo).is_dir() {
+                    let main_strategy = crate::bridge::exec_strategy_for(&main_root);
+                    if let Ok(detail) =
+                        start_main_staging(&conn, &ws.id, &main_root, &main_strategy, project)
+                    {
+                        crate::bridge::log_line(format!(
+                            "preview: recovered main-staging {}/{project}: {detail}",
+                            ws.id
+                        ));
+                    }
+                }
+            }
+        }
+    });
+}
+
 /// The core start: resolve the target repo + command from `root`, allocate/reuse the pooled port for
 /// `<ws>-<short>`, kill any prior process for the key, spawn under `strategy`, health-probe, record.
 fn start(

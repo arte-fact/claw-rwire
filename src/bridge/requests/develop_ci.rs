@@ -26,7 +26,12 @@ use super::super::{Command, data_dir, exec_strategy_for, log_line, send, surface
 /// merge actually touched (lane-root-relative).
 pub(crate) fn launch(workspace: String, request_id: String, label: String, repos: Vec<String>) {
     if repos.is_empty() {
-        return;
+        // A delivery that recorded no repo touches merged nothing — develop is unchanged, so
+        // there is nothing to check. Say so (the absence of a pipeline run reads as a bug
+        // otherwise; the receipt's "no file changes to merge" is the fuller story).
+        return log_line(format!(
+            "develop-ci: nothing merged after {label} — skipped"
+        ));
     }
     std::thread::spawn(move || {
         let Ok(conn) = db::open(&data_dir().join("central.db")) else {

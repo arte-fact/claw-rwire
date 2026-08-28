@@ -616,6 +616,9 @@ pub fn spawn(shared: Arc<SharedServerState>, central_db: PathBuf) {
     boot::log_sandbox_mode();
     connect_web_mcp();
     admin::project_tool_catalog(&shared);
+    // Staging previews are in-memory and died with the previous server — bring the develop /
+    // released preview links back without waiting for the next repo-touching delivery.
+    preview::recover_staging(data_dir());
     std::thread::spawn(move || {
         while let Ok((command, resolver)) = rx.recv() {
             handle(&conn, &shared, command, resolver);
