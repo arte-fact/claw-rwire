@@ -32,8 +32,10 @@ const MAX_TOOL_ROUNDS: usize = 20;
 /// Whole-turn wall-clock budget across all rounds + tool calls. Once spent, the next round is asked
 /// to answer in text (no tools) so the turn always terminates. Raised alongside the round cap so a
 /// legitimately long turn (more rounds, a slow `cargo build`/`test`) isn't cut off mid-work before
-/// its rounds are used.
-const RUN_BUDGET: Duration = Duration::from_secs(300);
+/// its rounds are used. 600s, not 300: a build-verifying macro review on a real app spends 300s in
+/// two or three `bash`/preview probes and then hit the closing round mid-investigation — every
+/// review of the Empire request stalled that way.
+const RUN_BUDGET: Duration = Duration::from_secs(600);
 /// Minimum gap between streamed-text flushes — coalesces tokens so the UI re-renders a few
 /// times a second, not once per token.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
@@ -124,7 +126,24 @@ fn run_loop(
     }
 
     // The reserved closing round: `verdict`-only for a validator, no tools for everyone else.
-    // Execute any call it makes so `parse_verdict` sees the decision; terminate the turn either way.
+    // SAY that it's the closing round: silently narrowing the toolset is not enough — a model
+    // deep in an investigation answers with the next step it *wants* to take ("Let me start the
+    // server and probe it.") instead of concluding, and the turn ends with no verdict at all
+    // (observed live on every review of a build-heavy request). Execute any call it makes so
+    // `parse_verdict` sees the decision; terminate the turn either way.
+    messages.push(ChatMessage::text(
+        Role::User,
+        if verdict_only.is_empty() {
+            "Your tool budget for this turn is spent. Answer NOW, in text, with your \
+             conclusion from the evidence you already have — do not describe further steps."
+                .to_owned()
+        } else {
+            "Your tool budget for this turn is spent — this is the final round. Call the \
+             `verdict` tool NOW: pass, revise, or reject, judged on the evidence you already \
+             have. Put unresolved doubts in the feedback text; do not describe further steps."
+                .to_owned()
+        },
+    ));
     let completion = complete(inf, &messages, &verdict_only, sink, stream)?;
     if !completion.tool_calls.is_empty() {
         messages.push(ChatMessage::assistant_tool_calls(
