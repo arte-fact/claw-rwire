@@ -161,22 +161,40 @@ fn launch_validation(conn: &Connection, request: &Request, nudge: bool) {
         let (decision, note) = match crate::agent::run_turn(&inference, messages, toolbox.as_ref())
         {
             Ok(turn) => {
-                let verdict = crate::tools::parse_verdict(&turn.invocations).or_else(|| {
-                    crate::tools::parse_verdict_prose(turn.reply.as_deref().unwrap_or(""))
-                });
+                // The verdict, in order of trust: the structured/recovered tool call, the
+                // reply prose, then the model's reasoning stream — a reasoning model can end
+                // the turn with its whole conclusion (verdict included) in `reasoning` and an
+                // empty reply, which used to read as "no verdict" and loop the nudge.
+                let verdict = crate::tools::parse_verdict(&turn.invocations)
+                    .or_else(|| {
+                        crate::tools::parse_verdict_prose(turn.reply.as_deref().unwrap_or(""))
+                    })
+                    .or_else(|| {
+                        crate::tools::parse_verdict_prose(turn.reasoning.as_deref().unwrap_or(""))
+                    });
                 match verdict {
                     Some((decision, feedback)) => (decision, feedback),
                     // Keep the reply's tail: a verdict-less turn used to discard what the
                     // reviewer actually said, leaving nothing to diagnose (was it prose, or
                     // tool markup the recovery didn't know?). The "returned no verdict"
                     // substring is load-bearing — `on_validated`'s nudge matches on it.
-                    None => (
-                        "revise".to_owned(),
-                        format!(
-                            "(the reviewer returned no verdict) reply tail: {}",
-                            reply_tail(turn.reply.as_deref().unwrap_or(""), 300)
-                        ),
-                    ),
+                    None => {
+                        // Show what the reviewer actually produced — the reply, or its
+                        // reasoning when the reply is empty (the diagnosable part).
+                        let visible = turn
+                            .reply
+                            .as_deref()
+                            .filter(|text| !text.trim().is_empty())
+                            .or(turn.reasoning.as_deref())
+                            .unwrap_or("");
+                        (
+                            "revise".to_owned(),
+                            format!(
+                                "(the reviewer returned no verdict) reply tail: {}",
+                                reply_tail(visible, 300)
+                            ),
+                        )
+                    }
                 }
             }
             Err(err) => ("error".to_owned(), err.to_string()),

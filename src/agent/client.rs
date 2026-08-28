@@ -107,6 +107,7 @@ fn run_loop(
             return Ok(TurnResult {
                 invocations,
                 reply: completion.content,
+                reasoning: completion.reasoning,
                 prompt_tokens: completion.prompt_tokens,
             });
         }
@@ -140,6 +141,7 @@ fn run_loop(
     Ok(TurnResult {
         invocations,
         reply: completion.content,
+        reasoning: completion.reasoning,
         prompt_tokens: completion.prompt_tokens,
     })
 }
@@ -267,6 +269,7 @@ fn parse_stream(
     use std::io::BufRead;
     let mut reader = std::io::BufReader::new(reader);
     let mut content = String::new();
+    let mut reasoning_acc = String::new();
     let mut tools: Vec<ToolAccum> = Vec::new();
     let mut prompt_tokens = None;
     let mut pending = String::new();
@@ -301,6 +304,9 @@ fn parse_stream(
         for choice in chunk.choices {
             if let Some(reason) = choice.finish_reason {
                 finish = Some(reason);
+            }
+            if let Some(thought) = choice.delta.reasoning {
+                reasoning_acc.push_str(&thought);
             }
             if let Some(text) = choice.delta.content {
                 content.push_str(&text);
@@ -349,6 +355,10 @@ fn parse_stream(
         let trimmed = content.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     };
+    let reasoning = {
+        let trimmed = reasoning_acc.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    };
     let tool_calls: Vec<ToolCall> = tools
         .into_iter()
         .enumerate()
@@ -376,6 +386,7 @@ fn parse_stream(
                 Completion {
                     content: leading_prose(text),
                     tool_calls: recovered,
+                    reasoning,
                     prompt_tokens,
                 },
                 saw_stream,
@@ -388,10 +399,31 @@ fn parse_stream(
             )));
         }
     }
+    // Reasoning-only round: the model wrote its tool call (or its whole answer) into the
+    // thinking stream and emitted no content — recover markup from there so the round still
+    // runs the call (mirrors the blocking path).
+    if tool_calls.is_empty()
+        && content.is_none()
+        && let Some(thought) = &reasoning
+    {
+        let recovered = recover_leaked_tool_calls(thought);
+        if !recovered.is_empty() {
+            return Ok((
+                Completion {
+                    content: None,
+                    tool_calls: recovered,
+                    reasoning,
+                    prompt_tokens,
+                },
+                saw_stream,
+            ));
+        }
+    }
     Ok((
         Completion {
             content,
             tool_calls,
+            reasoning,
             prompt_tokens,
         },
         saw_stream,
@@ -468,6 +500,10 @@ fn parse_completion(body: &str) -> Result<Completion, AgentError> {
         .content
         .map(|content| content.trim().to_owned())
         .filter(|content| !content.is_empty());
+    let reasoning = message
+        .reasoning
+        .map(|reasoning| reasoning.trim().to_owned())
+        .filter(|reasoning| !reasoning.is_empty());
     let prompt_tokens = parsed.usage.and_then(|usage| usage.prompt_tokens);
     let tool_calls = message.tool_calls.unwrap_or_default();
     // Some models emit tool calls as *text* in the content instead of the structured
@@ -482,6 +518,7 @@ fn parse_completion(body: &str) -> Result<Completion, AgentError> {
             return Ok(Completion {
                 content: leading_prose(text),
                 tool_calls: recovered,
+                reasoning,
                 prompt_tokens,
             });
         }
@@ -492,9 +529,27 @@ fn parse_completion(body: &str) -> Result<Completion, AgentError> {
             )));
         }
     }
+    // A reasoning model can end a round with EVERYTHING in `reasoning` and no content at all —
+    // including a tool call it only wrote as markup while "thinking". Recover those too, so the
+    // round runs the call instead of coming back empty.
+    if tool_calls.is_empty()
+        && content.is_none()
+        && let Some(thought) = &reasoning
+    {
+        let recovered = recover_leaked_tool_calls(thought);
+        if !recovered.is_empty() {
+            return Ok(Completion {
+                content: None,
+                tool_calls: recovered,
+                reasoning,
+                prompt_tokens,
+            });
+        }
+    }
     Ok(Completion {
         content,
         tool_calls,
+        reasoning,
         prompt_tokens,
     })
 }
@@ -704,6 +759,10 @@ struct ResponseMessage {
     content: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<ToolCall>>,
+    /// deepseek-style thinking stream ("reasoning" via OpenRouter, "reasoning_content" on the
+    /// native API). A reasoning model can put its ENTIRE turn here with `content` empty.
+    #[serde(default, alias = "reasoning_content")]
+    reasoning: Option<String>,
 }
 
 /// The OpenAI-compatible token accounting block. Fields are optional — some servers omit it.
@@ -737,6 +796,8 @@ struct Delta {
     content: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<ToolCallDelta>>,
+    #[serde(default, alias = "reasoning_content")]
+    reasoning: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -857,6 +918,53 @@ mod tests {
             parse_stream(length.as_bytes(), &mut sink),
             Err(AgentError::Truncated(_))
         ));
+    }
+
+    #[test]
+    fn a_reasoning_only_round_still_yields_its_call_and_its_thinking() {
+        // deepseek reasoning models can end a round with content EMPTY and everything —
+        // including a tool call written as markup — inside `reasoning`. Observed live as macro
+        // reviews ending "no verdict" with an empty reply, looping forever.
+        let leaked = r#"{"choices":[{"message":{"content":"","reasoning":"I should just read it: <｜｜DSML｜｜invoke name=\"read\"><｜｜DSML｜｜parameter name=\"path\" string=\"true\">a.txt</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke>"},"finish_reason":"stop"}]}"#;
+        let completion = parse_completion(leaked).unwrap();
+        assert_eq!(
+            completion.tool_calls.len(),
+            1,
+            "the call is recovered from reasoning"
+        );
+        assert_eq!(completion.tool_calls[0].function.name, "read");
+
+        // Reasoning prose (no markup) rides along for the caller's verdict fallback.
+        let prose = r#"{"choices":[{"message":{"content":"","reasoning_content":"Verdict: pass — looks solid."},"finish_reason":"stop"}]}"#;
+        let completion = parse_completion(prose).unwrap();
+        assert!(completion.tool_calls.is_empty());
+        assert_eq!(completion.content, None);
+        assert!(
+            completion
+                .reasoning
+                .as_deref()
+                .unwrap_or("")
+                .contains("pass")
+        );
+    }
+
+    #[test]
+    fn a_streamed_reasoning_only_round_carries_its_thinking() {
+        let mut sink = |_event: AgentEvent| {};
+        let stream = concat!(
+            r#"data: {"choices":[{"delta":{"reasoning":"Verdict: pass — "}}]}"#,
+            "\n\n",
+            r#"data: {"choices":[{"delta":{"reasoning":"ship it"},"finish_reason":"stop"}]}"#,
+            "\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (completion, saw) = parse_stream(stream.as_bytes(), &mut sink).unwrap();
+        assert!(saw);
+        assert_eq!(completion.content, None);
+        assert_eq!(
+            completion.reasoning.as_deref(),
+            Some("Verdict: pass — ship it")
+        );
     }
 
     #[test]

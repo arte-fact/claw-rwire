@@ -205,14 +205,20 @@ pub type EventSink<'a> = &'a mut dyn FnMut(AgentEvent);
 pub struct TurnResult {
     pub invocations: Vec<ToolInvocation>,
     pub reply: Option<String>,
+    /// The final round's `reasoning`/`reasoning_content` (deepseek-style thinking), when the
+    /// server sent one. A reasoning model can end a turn with EVERYTHING here and `content`
+    /// empty — the verdict parse falls back to it rather than reading "no verdict".
+    pub reasoning: Option<String>,
     pub prompt_tokens: Option<u32>,
 }
 
-/// One model round's output: optional prose, any tool calls it wants run, and the request's
-/// `prompt_tokens` from the response `usage` (the OpenAI-compatible token accounting).
+/// One model round's output: optional prose, any tool calls it wants run, the model's optional
+/// `reasoning` stream, and the request's `prompt_tokens` from the response `usage` (the
+/// OpenAI-compatible token accounting).
 pub struct Completion {
     pub content: Option<String>,
     pub tool_calls: Vec<ToolCall>,
+    pub reasoning: Option<String>,
     pub prompt_tokens: Option<u32>,
 }
 

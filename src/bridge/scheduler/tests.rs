@@ -248,6 +248,7 @@ fn effective_output_summarizes_silent_tool_turns() {
     // Empty reply + a write → name the file (the dominant real case).
     let wrote = agent::TurnResult {
         invocations: vec![inv("write", r#"{"path":"docs/x.md","content":"…"}"#)],
+        reasoning: None,
         reply: None,
         prompt_tokens: None,
     };
@@ -255,6 +256,7 @@ fn effective_output_summarizes_silent_tool_turns() {
     // Empty reply + non-file tools → name the calls.
     let ran = agent::TurnResult {
         invocations: vec![inv("bash", "{}"), inv("read", "{}"), inv("bash", "{}")],
+        reasoning: None,
         reply: Some("   ".to_owned()),
         prompt_tokens: None,
     };
@@ -264,6 +266,7 @@ fn effective_output_summarizes_silent_tool_turns() {
     );
     // A real reply always wins; nothing-at-all stays empty.
     let spoke = agent::TurnResult {
+        reasoning: None,
         reply: Some("all set".to_owned()),
         ..Default::default()
     };
