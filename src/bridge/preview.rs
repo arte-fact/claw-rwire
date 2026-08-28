@@ -533,16 +533,29 @@ pub fn port_for(key: &str) -> Option<u16> {
 }
 
 /// The reverse-proxy decision for one request path: a `/preview/<key>/…` whose key is running
-/// resolves to `(upstream port, "/preview/<key>")` — the prefix rwire strips before forwarding.
-/// An unknown key or any non-preview path resolves to `None`, so the request falls through to
-/// claw's own handling. This is the closure `main.rs` hands to rwire's `ProxyResolver`.
+/// forwards to its pooled port (rwire strips the `/preview/<key>` prefix). A `/preview/…` whose
+/// key is NOT running is `Gone` — rwire serves a human 503 page — never a fallthrough to the app:
+/// a stale preview link (previews die with their branch or a server restart, and a page held open
+/// in the installed PWA keeps the old link) would otherwise open a second copy of claw, which
+/// reads as the app mysteriously relaunching. Non-preview paths resolve `None` (claw handles
+/// them). This is the closure `main.rs` hands to rwire's `ProxyResolver`.
 #[must_use]
-pub fn resolve_proxy(path: &str) -> Option<(u16, String)> {
+pub fn resolve_proxy(path: &str) -> Option<rwire::ProxyDecision> {
     let key = path.strip_prefix("/preview/")?.split('/').next()?;
     if key.is_empty() {
         return None;
     }
-    port_for(key).map(|port| (port, uri_for(key)))
+    Some(match port_for(key) {
+        Some(port) => rwire::ProxyDecision::Forward {
+            port,
+            prefix: uri_for(key),
+        },
+        None => rwire::ProxyDecision::Gone {
+            message: "This preview isn't running — previews stop when their branch closes or \
+                      the server restarts. Reopen it from the project or request page."
+                .to_owned(),
+        },
+    })
 }
 
 /// Pick and reserve a free pool port under the held supervisor lock, so the choice is atomic with
@@ -803,10 +816,19 @@ mod tests {
         // rwire side (integration test) proves a `Some` then forwards+strips correctly.
         assert_eq!(
             resolve_proxy(&format!("/preview/{key}/dashboard")),
-            Some((port, uri_for(&key))),
+            Some(rwire::ProxyDecision::Forward {
+                port,
+                prefix: uri_for(&key)
+            }),
             "a live key routes to its port with the prefix to strip"
         );
-        assert_eq!(resolve_proxy("/preview/ws-nope/x"), None, "unknown key");
+        assert!(
+            matches!(
+                resolve_proxy("/preview/ws-nope/x"),
+                Some(rwire::ProxyDecision::Gone { .. })
+            ),
+            "an unknown key is claimed as Gone — never a fallthrough to the app shell"
+        );
         assert_eq!(resolve_proxy("/w/studio"), None, "non-preview path");
 
         // The producer/reviewer hint reflects the live state: the same-origin URL and "running now".
@@ -835,7 +857,10 @@ mod tests {
         );
         assert_eq!(
             resolve_proxy(&format!("/preview/{staging_key}/")),
-            Some((staging_port, uri_for(&staging_key)))
+            Some(rwire::ProxyDecision::Forward {
+                port: staging_port,
+                prefix: uri_for(&staging_key)
+            })
         );
         stop(&staging_key);
 
