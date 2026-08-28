@@ -384,7 +384,7 @@ fn parse_stream(
         if saw_stream && truncated_markup(text) {
             return Err(AgentError::Truncated(format!(
                 "the reply is a cut-off tool call ({})",
-                truncate(text, 40)
+                tail(text, 40)
             )));
         }
     }
@@ -488,7 +488,7 @@ fn parse_completion(body: &str) -> Result<Completion, AgentError> {
         if truncated_markup(text) {
             return Err(AgentError::Truncated(format!(
                 "the reply is a cut-off tool call ({})",
-                truncate(text, 40)
+                tail(text, 40)
             )));
         }
     }
@@ -499,12 +499,16 @@ fn parse_completion(body: &str) -> Result<Completion, AgentError> {
     })
 }
 
-/// A reply that *starts* with tool-call markup the recovery couldn't parse is a cut-off tool
-/// call, not prose — the observed artifact was a final answer of literally `<DSML`. `<｜` is
-/// deepseek's special-token fence (`<｜｜DSML｜｜…`, `<｜tool▁call…`).
+/// Tool-call markup residue in a reply the recovery parsed NO complete call from — a cut-off
+/// tool call, not prose. Only checked after `recover_leaked_tool_calls` came back empty, so any
+/// `<DSML` / `<｜` in the text is unconsumed markup. Observed twice live, in both shapes: a reply
+/// that was literally `<DSML`, and prose that *ended* with `\n<DSML` (the provider's DSML parser
+/// swallowed the call, leaked the fragment, and closed the stream cleanly — so the finish-reason
+/// and `[DONE]` guards saw a normal stop; a `starts_with` check missed the trailing form). `<｜`
+/// (U+FF5C) is deepseek's special-token fence (`<｜｜DSML｜｜…`, `<｜tool▁call…`); neither string
+/// occurs in legitimate prose here.
 fn truncated_markup(text: &str) -> bool {
-    let text = text.trim_start();
-    text.starts_with("<DSML") || text.starts_with("<｜")
+    text.contains("<DSML") || text.contains("<｜")
 }
 
 /// The model's context window (max tokens) from `GET /models`, if the server advertises it —
@@ -670,6 +674,17 @@ fn truncate(text: &str, max_chars: usize) -> String {
     format!("{head}…")
 }
 
+/// The last `max_chars` of `text` (char-safe) — for pointing at a *trailing* artifact, where
+/// [`truncate`]'s head would show only the healthy prose before it.
+fn tail(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_owned();
+    }
+    let tail: String = text.chars().skip(count - max_chars).collect();
+    format!("…{tail}")
+}
+
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
@@ -793,11 +808,18 @@ mod tests {
             Err(AgentError::Truncated(_))
         ));
 
-        // The observed artifact: a "reply" that is just the start of a cut-off DSML tool call
-        // (finish_reason absent or lying). It must not become the run's final output.
+        // The observed artifacts (both live): a "reply" that is just the start of a cut-off
+        // DSML tool call, and prose that ENDS with the fragment — the provider swallowed the
+        // call, leaked the fragment, and closed the stream cleanly, so finish_reason lied.
+        // Neither must become the run's final output.
         let dsml = r#"{"choices":[{"message":{"content":"<DSML"}}]}"#;
         assert!(matches!(
             parse_completion(dsml),
+            Err(AgentError::Truncated(_))
+        ));
+        let trailing = r#"{"choices":[{"message":{"content":"Let me check what file tools are available.\n\n<DSML"},"finish_reason":"stop"}]}"#;
+        assert!(matches!(
+            parse_completion(trailing),
             Err(AgentError::Truncated(_))
         ));
 
