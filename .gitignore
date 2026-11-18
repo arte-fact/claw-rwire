@@ -9,3 +9,8 @@ Cargo.lock.bak
 *.jpeg
 /claw-data-e2e
 claw-data-backup-*/
+
+# logs du serveur local
+nohup.out
+output.log
+*.log
