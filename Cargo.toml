@@ -9,7 +9,7 @@ rwire-components = { path = "../rwire/libs/rwire-components" }
 rwire-editor = { path = "../rwire/libs/rwire-editor" }
 rwire-markdown = { path = "../rwire/libs/rwire-markdown" }
 rwire-themes = { path = "../rwire/libs/rwire-themes" }
-async-std = { version = "1.12", features = ["attributes"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 rusqlite = { version = "0.34", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

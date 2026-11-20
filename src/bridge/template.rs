@@ -152,7 +152,7 @@ edition = "2021"
 rwire = { git = "https://github.com/arte-fact/rwire", branch = "main" }
 rwire-components = { git = "https://github.com/arte-fact/rwire", branch = "main" }
 rwire-themes = { git = "https://github.com/arte-fact/rwire", branch = "main" }
-async-std = { version = "1.12", features = ["attributes"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 "#;
 
 /// The starter's `pipeline.yaml` — the rwire-app CI recipe + preview command, shipped literally now
@@ -181,7 +181,6 @@ const HELLO_MAIN: &str = r#"//! Hello — the rwire-app starter (a live counter)
 
 use std::error::Error;
 
-use async_std::main;
 use rwire::capsule_gen::CapsuleConfig;
 use rwire::theme::Theme;
 use rwire::{handler, renderer, theme, ElementBuilder, Server, St, State};
@@ -201,7 +200,7 @@ fn app_theme() -> Theme {
     Theme::dark().palette(palettes::nord())
 }
 
-#[main]
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // The port and the mount prefix both come from the environment — claw injects them for a
     // preview. `base_path` sits right beside `bind` so the served capsule's WebSocket connects
