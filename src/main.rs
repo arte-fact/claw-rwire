@@ -25,7 +25,6 @@ mod workspace;
 
 use std::error::Error;
 
-use async_std::main;
 use rwire::capsule_gen::CapsuleConfig;
 use rwire::theme::{RadiusScale, Theme};
 use rwire::{ProxyResolver, Server, ServerConfig, theme};
@@ -82,7 +81,7 @@ fn preview_proxy() -> ProxyResolver {
     ProxyResolver::new(bridge::preview::resolve_proxy)
 }
 
-#[main]
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_file::load();
     let dir = data_dir();
